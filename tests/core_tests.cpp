@@ -37,6 +37,7 @@
 #include "spidy/prompt_buttons.hpp"
 #include "spidy/xr_layers.hpp"
 #include "spidy/offer_pointing.hpp"
+#include "spidy/menu_pointer.hpp"
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -496,6 +497,76 @@ int main() {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    test("menu pointer meets the game screen where the hand points", [] {
+        using namespace spidy::menu_pointer;
+        const Screen s{screenAhead({{0, 0, 0}, {0, 0, 0, 1}}, 2.5f), 3.2f, 16.f / 9};
+        const float h = 3.2f / (16.f / 9);
+        auto at = hit(s, {{0, 0, 0}, {0, 0, 0, 1}});
+        check(at.has_value(), "the middle is hit");
+        near((*at)[0], .5f);
+        near((*at)[1], .5f);
+        at = hit(s, {{-.8f, h / 4, 0}, {0, 0, 0, 1}});
+        check(at.has_value(), "up and left is hit");
+        near((*at)[0], .25f);
+        near((*at)[1], .25f);
+        check(!hit(s, {{1.7f, 0, 0}, {0, 0, 0, 1}}), "past the right edge misses");
+        check(!hit(s, {{0, h, 0}, {0, 0, 0, 1}}), "above the top misses");
+        check(!hit(s, {{0, 0, -5}, {0, 0, 0, 1}}), "a hand beyond the screen pointing away misses");
+        check(!hit(s, {{0, 0, 0}, Quat::yaw(3.14159265f)}), "pointing backwards misses");
+        // The screen's back: a hand behind it pointing at it.
+        check(!hit(s, {{0, 0, -5}, Quat::yaw(3.14159265f)}), "the back of the screen is not a target");
+        // A screen turned to the side, as screenAhead makes for a head turned 90 degrees left.
+        const Screen side{screenAhead({{0, 0, 0}, Quat::yaw(1.5707963f)}, 2.5f), 3.2f, 16.f / 9};
+        at = hit(side, {{0, 0, 0}, Quat::yaw(1.5707963f)});
+        check(at.has_value(), "a turned screen is hit straight on");
+        near((*at)[0], .5f);
+        near((*at)[1], .5f);
+    });
+    test("menu pointer clicks with hysteresis, lets go off the screen and scrolls in notches", [] {
+        using namespace spidy::menu_pointer;
+        const Screen s{screenAhead({{0, 0, 0}, {0, 0, 0, 1}}, 2.5f), 3.2f, 16.f / 9};
+        Pointer p;
+        std::array<Hand, 2> hands{};
+        hands[1] = {true, {{0, 0, 0}, {0, 0, 0, 1}}, 0, 0};
+        auto o = p.update(true, s, hands, .01f);
+        check(o.pointing && o.hand == 1 && !o.press && o.tookTrigger[1] && !o.tookTrigger[0], "right hand points");
+        hands[1].trigger = .7f;
+        o = p.update(true, s, hands, .01f);
+        check(o.press && p.held(), "the trigger presses");
+        hands[1].trigger = .5f;
+        o = p.update(true, s, hands, .01f);
+        check(!o.press && !o.release && p.held(), "half way still holds");
+        hands[1].trigger = .2f;
+        o = p.update(true, s, hands, .01f);
+        check(o.release && !p.held(), "let go releases");
+        hands[1].trigger = .9f;
+        p.update(true, s, hands, .01f);
+        hands[1].ray.position = {5, 0, 0};
+        o = p.update(true, s, hands, .01f);
+        check(!o.pointing && o.release && !p.held(), "leaving the screen lets go of a held button");
+        hands[1] = {true, {{0, 0, 0}, {0, 0, 0, 1}}, 0, .8f};
+        o = p.update(true, s, hands, .05f);
+        check(o.wheel == 1, "stick up scrolls a notch at once");
+        o = p.update(true, s, hands, .05f);
+        check(o.wheel == 0, "not again before the repeat");
+        o = p.update(true, s, hands, .1f);
+        check(o.wheel == 1, "again after the repeat");
+        hands[1].stickY = -.8f;
+        hands[1].stickY = 0;
+        p.update(true, s, hands, .01f);
+        hands[1].stickY = -.9f;
+        o = p.update(true, s, hands, .01f);
+        check(o.wheel == -1, "stick down scrolls down");
+        hands[1].stickY = 0;
+        hands[0] = {true, {{-.5f, 0, 0}, {0, 0, 0, 1}}, 0, 0};
+        o = p.update(true, s, hands, .01f);
+        check(o.hand == 1, "the right hand keeps the cursor");
+        hands[0].trigger = .9f;
+        o = p.update(true, s, hands, .01f);
+        check(o.hand == 0 && o.press && o.tookTrigger[0] && !o.tookTrigger[1], "the left trigger takes it");
+        o = p.update(false, s, hands, .01f);
+        check(!o.pointing && o.release, "switched off, it lets go");
+    });
     test("native view conversion preserves identity and meter scale", [] {
         const Mat4 original{1,0,0,0, 0,-1,0,0, 0,0,-1,0, 10,20,30,1};
         const auto same=native_view::relativePose(original,{});

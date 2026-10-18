@@ -1,0 +1,123 @@
+#pragma once
+// MilesVR: the Touch controllers as a mouse on the game screen. While a menu is on the screen in the
+// headset, a hand pointed at it puts the game's mouse cursor where it points; its trigger is the left
+// mouse button and its stick, pushed up or down, the wheel. The game draws its own cursor in its
+// menus, so the player sees where they point. The other controls stay the Xbox controller's.
+#include "math.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <optional>
+
+namespace spidy::menu_pointer {
+
+// The screen as xr_session::presentation shows it: a quad at `pose`, facing its +z, `width` metres
+// wide and width / aspect high.
+struct Screen {
+    Pose pose{};
+    float width{}, aspect{16.f / 9};
+};
+
+// Where a ray from `from` along its -z meets the front of the screen: (0, 0) its top left, (1, 1)
+// its bottom right. None behind the hand, from behind the screen or off its edges.
+inline std::optional<std::array<float, 2>> hit(const Screen& s, const Pose& from) {
+    if (!(s.width > 0) || !(s.aspect > 0) || !finite(s.pose.position) || !finite(from.position))
+        return std::nullopt;
+    const Vec3 normal = s.pose.orientation.rotate({0, 0, 1});
+    const Vec3 right = s.pose.orientation.rotate({1, 0, 0}), up = s.pose.orientation.rotate({0, 1, 0});
+    const Vec3 direction = from.orientation.rotate({0, 0, -1});
+    const float facing = dot(direction, normal);
+    if (!(facing < -1e-4f))
+        return std::nullopt; // parallel to it, or pointing at its back
+    const float t = dot(s.pose.position - from.position, normal) / facing;
+    if (!(t > 0) || t > 50)
+        return std::nullopt;
+    const Vec3 at = from.position + direction * t - s.pose.position;
+    const float height = s.width / s.aspect;
+    const float u = dot(at, right) / s.width + .5f, v = .5f - dot(at, up) / height;
+    if (!std::isfinite(u) || !std::isfinite(v) || u < 0 || u > 1 || v < 0 || v > 1)
+        return std::nullopt;
+    return std::array<float, 2>{u, v};
+}
+
+struct Hand {
+    bool valid{};
+    Pose ray{};
+    float trigger{}, stickY{};
+};
+
+// What the frame does with the mouse, and which of the hands' controls it took from the Xbox
+// controller: the pointing hand's trigger and stick's y.
+struct Output {
+    bool pointing{};
+    unsigned hand{};
+    std::array<float, 2> at{};
+    bool press{}, release{};
+    int wheel{}; // notches, + away from the player (scroll up)
+    std::array<bool, 2> tookTrigger{}, tookStick{};
+};
+
+class Pointer {
+  public:
+    // The trigger presses past `pressAt` and lets go below `releaseAt`; a stick pushed past
+    // `wheelAt` scrolls a notch, and another every `repeatSeconds` it stays there.
+    static constexpr float pressAt = .6f, releaseAt = .35f, wheelAt = .55f, repeatSeconds = .12f;
+
+    Output update(bool enabled, const Screen& screen, const std::array<Hand, 2>& hands, float seconds) {
+        Output out;
+        std::array<std::optional<std::array<float, 2>>, 2> hits{};
+        if (enabled)
+            for (unsigned i = 0; i < 2; ++i)
+                if (hands[i].valid)
+                    hits[i] = hit(screen, hands[i].ray);
+        // The hand that pointed last keeps the cursor while it points; else the other, if it does.
+        if (!hits[hand_] && hits[1 - hand_])
+            hand_ = 1 - hand_;
+        // A trigger pulled on the other hand, pointing too, takes the cursor.
+        const unsigned other = 1 - hand_;
+        if (hits[other] && !held_ && hands[other].trigger >= pressAt && lastTrigger_[other] < pressAt)
+            hand_ = other;
+        for (unsigned i = 0; i < 2; ++i)
+            lastTrigger_[i] = std::isfinite(hands[i].trigger) ? hands[i].trigger : 0;
+        if (!hits[hand_]) {
+            // Off the screen: a held button lets go, so a drag never sticks.
+            out.release = held_;
+            held_ = false;
+            repeat_ = 0;
+            return out;
+        }
+        out.pointing = true;
+        out.hand = hand_;
+        out.at = *hits[hand_];
+        out.tookTrigger[hand_] = out.tookStick[hand_] = true;
+        const float trigger = lastTrigger_[hand_];
+        if (!held_ && trigger >= pressAt)
+            out.press = held_ = true;
+        else if (held_ && trigger < releaseAt) {
+            out.release = true;
+            held_ = false;
+        }
+        const float y = std::isfinite(hands[hand_].stickY) ? std::clamp(hands[hand_].stickY, -1.f, 1.f) : 0;
+        if (std::abs(y) < wheelAt) {
+            repeat_ = 0;
+        } else {
+            repeat_ -= seconds;
+            if (repeat_ <= 0) {
+                out.wheel = y > 0 ? 1 : -1;
+                repeat_ = repeatSeconds;
+            }
+        }
+        return out;
+    }
+    bool held() const {
+        return held_;
+    }
+
+  private:
+    unsigned hand_ = 1; // the right hand first
+    bool held_{};
+    float repeat_{};
+    std::array<float, 2> lastTrigger_{};
+};
+
+} // namespace spidy::menu_pointer

@@ -37,6 +37,7 @@
 #include "spidy/web_pull.hpp"
 #include "spidy/xr_layers.hpp"
 #include "spidy/xr_session.hpp"
+#include "spidy/menu_pointer.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -407,6 +408,74 @@ DWORD WINAPI SpidySetEyes(void*);
 float SpidyFlatAspect();
 }
 namespace {
+// MilesVR: the game's mouse, for the controllers on its menus (menu_pointer.hpp). The game's window
+// is this process's largest visible top-level one; the cursor goes inside its client area only, and
+// nothing is sent while another window is in front.
+HWND gameWindow() {
+    static HWND found{};
+    static ULONGLONG lookedAt{};
+    if (found && IsWindow(found))
+        return found;
+    const ULONGLONG now = GetTickCount64();
+    if (now - lookedAt < 2000)
+        return nullptr;
+    lookedAt = now;
+    struct Search {
+        HWND best{};
+        LONG area{};
+    } search;
+    EnumWindows(
+        [](HWND w, LPARAM data) -> BOOL {
+            DWORD pid{};
+            GetWindowThreadProcessId(w, &pid);
+            RECT r{};
+            if (pid == GetCurrentProcessId() && IsWindowVisible(w) && !GetWindow(w, GW_OWNER) &&
+                GetClientRect(w, &r)) {
+                auto& s = *reinterpret_cast<Search*>(data);
+                if (const LONG area = (r.right - r.left) * (r.bottom - r.top); area > s.area) {
+                    s.area = area;
+                    s.best = w;
+                }
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&search));
+    found = search.area >= 320 * 200 ? search.best : nullptr;
+    return found;
+}
+void mouseEvent(DWORD flags, DWORD data = 0) {
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = flags;
+    in.mi.mouseData = data;
+    SendInput(1, &in, sizeof(in));
+}
+// What the pointer asked of the mouse this frame. True when it moved, pressed or scrolled.
+bool gameMouse(const menu_pointer::Output& o) {
+    const HWND window = gameWindow();
+    if (!window || GetForegroundWindow() != window) {
+        if (o.release)
+            mouseEvent(MOUSEEVENTF_LEFTUP); // never leave the button down
+        return false;
+    }
+    if (o.pointing) {
+        RECT r{};
+        if (!GetClientRect(window, &r) || r.right < 2 || r.bottom < 2)
+            return false;
+        POINT at{static_cast<LONG>(std::lround(o.at[0] * (r.right - 1))),
+                 static_cast<LONG>(std::lround(o.at[1] * (r.bottom - 1)))};
+        POINT now{};
+        if (ClientToScreen(window, &at) && (!GetCursorPos(&now) || now.x != at.x || now.y != at.y))
+            SetCursorPos(at.x, at.y);
+    }
+    if (o.press)
+        mouseEvent(MOUSEEVENTF_LEFTDOWN);
+    if (o.release)
+        mouseEvent(MOUSEEVENTF_LEFTUP);
+    if (o.wheel)
+        mouseEvent(MOUSEEVENTF_WHEEL, static_cast<DWORD>(o.wheel * WHEEL_DELTA));
+    return o.pointing;
+}
 using BridgeCall = DWORD(WINAPI*)(void*);
 XrConfig config;
 BridgeCall submitInput{}, sampleBridge{}, stopBridge{}, retargetBridge{};
@@ -774,6 +843,10 @@ DWORD WINAPI run(void*) {
         ScenePanel scenePanel;
         bool flatScreen{};
         Pose screenPose{};
+        // MilesVR: the game screen's aspect as last shown, and the controllers as its mouse.
+        float shownAspect = 16.f / 9;
+        menu_pointer::Pointer menuPointer;
+        bool pointerNoted{}, clickNoted{};
         const auto dimensions = runtime.eyeDimensions();
         // Aim markers are drawn so many pixels wide: above the headset's own
         // resolution they keep the size they have at it.
@@ -2297,6 +2370,36 @@ DWORD WINAPI run(void*) {
                                 wheelShooter(&command);
                             }
                         }
+                        // MilesVR: on a menu's screen the hand menuMouse at it is the game's mouse - its
+                        // trigger the left button, its stick's y the wheel - and they leave the Xbox
+                        // controller meanwhile. Not while the game plays on its screen (VIEW: GAME
+                        // SCREEN), where the mouse would turn the camera, unless it is paused there.
+                        {
+                            const bool pointerOn =
+                                mapping == game_pad::Mapping::menus && screen && !(flatScreen && timeRuns);
+                            std::array<menu_pointer::Hand, 2> menuHands{};
+                            for (unsigned i = 0; i < 2; ++i)
+                                menuHands[i] = {frame.hands[i].valid && validTrackedPose(frame.hands[i].grip),
+                                               webShooter(frame.hands[i].grip, i), frame.hands[i].trigger,
+                                               frame.hands[i].stickY};
+                            const auto menuMouse = menuPointer.update(
+                                pointerOn, {screenPose, vr_settings::screenWidth(values.screenSize), shownAspect},
+                                menuHands, frame.seconds);
+                            for (unsigned i = 0; i < 2; ++i) {
+                                if (menuMouse.tookTrigger[i])
+                                    buttons.hands[i].trigger = 0;
+                                if (menuMouse.tookStick[i])
+                                    buttons.hands[i].stickY = 0;
+                            }
+                            if (gameMouse(menuMouse) && !pointerNoted) {
+                                pointerNoted = true;
+                                game_prompts::note("menu pointer: a hand points at the game screen");
+                            }
+                            if (menuMouse.press && !clickNoted) {
+                                clickNoted = true;
+                                game_prompts::note("menu pointer: first click");
+                            }
+                        }
                         auto pad = game_pad::fromControllers(buttons, mapping, walk);
                         if (menuTap > 0) {
                             pad.buttons |= game_pad::back;
@@ -2802,6 +2905,7 @@ DWORD WINAPI run(void*) {
                                              static_cast<float>(image.width) / static_cast<float>(image.height),
                                              vr_settings::screenWidth(values.screenSize));
                         drawn = Presentation::gameScreen;
+                        shownAspect = static_cast<float>(image.width) / static_cast<float>(image.height);
                         D3D12Renderer::Captured pixels;
                         if (snapshotTicket && overlay.captured(snapshotTicket, pixels)) {
                             publishSnapshot(pendingSnapshot, &pixels);
@@ -3167,8 +3271,9 @@ DWORD WINAPI run(void*) {
                                   "menu button for its Back (the map), hold the left stick's click and push the "
                                   "right stick for its D-pad - pause, SWITCH TO VR goes back to VR"
                             : drawn == Presentation::gameScreen
-                                ? "Game screen (menus, loading, cutscenes): the controllers work as an Xbox "
-                                  "controller, VR settings are in Settings > SPIDY VR - VR resumes with gameplay"
+                                ? "Game screen (menus, loading, cutscenes): point a hand at it for the mouse - "
+                                  "its trigger clicks, its stick scrolls - and the other controls work as an "
+                                  "Xbox controller; VR settings are in the launcher - VR resumes with gameplay"
                             : drawn == Presentation::stereoScreen
                                 ? "Game screen in 3D (a cutscene or another scene the game plays): the "
                                   "controllers work as an Xbox controller - Settings > SPIDY VR > GAME SCREEN 3D "
