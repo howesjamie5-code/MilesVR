@@ -281,7 +281,7 @@ class DesktopViewTests(unittest.TestCase):
     def test_display_is_prepared_only_when_the_launcher_starts_the_game(self):
         order=Mock()
         game=Mock(pid=42)
-        with patch.object(launcher,'find_game',side_effect=[RuntimeError('Spider-Man is not running.'),42]), \
+        with patch.object(launcher,'find_game',side_effect=[RuntimeError('Miles Morales is not running.'),42]), \
              patch.object(launcher.pathlib.Path,'is_file',return_value=True), \
              patch.object(launcher.subprocess,'Popen',order.launch),patch.object(launcher,'Game',return_value=game), \
              patch.object(launcher,'ready_player',return_value=True):
@@ -326,7 +326,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_the_epic_games_stores_copy_is_started_when_steam_has_none(self):
         game=Mock(pid=42)
-        missing=RuntimeError('Spider-Man is not running.')
+        missing=RuntimeError('Miles Morales is not running.')
         link='com.epicgames.launcher://apps/ns%3Aitem%3Aapp?action=launch&silent=true'
         prepare=Mock()
         with patch.object(launcher,'find_game',side_effect=[missing,42,42]), \
@@ -353,7 +353,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_game_closed_before_load_releases_handle(self):
         game=Mock(pid=42)
-        with patch.object(launcher,'find_game',side_effect=[42,42,RuntimeError('Spider-Man is not running.')]), \
+        with patch.object(launcher,'find_game',side_effect=[42,42,RuntimeError('Miles Morales is not running.')]), \
              patch.object(launcher,'Game',return_value=game),patch.object(launcher,'ready_player',return_value=False), \
              patch.object(launcher.time,'sleep'):
             with self.assertRaisesRegex(RuntimeError,'game closed'): launcher.wait_for_game()
@@ -364,7 +364,7 @@ class LauncherTests(unittest.TestCase):
         game=Mock(pid=42)
         order.game.side_effect=[OSError('still being set up'),game]
         order.ready.return_value=True
-        missing=RuntimeError('Spider-Man is not running.')
+        missing=RuntimeError('Miles Morales is not running.')
         with patch.object(launcher,'find_game',side_effect=[missing,missing,missing,42,42]), \
              patch.object(launcher.pathlib.Path,'is_file',return_value=True), \
              patch.object(launcher.subprocess,'Popen',order.launch),patch.object(launcher,'Game',order.game), \
@@ -405,7 +405,7 @@ class LauncherTests(unittest.TestCase):
         early.assert_called_once_with(42)
 
     def test_an_administrators_steam_is_refused_before_anything_changes(self):
-        missing=RuntimeError('Spider-Man is not running.')
+        missing=RuntimeError('Miles Morales is not running.')
         self.process_ids.return_value=[7]
         self.elevated.side_effect=lambda pid=None: pid==7
         prepare=Mock()
@@ -468,7 +468,7 @@ class LauncherTests(unittest.TestCase):
 
     def test_a_launch_that_runs_out_of_time_says_what_was_missing(self):
         clock(self)
-        missing=RuntimeError('Spider-Man is not running.')
+        missing=RuntimeError('Miles Morales is not running.')
         with patch.object(launcher,'find_game',side_effect=missing), \
              patch.object(launcher.pathlib.Path,'is_file',return_value=True),patch.object(launcher.subprocess,'Popen'):
             with self.assertRaisesRegex(RuntimeError,'did not start within three minutes'):

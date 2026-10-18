@@ -247,7 +247,7 @@ def main():
         print('Close Spider-Man first; it may save its window settings when it exits.', file=sys.stderr)
         return 1
     except RuntimeError as error:
-        if not str(error).startswith('Spider-Man is not running.'):
+        if not str(error).startswith('Miles Morales is not running.'):
             raise
     print('Restored your display settings.' if restore() else 'No display values are waiting to be restored.')
     return 0

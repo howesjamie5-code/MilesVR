@@ -1,5 +1,6 @@
 // Tests the engine's own secondary scene views on its view-maintenance thread.
 // The original scene pass remains owned by the game. No desktop capture is used.
+#include <string>
 #include "spidy/eye_job_table.hpp"
 #include "spidy/eye_resolution.hpp"
 #include "spidy/native_appearance.hpp"
@@ -806,6 +807,25 @@ void sizeBuffers(void* buffers, const char* name, uint32_t width, uint32_t heigh
         sizes[15] |= 2;
     else
         sizes[15] &= ~2u;
+}
+// The hooks to enable (see SpidyXrStart): hook_mask.txt beside this module, else all of them.
+uint32_t hookMask() {
+    HMODULE self{};
+    wchar_t path[MAX_PATH]{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCWSTR>(&hookMask), &self) ||
+        !GetModuleFileNameW(self, path, MAX_PATH))
+        return ~0u;
+    std::wstring file(path);
+    file = file.substr(0, file.find_last_of(L"\\/") + 1) + L"hook_mask.txt";
+    FILE* f = _wfopen(file.c_str(), L"r");
+    if (!f)
+        return ~0u;
+    unsigned value = ~0u;
+    if (fscanf(f, "%x", &value) != 1)
+        value = ~0u;
+    fclose(f);
+    return value;
 }
 bool initBuffers(void* buffers, const void* description, const char* name) {
     const auto view = reinterpret_cast<uintptr_t>(buffers) - 0x1f80;
@@ -1863,17 +1883,16 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         attempted = false;
         stopRequested = false;
         deadline = config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
-        auto s = MH_EnableHook(updateHook);
-        if (s == MH_OK)
-            s = MH_EnableHook(copyFinalHook);
-        if (s == MH_OK)
-            s = MH_EnableHook(toneHook);
-        for (auto hook : {copyJobHook, beginJobHook, endJobHook, initBuffersHook, sizeBuffersHook, renderActorHook,
-                          setupDisplayHook, submitHook, renderOffscreenHook, hudPlaceHook, submitSceneHook, fitCascadesHook})
-            if (s == MH_OK)
-                s = MH_EnableHook(hook);
-        if (s == MH_OK)
-            s = MH_EnableHook(maintainHook);
+        // MilesVR diagnostics: hook_mask.txt beside this module (a hex number) leaves the hooks whose bit
+        // is clear disabled, in the order below; without the file every hook is enabled.
+        const uint32_t mask = hookMask();
+        void* const ordered[] = {updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook,
+                                 initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook,
+                                 renderOffscreenHook, hudPlaceHook, submitSceneHook, fitCascadesHook, maintainHook};
+        auto s = MH_OK;
+        for (size_t i = 0; i < std::size(ordered) && s == MH_OK; ++i)
+            if (mask & (1u << i))
+                s = MH_EnableHook(ordered[i]);
         if (s != MH_OK) {
             for (auto hook : {updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook,
                               initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook, renderOffscreenHook,

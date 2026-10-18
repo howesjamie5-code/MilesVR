@@ -115,8 +115,10 @@ void XrRuntime::initialize(
     if (!graphics.device || !graphics.queue)
         throw std::invalid_argument("OpenXR requires a D3D12 device and queue");
     const auto luid = graphics.device->GetAdapterLuid();
-    if (luid.LowPart != requirements.adapterLuid.LowPart ||
-        luid.HighPart != requirements.adapterLuid.HighPart)
+    // A zero LUID: the runtime names no adapter (SteamVR's null headset), and the game's is used.
+    const bool anyAdapter = !requirements.adapterLuid.LowPart && !requirements.adapterLuid.HighPart;
+    if (!anyAdapter && (luid.LowPart != requirements.adapterLuid.LowPart ||
+                        luid.HighPart != requirements.adapterLuid.HighPart))
         throw std::runtime_error("Game GPU does not match OpenXR GPU");
     if (graphics.queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT)
         throw std::runtime_error("OpenXR requires a direct command queue");

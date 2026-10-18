@@ -258,7 +258,7 @@ def wait_for_game(timeout=180,prepare=None,early=None,ready=None):
     ready=ready or ready_player
     try: pid=find_game()
     except RuntimeError as error:
-        if not str(error).startswith('Spider-Man is not running.'): raise
+        if not str(error).startswith('Miles Morales is not running.'): raise
         pid=None
     # Steam's copy is the one Spidy is made on; the Epic Games Store's is started when Steam has none.
     epic=None
@@ -294,7 +294,7 @@ def wait_for_game(timeout=180,prepare=None,early=None,ready=None):
         while time.monotonic()-started<timeout:
             try: current=find_game()
             except RuntimeError as error:
-                if not str(error).startswith('Spider-Man is not running.'): raise
+                if not str(error).startswith('Miles Morales is not running.'): raise
                 if game: raise RuntimeError('The game closed before gameplay became ready.')
                 # A new process has about three seconds before it creates its render memory.
                 time.sleep(.05); continue

@@ -16,7 +16,7 @@ def running():
     try:
         return find_game()
     except RuntimeError as error:
-        if str(error).startswith('Spider-Man is not running.'):
+        if str(error).startswith('Miles Morales is not running.'):
             return None
         raise
 
