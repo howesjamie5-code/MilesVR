@@ -98,8 +98,9 @@ struct Strikes {
 };
 static_assert(sizeof(Strikes) == 328);
 // Miles's venom punch (venom_punch.hpp), SpidyVenom: the headset module
-// says, every frame, whether the right fist is charged and where the meter
-// is; the next blow that fist lands (a punch, or the strike it opened) goes
+// says, every frame, which fist is the venom's, whether it is charged and
+// where the meter is; the next blow that fist lands (a punch at the marked
+// enemy, or the strike it opened) goes
 // to the game as a venom blow - DamageType kVenom with the venom status, the
 // blow of a finisher and his flight - and the meter is emptied.
 struct Venom {
@@ -116,7 +117,9 @@ struct Venom {
     uint32_t lastCharge{};
     Vec3 lastPoint{};
     float lastDamage{};
-    uint32_t reserved{};
+    // In: the venom fist, 0 the left and 1 the right (version 1 had a zero
+    // here: the right's, as then).
+    uint32_t hand = 1;
 };
 static_assert(sizeof(Venom) == 64);
 // Starts the bot watch and the main-thread damage requests.

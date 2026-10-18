@@ -88,7 +88,7 @@ Strikes tally;
 // The venom punch (game_punch.hpp's Venom): the charge the headset module
 // holds out and the meter's address, the charge a blow spent last, and what
 // has landed.
-std::atomic<uint32_t> venomCharge{};
+std::atomic<uint32_t> venomCharge{}, venomHand{1};
 std::atomic<uint64_t> venomMeter{};
 uint32_t venomUsed{};
 Venom venomOut;
@@ -288,7 +288,7 @@ void land(PunchEvent e, bool byStrike) {
     // The right fist charged with venom: this blow is the venom punch, and
     // the charge is spent.
     const uint32_t charge = venomCharge.load();
-    const bool venom = e.hand == 1 && venomArmed();
+    const bool venom = e.hand == (venomHand.load() ? 1 : 0) && venomArmed();
     if (venom) {
         venomUsed = charge;
         Vec3 along{e.direction.x, 0, e.direction.z};
@@ -501,20 +501,21 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         strike.spent(e.hand);
         land(e, false);
     }
-    // The venom punch: the right fist, charged, thrown out at the marked
+    // The venom punch: the venom fist, charged, thrown out at the marked
     // enemy within venomReach, as a strike's fist is thrown (fast enough,
     // out from the neck, his way). The blow lands on him.
-    if (venomArmed() && hands[1].tracked && !hands[1].busy && strike.phase() == WebStrike::Phase::Idle) {
+    const int side = venomHand.load() ? 1 : 0;
+    if (venomArmed() && hands[side].tracked && !hands[side].busy && strike.phase() == WebStrike::Phase::Idle) {
         const auto& sc = strike.config();
-        const Vec3 velocity = punches.velocity(1);
+        const Vec3 velocity = punches.velocity(side);
         const float speed = length(velocity);
         for (const auto& target : enemies) {
             if (target.id != lock.target() || speed < sc.minSpeed)
                 continue;
             const Vec3 moving = velocity / speed;
             const Vec3 neck = head - Vec3{0, sc.neck, 0};
-            const Vec3 out = normalized(hands[1].fist - neck);
-            const Vec3 toward = normalized(target.middle() - hands[1].fist);
+            const Vec3 out = normalized(hands[side].fist - neck);
+            const Vec3 toward = normalized(target.middle() - hands[side].fist);
             if (length(target.middle() - chest) > venomReach || dot(moving, out) < sc.outward ||
                 dot(moving, toward) < sc.markedAim)
                 continue;
@@ -522,11 +523,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
             if (length(way) < .5f)
                 way = moving;
             auto e = punches.blow(way, speed);
-            e.hand = 1;
+            e.hand = side;
             e.target = target.id;
             e.point = target.middle() - way * target.radius;
-            punches.spend(1);
-            strike.spent(1);
+            punches.spend(side);
+            strike.spent(side);
             land(e, false);
             break;
         }
@@ -675,11 +676,13 @@ Strikes game_punch::strikes() {
 Venom game_punch::venom(const Venom& in) {
     venomCharge = in.charge;
     venomMeter = in.meter;
+    venomHand = in.hand ? 1u : 0u;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);
     out.charge = in.charge;
     out.meter = in.meter;
+    out.hand = in.hand;
     return out;
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyPunchStart(void* input) {

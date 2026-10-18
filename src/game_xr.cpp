@@ -340,7 +340,7 @@ struct XrData {
     // And the presses made again because the game still held the offer.
     uint32_t offersSearches{}, offersSpots{}, offersNear{}, offerRetries{};
     // Version 37, Miles's venom punch (venom_punch.hpp): the meter now (-1:
-    // not found), the right web button as the venom's, the fist's glow; bits:
+    // not found), the venom hand's web button as the venom's, the fist's glow; bits:
     // 1 the meter full, 2 the right hand's webs off for it, 4 the fist
     // charged, 8 a web held as it filled still on; and the times the meter
     // filled, the charges made, the venom blows landed and the meters they
@@ -735,8 +735,8 @@ DWORD WINAPI run(void*) {
         uint64_t venomBlowsBefore{}, venomSpentBefore{};
         float venomGlow{};
         bool venomFullBefore{};
-        // The right web button while the meter is full (the venom charge's,
-        // 0 otherwise), and whether a web the right hand held as the meter
+        // The venom hand's web button while the meter is full (the venom
+        // charge's, 0 otherwise), and whether a web that hand held as the meter
         // filled still goes on until it is let go.
         float venomGrip{};
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
@@ -849,6 +849,9 @@ DWORD WINAPI run(void*) {
         values.webShooter = !(config.options & 512);
         values.flips = config.options & 2048;
         values.triggerWebs = config.options & 4096;
+        // Miles's venom punch: the left hand's, or the right's (the launcher's Venom punch hand).
+        const unsigned venomSide = config.options & 0x200000 ? 0u : 1u;
+        const char* const venomName = venomSide ? "right" : "left";
         values.standOnWalls = !(config.options & 8192);
         values.swingSpeed = config.swingSpeed;
         values.snapTurn = static_cast<int>(config.snapTurn);
@@ -1622,25 +1625,27 @@ DWORD WINAPI run(void*) {
                         for (auto& hand : motion.swing.hands)
                             hand.trigger = hand.grip = 0;
                     }
-                    // Miles's venom punch: with the meter full the right controller
-                    // shoots no web (nor web ball); its web button charges the right
-                    // fist (venom_punch.hpp). A web it holds as the meter fills
-                    // stays until let go: no drop out of a swing.
+                    // Miles's venom punch: with the meter full the venom hand's
+                    // controller (the launcher's Venom punch hand) shoots no web nor
+                    // web ball; its web button charges that fist (venom_punch.hpp). A
+                    // web it holds as the meter fills stays until let go: no drop out
+                    // of a swing.
                     {
-                        auto& right = motion.swing.hands[1];
+                        auto& fist = motion.swing.hands[venomSide];
                         const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
                                                !calibrationInput && !padLayer.latched();
                         if (!venomHand)
                             venomKeepWeb = false;
-                        else if (!venomHandBefore && swingState.webs[1].attached && right.grip > venom_punch::gripOff)
+                        else if (!venomHandBefore && swingState.webs[venomSide].attached &&
+                                 fist.grip > venom_punch::gripOff)
                             venomKeepWeb = true;
-                        if (venomKeepWeb && right.grip < venom_punch::gripOff)
+                        if (venomKeepWeb && fist.grip < venom_punch::gripOff)
                             venomKeepWeb = false;
                         venomHandBefore = venomHand;
                         venomHandOn = venomHand && !venomKeepWeb;
-                        venomGrip = venomHandOn ? right.grip : 0.f;
+                        venomGrip = venomHandOn ? fist.grip : 0.f;
                         if (venomHandOn)
-                            right.grip = right.trigger = 0;
+                            fist.grip = fist.trigger = 0;
                     }
                     // Slow motion: the left thumbstick's click, in VR play outside the calibration.
                     const bool slowAllowed = immersive && calibration.phase() == CalibrationPhase::idle;
@@ -2335,26 +2340,31 @@ DWORD WINAPI run(void*) {
                         const auto venom = venomCharge.update(
                             frame.seconds, steering && !layerOn && !calibrationInput, venomFull, venomGrip);
                         if (venomFull && !venomFullBefore && steering) {
-                            runtime.haptic(1, .4f, .08f);
-                            message(3, 0, "Venom full - the right hand's webs are off: hold its grip to charge "
-                                          "your fist");
+                            runtime.haptic(venomSide, .4f, .08f);
+                            char text[96];
+                            sprintf_s(text, "Venom full - the %s hand's webs are off: hold its grip to charge your fist",
+                                      venomName);
+                            message(3, 0, text);
                         }
                         venomFills += venomFull && !venomFullBefore;
                         venomFullBefore = venomFull;
                         venomArmed = venom.armed;
                         if (venom.charged) {
                             venomCharges = venomCharges + 1 ? venomCharges + 1 : 1;
-                            runtime.haptic(1, 1.f, .15f);
-                            runtime.haptic(0, .3f, .05f);
-                            message(3, 0, "Venom charged - punch the marked enemy with your right fist");
+                            runtime.haptic(venomSide, 1.f, .15f);
+                            runtime.haptic(1 - venomSide, .3f, .05f);
+                            char text[96];
+                            sprintf_s(text, "Venom charged - punch the marked enemy with your %s fist", venomName);
+                            message(3, 0, text);
                         } else if (venom.glow > 0 && !venom.armed) {
-                            runtime.haptic(1, .1f + .35f * venom.glow);
+                            runtime.haptic(venomSide, .1f + .35f * venom.glow);
                         }
                         venomGlow = venom.glow;
                         if (punchStarted && venomCall) {
                             game_punch::Venom exchange;
                             exchange.charge = venom.armed ? venomCharges : 0;
                             exchange.meter = venomMeter.address;
+                            exchange.hand = venomSide;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {
@@ -2952,7 +2962,7 @@ DWORD WINAPI run(void*) {
                     }
                     // The right hand shoots no web while it holds the venom.
                     if (venomHandOn)
-                        saved.aims[1] = {};
+                        saved.aims[venomSide] = {};
                     saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
                     saved.strandUpper = webRopes.upper();
                     if (calibration.phase() != body_calibration::Phase::idle) {
@@ -3249,8 +3259,8 @@ DWORD WINAPI run(void*) {
                         }
                         // Miles's venom round the right fist, moved with the player
                         // to this image as the glove is; and where venom punches landed.
-                        if (!saved->flatScreen && saved->venomGlow > 0 && rendered.swing.hands[1].tracked) {
-                            auto fist = rendered.hands[1];
+                        if (!saved->flatScreen && saved->venomGlow > 0 && rendered.swing.hands[venomSide].tracked) {
+                            auto fist = rendered.hands[venomSide];
                             fist.position += travel;
                             appendVenomFist(translucent, saved->venomGlow, fist, viewer, pixelAngle,
                                             static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 3600.)));

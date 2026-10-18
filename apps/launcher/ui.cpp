@@ -74,6 +74,8 @@ constexpr const char* kHudSizes[] = {"Off", "Small", "Medium", "Large"};
 constexpr const char* kScreenDepths[] = {"Off", "Low", "Medium", "High"};
 // The button that shoots and holds webs (SessionOptions::triggerWebs: the second).
 constexpr const char* kWebButtons[] = {"Grip", "Trigger"};
+// The venom punch's hand (SessionOptions::venomLeftHand: the second).
+constexpr const char* kVenomHands[] = {"Right hand", "Left hand"};
 constexpr const char* kWeights[] = {"40%", "60%", "80%", "100%", "125%", "150%", "200%", "250%", "300%"};
 constexpr int kWeightValues[] = {40, 60, 80, 100, 125, 150, 200, 250, 300};
 constexpr const char* kFlipSpeeds[] = {"90\xC2\xB0/s",  "120\xC2\xB0/s", "150\xC2\xB0/s", "180\xC2\xB0/s",
@@ -1044,6 +1046,15 @@ void App::optionsCard(ImVec2 size) {
                int trigger = o.triggerWebs ? 1 : 0;
                stepCombo("##webButton", kWebButtons, buttons, 2, &trigger);
                o.triggerWebs = trigger != 0;
+           });
+    option("Venom punch hand",
+           "With the venom meter full, this hand's webs switch off; hold its grip to charge the venom punch, then "
+           "punch the marked enemy.",
+           S(150), [&] {
+               static constexpr int hands[] = {0, 1};
+               int left = o.venomLeftHand ? 1 : 0;
+               stepCombo("##venomHand", kVenomHands, hands, 2, &left);
+               o.venomLeftHand = left != 0;
            });
     option("Webs hold in open air", "With nothing in reach, a web still holds 100 m out; off, it misses.", S(40),
            [&] { changed |= toggle("##air", &o.airWebs); });

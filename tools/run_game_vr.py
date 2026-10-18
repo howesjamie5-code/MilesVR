@@ -1524,6 +1524,9 @@ def main():
     p.add_argument('--trigger-webs', action='store_true',
                    help='The trigger shoots and holds webs, and the grip reels in and shoots web balls (the two '
                         'swapped)')
+    p.add_argument('--venom-left-hand', action='store_true',
+                   help="Miles's venom punch is the left hand's: with the venom meter full its webs switch off and "
+                        'its web button charges it (the right hand otherwise)')
     p.add_argument('--no-body', action='store_true',
                    help="Keep the hero hidden in VR (gloves drawn over the image) instead of your own body")
     p.add_argument('--no-punch', action='store_true', help='Fists pass through thugs instead of punching them')
@@ -1757,7 +1760,8 @@ def session(a, startup):
                              (16384 if a.no_wall_run else 0) | (0x8000 if a.no_eye_antialiasing else 0) |
                              (0x10000 if a.game_monitor_view or game_view else 0) |
                              (0x20000 if a.own_shadows else 0) | (0 if reflections else 0x40000) |
-                             (0x100000 if a.no_prompt_help else 0)) + \
+                             (0x100000 if a.no_prompt_help else 0) |
+                             (0x200000 if a.venom_left_hand else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
                                                  a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth, 0)
@@ -1840,6 +1844,7 @@ def session(a, startup):
             """Everything sampled so far. It is written however the session ends."""
             return dict(pid=game.pid, eye_size=a.size, render_scale=a.render_scale, swing_speed=a.swing_speed,
                         eyes=eye_options, vr_settings=settings_start,
+                        venom_hand='left' if a.venom_left_hand else 'right',
                         game_settings_refused=startup.fields.get('game_settings_refused'),
                         xr_runtime=runtime, motion_hash=motion_hash,
                         xr_hash=xr_hash, ray_hash=ray_hash, samples=list(samples),
@@ -2079,7 +2084,8 @@ def session(a, startup):
             eye_size=a.size,render_scale=a.render_scale,eyes=eye_options,capture_images=a.capture_images,
             timing=timing_snapshot(game,xr['SpidyXrTimingData']),
             ray_hash=ray_hash, ray_samples=list(ray_samples), rays=ray_snapshot(game, rays['SpidyRayData']),
-            motion_hash=motion_hash, swing_speed=a.swing_speed, vr_settings=settings_start, xr_runtime=runtime,
+            motion_hash=motion_hash, swing_speed=a.swing_speed, vr_settings=settings_start,
+            venom_hand='left' if a.venom_left_hand else 'right', xr_runtime=runtime,
             game_settings_refused=startup.fields.get('game_settings_refused'),
             swing_samples=list(swing_samples),
             grab_samples=list(grab_samples), grab=grab_snapshot(game, rays['SpidyGrabData']),

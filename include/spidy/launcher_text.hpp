@@ -504,6 +504,9 @@ struct SessionOptions {
     int flipSpeed = 180; // degrees a second a flip turns you at full tilt of the left stick
     // The trigger shoots and holds webs, and the grip reels them in and shoots web balls; off, the other way round.
     bool triggerWebs = false;
+    // Miles's venom punch: with the venom meter full this hand's webs switch off and its web button charges its
+    // fist for the venom punch; off, the right hand's.
+    bool venomLeftHand = false;
     int hud = 2; // the game's HUD in the headset: 0 off, 1 small, 2 medium, 3 large
     // Walking a wall or stopped on it, your view turns so that the wall is your floor; off, you stay upright.
     bool standOnWalls = true;
@@ -557,6 +560,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--flips");
     if (options.triggerWebs)
         args.emplace_back(L"--trigger-webs");
+    if (options.venomLeftHand)
+        args.emplace_back(L"--venom-left-hand");
     if (!options.wallRun)
         args.emplace_back(L"--no-wall-run");
     if (options.gameDepthOfField)

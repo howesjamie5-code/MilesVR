@@ -1,5 +1,23 @@
-MilesVR 0.1.12 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.13 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.12: VENOM PUNCH HAND IN THE LAUNCHER
+--------------------------------------------------
+The launcher's OPTIONS have a new setting, "Venom punch hand":
+- Right hand (the default): as in 0.1.12. With the venom meter full the right
+  hand's webs switch off; hold the RIGHT GRIP to charge, punch with the right
+  fist.
+- Left hand: the same with the left. With the meter full the LEFT hand's webs
+  switch off; hold the LEFT GRIP to charge, punch the marked enemy with the
+  left fist. The right hand keeps swinging.
+The choice is saved with your other options, and takes effect at the next
+START VR.
+
+What to try:
+1. In the launcher, set Venom punch hand to Left hand, then START VR.
+2. Fill the meter: do the LEFT webs stop? Hold the left grip, punch the
+   marked enemy with your left fist.
+3. Set it back to Right hand and check the right still works.
 
 What changed since 0.1.11: THE VENOM PUNCH AFTER A RESTART
 --------------------------------------------------

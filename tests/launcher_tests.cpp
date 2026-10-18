@@ -230,6 +230,11 @@ int main() {
         options.triggerWebs = true;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--trigger-webs", "the web button on the trigger");
+        options = {};
+        check(!options.venomLeftHand, "the venom punch on the left hand in a new launcher");
+        options.venomLeftHand = true;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 8 && args[7] == L"--venom-left-hand", "the venom punch on the left hand");
         // The view turning onto a wall is no option of its own and is never passed: it turns whoever holds
         // the player there, the swing or the game's own crawl, which is the whole point of giving the crawl
         // the view (the player, October 14: "i like how it feel to walk on building and stand on their side",
