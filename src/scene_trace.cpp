@@ -66,7 +66,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
         if(!read(reinterpret_cast<uint64_t>(input),&config,sizeof(config)) || config.magic!=0x53544346 || config.version!=1 ||
            config.bytes!=sizeof(config) || config.pid!=GetCurrentProcessId() || config.base!=reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))){result=1001;break;}
         if(!created){
-            const uint32_t rvas[]={0x1920240,0x186d050,0x19206a0,0x189e310,0x1846c20};
+            const uint32_t rvas[]={0x1e2b9f0,0x186d050,0x1e2be50,0x1da9960,0x1d517b0};
             const uint8_t signatures[5][5]={{0x48,0x89,0x5c,0x24,0x08},{0x40,0x55,0x56,0x41,0x55},
                 {0x44,0x88,0x4c,0x24,0x20},{0x48,0x89,0x5c,0x24,0x08},{0x48,0x8b,0xc4,0x48,0x89}};
             for(unsigned i=0;i<hookCount;++i){uint8_t bytes[5]{};targets[i]=reinterpret_cast<void*>(config.base+rvas[i]);

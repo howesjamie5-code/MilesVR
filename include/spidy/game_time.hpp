@@ -20,8 +20,8 @@
 namespace spidy::game_time {
 // The clock's double, which the ray bridge reads for the world's time too
 // (native_bodies), and Havok's step: float step, float base, owner.
-constexpr uintptr_t clockScaleRva = 0x7a7fb90, gameFrameRva = 0x7a7fbd8, realFrameRva = 0x7a7fbf0;
-constexpr uintptr_t physicsStepRva = 0x609a560;
+constexpr uintptr_t clockScaleRva = 0x84358d0, gameFrameRva = 0x8435918, realFrameRva = 0x8435930;
+constexpr uintptr_t physicsStepRva = 0x6aa15b0;
 // Hooks the update. 0 when hooked; 9701-9707 when the code is not this
 // game's, 9800-9899 when hooking failed.
 uint32_t install(uintptr_t base);

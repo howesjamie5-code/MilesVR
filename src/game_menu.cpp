@@ -49,7 +49,7 @@ __declspec(dllexport) MenuTrace SpidyMenuTraceData;
 namespace {
 // The settings system; +0x20 its config, whose tabs are at +0x168 (0x40 bytes
 // each, a UISystemMenu) and +0x170 counts them.
-constexpr uintptr_t settingsSystem = 0x5d96dd0;
+constexpr uintptr_t settingsSystem = 0x66f3a60;
 // The pause menu's Settings build every tab and call Flash's OpenOptions.
 constexpr uintptr_t openOptions = 0x7dd9f0;
 // A tab's Flash object, rows and all: (out value, movie, tab) -> built.
@@ -59,7 +59,7 @@ constexpr uintptr_t buildTab = 0x807740;
 // (7dd7c0, the menu at the settings config's +0x128, its items at +0x158, as
 // many as +0x160 says) adds its items in a loop; this is where its call
 // returns to.
-constexpr uintptr_t addItem = 0x80a220, pageItemReturn = 0x7dd8ae, pageItems = 0x158;
+constexpr uintptr_t addItem = 0x9838c0, pageItemReturn = 0x7dd8ae, pageItems = 0x158;
 // The first page's own build (7dd7c0: its items, then Flash's Refresh), and
 // the callback Flash sends when A selects one of its items, with the item's
 // number (+8) - for VR VIEW, Spidy's setting number. The page shows its items
@@ -71,12 +71,12 @@ constexpr unsigned char pageRefreshBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48
                                               0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18, 0x55};
 const char* const pageTitles[] = {"SWITCH TO GAME SCREEN", "SWITCH TO VR"};
 // The UI movie Flash objects are made in.
-constexpr uintptr_t uiMovie = 0x1d29690;
+constexpr uintptr_t uiMovie = 0x2238250;
 // "OpenOptions", the literal openOptions passes; the hash Flash's
 // ResetAllOptionsForCurrentOptionsMenu callback arrives with (set at start-up).
-constexpr uintptr_t openOptionsName = 0x389f4c0, resetAllHash = 0x6d8ed88;
+constexpr uintptr_t openOptionsName = 0x389f4c0, resetAllHash = 0x77f76e8;
 // The option types of a setting item and of a section heading (vtables).
-constexpr uintptr_t settingType = 0x3a7d6e8, headingType = 0x3a7d838;
+constexpr uintptr_t settingType = 0x4099560, headingType = 0x40996b0;
 // The tab's id: the game's run 0-10, and its RESET ALL ignores any above.
 constexpr uint32_t tabId = 93;
 // The rows' setting numbers: the game's run 0-122.
@@ -529,27 +529,27 @@ struct Hook {
     size_t count;
 };
 const Hook hooks[] = {
-    {0x1d1cf30, reinterpret_cast<void*>(&invokeHook), reinterpret_cast<void**>(&originalInvoke),
+    {0x222bac0, reinterpret_cast<void*>(&invokeHook), reinterpret_cast<void**>(&originalInvoke),
      {0x80, 0xb9, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x75, 0x03}, 9},
-    {0x7dc400, reinterpret_cast<void*>(&callbackHook), reinterpret_cast<void**>(&originalCallback),
+    {0x94d0e0, reinterpret_cast<void*>(&callbackHook), reinterpret_cast<void**>(&originalCallback),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
     {0x72d640, reinterpret_cast<void*>(&typeHook), reinterpret_cast<void**>(&originalType),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0x8b, 0x84, 0xd1}, 10},
-    {0x72d650, reinterpret_cast<void*>(&valueHook), reinterpret_cast<void**>(&originalValue),
+    {0x89faa0, reinterpret_cast<void*>(&valueHook), reinterpret_cast<void**>(&originalValue),
      {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18}, 10},
     {0x72e1d0, reinterpret_cast<void*>(&activeHook), reinterpret_cast<void**>(&originalActive),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0x0f, 0xb6, 0x84}, 10},
     {0x72d5f0, reinterpret_cast<void*>(&defaultHook), reinterpret_cast<void**>(&originalDefault),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0xf3, 0x0f, 0x10}, 10},
-    {0x72d610, reinterpret_cast<void*>(&defaultChoiceHook), reinterpret_cast<void**>(&originalDefaultChoice),
+    {0x89fa60, reinterpret_cast<void*>(&defaultChoiceHook), reinterpret_cast<void**>(&originalDefaultChoice),
      {0x48, 0x83, 0xec, 0x28, 0x48, 0x63, 0xc2, 0x0f, 0x57, 0xc9}, 10},
-    {0x730ee0, reinterpret_cast<void*>(&setHook), reinterpret_cast<void**>(&originalSet),
+    {0x8a26d0, reinterpret_cast<void*>(&setHook), reinterpret_cast<void**>(&originalSet),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
-    {0x730ae0, reinterpret_cast<void*>(&resetHook), reinterpret_cast<void**>(&originalReset),
+    {0x8a22b0, reinterpret_cast<void*>(&resetHook), reinterpret_cast<void**>(&originalReset),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
-    {0x1749970, reinterpret_cast<void*>(&textHook), reinterpret_cast<void**>(&originalText),
+    {0x1c55d40, reinterpret_cast<void*>(&textHook), reinterpret_cast<void**>(&originalText),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
-    {0x1749ae0, reinterpret_cast<void*>(&hasTextHook), reinterpret_cast<void**>(&originalHasText),
+    {0x1c55eb0, reinterpret_cast<void*>(&hasTextHook), reinterpret_cast<void**>(&originalHasText),
      {0x48, 0x83, 0xec, 0x28, 0x8b, 0xd1, 0x48, 0x8b, 0x0d}, 9},
     {addItem, reinterpret_cast<void*>(&addItemHook), reinterpret_cast<void**>(&originalAddItem),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},

@@ -68,13 +68,13 @@ uintptr_t pointer(uintptr_t address) {
     return out;
 }
 bool live() {
-    const auto table = pointer(base + 0x7a44320);
+    const auto table = pointer(base + 0x83f9fa0);
     const auto index = moverHandle & 0xfffff, generation = moverHandle >> 20;
     uint32_t count{}, current{}, selfHandle{};
-    if (!read(base + 0x7a44340, &count, 4) || index >= count || count > 0x100000)
+    if (!read(base + 0x83f9fc0, &count, 4) || index >= count || count > 0x100000)
         return false;
     return generation && read(table + index * 16 + 8, &current, 4) && current == generation &&
-           pointer(table + index * 16) == mover && pointer(mover) == base + 0x4f70168 &&
+           pointer(table + index * 16) == mover && pointer(mover) == base + 0x57d7700 &&
            read(mover + 0x14, &selfHandle, 4) && selfHandle == moverHandle && pointer(mover + 8) == record;
 }
 uintptr_t move(void* self, const float* delta, const float* forward, uint8_t flags) {
@@ -170,7 +170,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
         }
         const uint8_t signature[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30};
         uint8_t actual[sizeof(signature)]{};
-        if (!read(base + 0x1fc2e10, actual, sizeof(actual)) ||
+        if (!read(base + 0x24d1160, actual, sizeof(actual)) ||
             std::memcmp(actual, signature, sizeof(actual))) {
             result = 1003;
             break;
@@ -180,7 +180,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
             result = 1100 + s;
             break;
         }
-        hook = reinterpret_cast<void*>(base + 0x1fc2e10);
+        hook = reinterpret_cast<void*>(base + 0x24d1160);
         s = MH_CreateHook(hook, reinterpret_cast<void*>(move), reinterpret_cast<void**>(&original));
         if (s != MH_OK) {
             result = 1200 + s;

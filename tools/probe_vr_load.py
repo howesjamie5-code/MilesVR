@@ -281,7 +281,7 @@ def view_gpu_ms(game):
     at *(view+0x1690), which the engine's end-of-job (189e3a0) fills from the GPU timestamps around the
     view's commands. None for a view that has none (the game's view while it does not render keeps its
     last one)."""
-    views = [game.pointer(game.base+0x7a34dd0)]+[game.pointer(game.base+0x7a34e00+slot*8) for slot in range(8)]
+    views = [game.pointer(game.base+0x83ea910)]+[game.pointer(game.base+0x83ea940+slot*8) for slot in range(8)]
     found = []
     for view in views[:1]+[v for v in views[1:] if v]:
         try:
@@ -338,7 +338,7 @@ def reflection_targets(game):
     for the game's own view and each offscreen view (view +0x1648; the set's record 105, its size at
     +0x1cc), then of kSharedHalfResFp16Target0. The command returns at once for a view whose set has no
     kSsrHistory: [0, 0, ...], or None with no set."""
-    views = [game.pointer(game.base+0x7a34dd0)]+[game.pointer(game.base+0x7a34e00+slot*8) for slot in range(8)]
+    views = [game.pointer(game.base+0x83ea910)]+[game.pointer(game.base+0x83ea940+slot*8) for slot in range(8)]
     found = []
     for view in views[:1]+[v for v in views[1:] if v]:
         try:

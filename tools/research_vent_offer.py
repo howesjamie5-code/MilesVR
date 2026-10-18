@@ -1,9 +1,9 @@
 """Why the vent's interact is not offered on Spidy's wall: read the game's own reasons.
 
-Offer::IsAvailableTo (0x1e6e400) ORs a reason into the offer at +0xf4/+0xf8 (two frames, +0xfc picks the
+Offer::IsAvailableTo (0x237c980) ORs a reason into the offer at +0xf4/+0xf8 (two frames, +0xfc picks the
 current one) for the first check that fails: 1 disabled (+0xb5), 2 vf148, 4 vf0e8 (range), 8 vf158,
 0x10 vf150, 0x20 the owner's component vfa8, 0x40 vf128 (VentOffer: its entry conditions).
-Hero::HeroOfferProcessor (vtable 0x38ab038): +0x1c8 allowed kinds, +0x1cc cooldown, 8 candidate slots of 0x18
+Hero::HeroOfferProcessor (vtable 0x3e07910): +0x1c8 allowed kinds, +0x1cc cooldown, 8 candidate slots of 0x18
 from +0x48 (+0x10 can-accept byte, +0x11 has-locator byte, +0x14 offer handle), +0x1ac best offer handle.
 
 Run with the game standing on its crawl at the vent (to_vent.sh, HEIGHT=91).
@@ -28,8 +28,8 @@ from probe_wall_run import swing_command
 XR_EXPORTS = ('SpidyPadSubmit', 'SpidyPadSample', 'SpidyPadRelease', 'SpidyMenuStart')
 RAY_EXPORTS = ('SpidyRayStart', 'SpidyRayStop', 'SpidyRaySubmit', 'SpidyRayData', 'SpidySwingStart',
                'SpidySwingSubmit', 'SpidySwingStop', 'SpidySwingData', 'SpidySwingSettings')
-VENT_OFFER = 0x3885a70
-PROCESSOR = 0x38ab038
+VENT_OFFER = 0x3ddcd60
+PROCESSOR = 0x3e07910
 CACHE = str(pathlib.Path(__file__).resolve().parent.parent / 'reports/offer_instances.json')
 
 

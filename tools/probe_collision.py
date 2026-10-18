@@ -43,10 +43,10 @@ def main():
     process = exports = None
     stopped = False
     try:
-        original = PE(game.path.read_bytes()).bytes(0x2e67010, 16)
-        if game.read(game.base+0x2e67010, 16) != original:
+        original = PE(game.path.read_bytes()).bytes(0x338e1c0, 16)
+        if game.read(game.base+0x338e1c0, 16) != original:
             raise RuntimeError('Native raycast already patched')
-        primary = game.pointer(game.base+0x7a34dd0)
+        primary = game.pointer(game.base+0x83ea910)
         camera = game.transform(primary)
         if not camera:
             raise RuntimeError('No stable primary game camera')
@@ -70,7 +70,7 @@ def main():
         code = call_remote(process, exports['SpidyStop'])
         stopped = code == 0
         final = snapshot(game, exports['SpidyCollisionData'])
-        restored = game.read(game.base+0x2e67010, 16) == original
+        restored = game.read(game.base+0x338e1c0, 16) == original
         result = dict(pid=game.pid, module_base=hex(game.base), dll_sha256=digest,
                       final=final, stopped=stopped, entry_restored=restored)
         path = ROOT/'reports/collision-rays.json'

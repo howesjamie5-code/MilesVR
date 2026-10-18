@@ -376,7 +376,7 @@ def summarize(report):
                entries_restored=report.get('entries_restored'), swing_stop=report.get('swing_stop'),
                ray_stop=report.get('ray_stop'))
     # The game's own wall states from the reel to the jump off: its mover sweeping but out of the air mode while
-    # unsupported (it holds the player against the wall), its crawl's turn (0x2060005), or its actor turned
+    # unsupported (it holds the player against the wall), its crawl's turn (0x256cf05), or its actor turned
     # onto a surface.
     begin = next((t for name, t in events.items() if name.startswith('reeling')), 0)
     end = next((t+.3 for name, t in events.items() if name.startswith('jump off')), float('inf'))

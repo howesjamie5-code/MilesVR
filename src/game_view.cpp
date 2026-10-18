@@ -43,9 +43,9 @@ void submit(void* view,const Descriptor* incoming) {
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     Descriptor before{},after{};
     uintptr_t primary{}; uint64_t mask{};
-    read(base+0x7a34dd0,&primary,8);read(base+0x7a34dd8,&mask,8);
+    read(base+0x83ea910,&primary,8);read(base+0x83ea918,&mask,8);
     bool matched=enabled && reinterpret_cast<uintptr_t>(view)==primary && (mask&1) &&
-        caller==base+0x1647044 && read(reinterpret_cast<uintptr_t>(incoming),&before,sizeof(before)) &&
+        caller==base+0x1b51ba4 && read(reinterpret_cast<uintptr_t>(incoming),&before,sizeof(before)) &&
         native_view::valid(before);
     bool wrote=false;
     if(matched) {
@@ -67,9 +67,9 @@ void submit(void* view,const Descriptor* incoming) {
             }
             // These are the game's own perspective constructor and derived
             // matrix/frustum updater. Keep its jitter and reverse-Z convention.
-            reinterpret_cast<Lens>(base+0x187bb00)(&after,before.nearZ(),before.farZ(),left,right,top,bottom,
+            reinterpret_cast<Lens>(base+0x1d86f60)(&after,before.nearZ(),before.farZ(),left,right,top,bottom,
                 0,0,before.values[0x428/4],before.values[0x42c/4],false,false);
-            reinterpret_cast<PoseSetter>(base+0x187ca10)(&after,pose.data());
+            reinterpret_cast<PoseSetter>(base+0x1d87e70)(&after,pose.data());
             wrote=native_view::valid(after);
         }
     }
@@ -112,11 +112,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         const unsigned char submitBytes[]={0x48,0x3b,0xd1,0x74,0x7c,0x48,0x8b,0xc1};
         const unsigned char lensBytes[]={0x48,0x8b,0xc4,0x48,0x89,0x58,0x08,0x55};
         const unsigned char poseBytes[]={0x40,0x53,0x48,0x83,0xec,0x60,0x0f,0x10,0x02};
-        if(!matches(0x1899ab0,submitBytes,sizeof(submitBytes)) || !matches(0x187bb00,lensBytes,sizeof(lensBytes)) ||
-           !matches(0x187ca10,poseBytes,sizeof(poseBytes))) { result=1002;break; }
+        if(!matches(0x1da50d0,submitBytes,sizeof(submitBytes)) || !matches(0x1d86f60,lensBytes,sizeof(lensBytes)) ||
+           !matches(0x1d87e70,poseBytes,sizeof(poseBytes))) { result=1002;break; }
         if(!created) {
             auto status=MH_Initialize();if(status!=MH_OK){result=1100+status;break;}
-            hook=reinterpret_cast<void*>(base+0x1899ab0);
+            hook=reinterpret_cast<void*>(base+0x1da50d0);
             status=MH_CreateHook(hook,reinterpret_cast<void*>(submit),reinterpret_cast<void**>(&original));
             if(status!=MH_OK){result=1200+status;MH_Uninitialize();break;}created=true;
         }

@@ -267,7 +267,7 @@ class Targets final : public TargetQueries {
     }
     // Body userData (+0x98) carries its actor's handle in the low 32 bits.
     std::optional<std::uint64_t> owner(std::uint64_t surface) const override {
-        const auto world = pointer(base + 0x78939e8);
+        const auto world = pointer(base + 0x8247e68);
         const auto bodies = pointer(world + 0x28);
         uint32_t capacity{}, id{}, handle{};
         const uint32_t index = surface & 0xffffff;

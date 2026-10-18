@@ -19,11 +19,11 @@ def main():
         result = dict(pid=game.pid, base=hex(game.base), eyes=[])
         for eye in previous['final']['eyes']:
             view = eye['view']
-            slots = [game.pointer(game.base + 0x7a34e00 + i * 8) for i in range(8)]
+            slots = [game.pointer(game.base + 0x83ea940 + i * 8) for i in range(8)]
             if view not in slots:
                 raise RuntimeError('Native view no longer owned by the engine')
             obj = game.pointer(game.pointer(view + 0x1f70) + 0x40)
-            if game.pointer(obj) != game.base + 0x4e56c80:
+            if game.pointer(obj) != game.base + 0x557f280:
                 raise RuntimeError('Unexpected texture wrapper type')
             alloc = game.pointer(obj + 0x38)
             resource = game.pointer(alloc)

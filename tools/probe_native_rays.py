@@ -55,10 +55,10 @@ def main():
     active = False
     try:
         pe = PE(game.path.read_bytes())
-        original = pe.bytes(0x2e67010, 16)
-        if game.read(game.base+0x2e67010, 16) != original:
+        original = pe.bytes(0x338e1c0, 16)
+        if game.read(game.base+0x338e1c0, 16) != original:
             raise RuntimeError('Raycast entry is already patched')
-        camera = game.transform(game.pointer(game.base+0x7a34dd0))
+        camera = game.transform(game.pointer(game.base+0x83ea910))
         if not camera:
             raise RuntimeError('No active native camera')
         origin = camera['position']
@@ -124,7 +124,7 @@ def main():
         cancelled = sample()
         stop = call_remote(process, exports['SpidyRayStop'])
         active = stop != 0
-        restored = game.read(game.base+0x2e67010, 16) == original
+        restored = game.read(game.base+0x338e1c0, 16) == original
         final = snapshot(game, exports['SpidyRayData'])
         passed = not code and not stop and restored and expired['status'] == 0 and expired['count'] == 0 and (
             cancelled['status'] == 0 and cancelled['count'] == 0)

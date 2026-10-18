@@ -12,8 +12,8 @@ from inspect_game import PE
 
 def component(game, handle):
     index, generation = handle & 0xfffff, handle >> 20
-    table = game.pointer(game.base+0x7a44320)
-    raw_count = game.read(game.base+0x7a44340, 4)
+    table = game.pointer(game.base+0x83f9fa0)
+    raw_count = game.read(game.base+0x83f9fc0, 4)
     if not table or not generation or len(raw_count) != 4:
         return 0
     count = struct.unpack('<i', raw_count)[0]
@@ -32,7 +32,7 @@ def main():
     active = False
     try:
         pe = PE(game.path.read_bytes())
-        LIVE_VTABLES['hero_mover'] = 0x38b2c98
+        LIVE_VTABLES['hero_mover'] = 0x3e123d8
         started = time.monotonic()
         found = game.registered_candidates()
         elapsed = time.monotonic()-started
@@ -95,7 +95,7 @@ def main():
         stop = call_remote(process, exports['SpidyStop'])
         active = stop != 0
         restored = all(game.read(game.base+rva, 16) == pe.bytes(rva, 16)
-                       for rva in (0x1e1d600, 0x1ce2f40, 0x1cdfa70, 0x1cdf840, 0x5c2630))
+                       for rva in (0x232bcb0, 0x21f15a0, 0x21ee0d0, 0x21edea0, 0x70b880))
         result = dict(pid=game.pid, module_base=hex(game.base), registry_seconds=elapsed,
                       candidates=found, mover=mover, movement=hex(body), movement_vtable=hex(body_vtable),
                       movement_type=body_type, dll_hash=digest, samples=samples, stop=stop, restored=restored)

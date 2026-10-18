@@ -76,8 +76,8 @@ static_assert(sizeof(Trace) == 48 + traceEntries * traceChars && sizeof(Rule) ==
 //                           UpdateQTE, ClearQTE (ui/export/HUD/QTEs.gfx)
 //   the world markers       POIInteractAvailable, UpdateInWorldPrompt
 //
-// All of them pass the one call wrapper at 0x1d1cf30, and their texts the
-// localized lookup at 0x1749970. A VR session already hooks both for the
+// All of them pass the one call wrapper at 0x222bac0, and their texts the
+// localized lookup at 0x1c55d40. A VR session already hooks both for the
 // SPIDY VR tab (game_menu), and MinHook takes a target once, so game_menu
 // hands the calls and the texts on to the two functions here instead of this
 // hooking them a second time (the research exports do that, and so are only

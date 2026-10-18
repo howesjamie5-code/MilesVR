@@ -19,7 +19,7 @@ namespace {
 // Hero::HeroOfferProcessor's update, the mask it reads and its eight
 // candidate slots (0x18 each from +0x48, the offer's handle at +0x14);
 // Offer::IsAvailableTo; VentOffer's own entry check (its vtable +0x128).
-constexpr uintptr_t updateRva = 0x857360, availableRva = 0x1e6e400, ventCheckRva = 0x6bb650;
+constexpr uintptr_t updateRva = 0x857360, availableRva = 0x237c980, ventCheckRva = 0x817d40;
 constexpr uintptr_t maskOffset = 0x1c8, slotsOffset = 0x48, slotBytes = 0x18, slotHandle = 0x14;
 // The handle of the offer it picked (SetBest, 8571c0, writes it).
 constexpr uintptr_t bestOffset = 0x1ac;
@@ -30,7 +30,7 @@ constexpr uintptr_t handleOffset = 0x14, kindOffset = 0xa8, enabledOffset = 0xb5
                     currentOffset = 0xfc;
 // The game's component registry: 16-byte entries of an address and a
 // generation; a handle is its generation over 20 bits of index.
-constexpr uintptr_t registryTable = 0x7a44320, registryCount = 0x7a44340;
+constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
 // The part of the hero's actor record an offer's check reads: its transform
 // pointer first, its components' lists at +0x58 and +0x80.
 constexpr size_t recordBytes = 0x200;

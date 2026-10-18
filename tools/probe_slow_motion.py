@@ -39,7 +39,7 @@ from probe_weight import fall, gravity
 from vr_launcher import bring_to_front
 
 # The game's time system's update (game_time.cpp), and the probe's exports beside the VR worker's.
-TIME_UPDATE = 0x19bb430
+TIME_UPDATE = 0x1ec6bd0
 TIME_EXPORTS = ('SpidyTimeStart', 'SpidyTimeSet', 'SpidyTimeSample', 'SpidyTimeStop')
 MAGIC = 0x454d4954
 SLOW = .3

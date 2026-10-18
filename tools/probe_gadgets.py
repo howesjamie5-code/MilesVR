@@ -28,7 +28,7 @@ from probe_game_screen import user32
 from run_game_vr import shooter_snapshot
 from vr_launcher import bring_to_front
 
-SHOOTER_ENTRIES = (0x897d30, 0x2150c40)
+SHOOTER_ENTRIES = (0xa24e90, 0x265d730)
 
 
 def gadget_command(fire, equip=0):

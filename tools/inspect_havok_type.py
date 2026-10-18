@@ -27,7 +27,7 @@ if len(sys.argv) > 1:
                 pass
         print(f'{address+offset:08x}: {value:016x} {label}')
     sys.exit(0)
-target = struct.pack('<Q', pe.image_base+0x521bce8)  # exact hknpBody name
+target = struct.pack('<Q', pe.image_base+0x5a86f38)  # exact hknpBody name
 for section in pe.sections:
     data = pe.data[section['raw']:section['raw']+section['raw_size']]
     start = 0

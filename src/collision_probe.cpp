@@ -56,11 +56,11 @@ void cast(void* world,const void* nativeQuery,void* nativeCollector) {
     if(!enabled || GetTickCount64()>=deadline)return;
     ++calls;
     const auto queryAddress=reinterpret_cast<uintptr_t>(nativeQuery);
-    const bool synchronous=caller==base+0x18173d1;
-    const bool worker=caller==base+0x18180fe && queryAddress>=0x10020 &&
-        pointer(queryAddress-0x20)==base+0x3d0a9c8;
+    const bool synchronous=caller==base+0x1d21c31;
+    const bool worker=caller==base+0x1d2295e && queryAddress>=0x10020 &&
+        pointer(queryAddress-0x20)==base+0x4400c48;
     const bool service=(synchronous || worker) &&
-        reinterpret_cast<uintptr_t>(world)==pointer(base+0x78939e8) &&
+        reinterpret_cast<uintptr_t>(world)==pointer(base+0x8247e68) &&
         pointer(queryAddress+8)==pointer(reinterpret_cast<uintptr_t>(world)+0x498);
     if(service)++eligible;
     AcquireSRWLockExclusive(&output);
@@ -92,10 +92,10 @@ void cast(void* world,const void* nativeQuery,void* nativeCollector) {
         put(query,0x60,uint32_t{0});
         alignas(16) uint8_t hits[16*0x90]{};
         alignas(16) uint8_t collector[0x50]{};
-        put(collector,0,base+0x3d0a948);put(collector,0x38,reinterpret_cast<uintptr_t>(hits));
+        put(collector,0,base+0x4400bc8);put(collector,0x38,reinterpret_cast<uintptr_t>(hits));
         put(collector,0x40,uint32_t{16});
         // These are the native reset values used by 1817190 and 1818390.
-        if(!read(base+0x6b14b40,collector+0x10,16)){error=2001;break;}
+        if(!read(base+0x7522b90,collector+0x10,16)){error=2001;break;}
         originalCast(world,query,collector);
         ++completed;
         auto& s=samples[i];std::memcpy(s.origin,from,12);std::memcpy(s.direction,&direction,12);
@@ -133,9 +133,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
         if(result)break;
         const uint8_t expected[]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x6c,0x24,0x10,0x48,0x89,0x74,0x24,0x18};
         uint8_t actual[sizeof(expected)]{};
-        if(!read(base+0x2e67010,actual,sizeof(actual)) || std::memcmp(actual,expected,sizeof(actual))){result=1002;break;}
+        if(!read(base+0x338e1c0,actual,sizeof(actual)) || std::memcmp(actual,expected,sizeof(actual))){result=1002;break;}
         auto s=MH_Initialize();if(s!=MH_OK){result=1100+s;break;}
-        hook=reinterpret_cast<void*>(base+0x2e67010);
+        hook=reinterpret_cast<void*>(base+0x338e1c0);
         s=MH_CreateHook(hook,reinterpret_cast<void*>(cast),reinterpret_cast<void**>(&originalCast));
         if(s!=MH_OK){result=1200+s;break;}
         created=true;claimed=false;deadline=GetTickCount64()+config.durationMs;enabled=true;

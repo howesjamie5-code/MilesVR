@@ -24,7 +24,7 @@ from observe_game import call_remote, modules
 MODULE = 'spidy_stereo_probe.dll'
 OWNERS = ('other', 'game_view', 'left_eye', 'right_eye')
 # The engine's table of command names, by command (image offset; 256 pointers).
-NAMES = 0x7a2d9b8
+NAMES = 0x83e34b8
 
 
 def exports(pe):

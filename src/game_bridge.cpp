@@ -40,7 +40,7 @@ using SetPosition = void (*)(void*, const float*);
 // update ends in the commit (slot 24, 1e1d600); the combat camera's update
 // (5c2630) places its camera itself with SetTranslation and never commits, so
 // before it was hooked every fight looked like a cutscene to the VR gate.
-constexpr uintptr_t followMover = followCamera, combatMover = combatCamera, combatUpdateRva = 0x5c2630;
+constexpr uintptr_t followMover = followCamera, combatMover = combatCamera, combatUpdateRva = 0x70b880;
 Commit originalCommit{};
 MoverUpdate originalCombat{};
 ClearInput originalClear{};
@@ -88,7 +88,7 @@ Control current() {
     return out;
 }
 bool isPlayer(uintptr_t h, uintptr_t r) {
-    return h && r && pointer(h) == base + 0x38a93c8 && pointer(h + 8) == r && pointer(r) != 0;
+    return h && r && pointer(h) == base + 0x3e05ad8 && pointer(h + 8) == r && pointer(r) != 0;
 }
 bool livePlayer() {
     return isPlayer(hero.load(), record.load());
@@ -113,7 +113,7 @@ void placed(uintptr_t mover, uintptr_t targetAddress, uintptr_t caller, bool wri
             position[i] = before[12 + i] + before[i] * command.offset[0] + before[4 + i] * command.offset[1] +
                           before[8 + i] * command.offset[2];
         // Native setter maintains actor dirty flags and change stamp.
-        reinterpret_cast<SetPosition>(base + 0x191c590)(reinterpret_cast<void*>(camera), position);
+        reinterpret_cast<SetPosition>(base + 0x1e27d70)(reinterpret_cast<void*>(camera), position);
         wrote = true;
     }
     if (valid)
@@ -268,13 +268,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         const unsigned char clearBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18};
         const unsigned char setterBytes[] = {0x0f, 0x10, 0x51, 0x30, 0x4c, 0x8b, 0xc1, 0x8b, 0x02};
         // test rdx, rdx; je (no target); movss [rsp+18h], xmm2; push rbp
-        const unsigned char combatBytes[] = {0x48, 0x85, 0xd2, 0x0f, 0x84, 0x48, 0x09, 0,
+        const unsigned char combatBytes[] = {0x48, 0x85, 0xd2, 0x0f, 0x84, 0xd2, 0x08, 0,
                                              0,    0xf3, 0x0f, 0x11, 0x54, 0x24, 0x18, 0x55};
-        if (!matches(0x1e1d600, commitBytes, sizeof(commitBytes)) ||
-            !matches(0x1cdfa70, queryBytes, sizeof(queryBytes)) ||
-            !matches(0x1cdf840, queryBytes, sizeof(queryBytes)) ||
-            !matches(0x1ce2f40, clearBytes, sizeof(clearBytes)) ||
-            !matches(0x191c590, setterBytes, sizeof(setterBytes)) ||
+        if (!matches(0x232bcb0, commitBytes, sizeof(commitBytes)) ||
+            !matches(0x21ee0d0, queryBytes, sizeof(queryBytes)) ||
+            !matches(0x21edea0, queryBytes, sizeof(queryBytes)) ||
+            !matches(0x21f15a0, clearBytes, sizeof(clearBytes)) ||
+            !matches(0x1e27d70, setterBytes, sizeof(setterBytes)) ||
             !matches(combatUpdateRva, combatBytes, sizeof(combatBytes)) ||
             pointer(base + combatMover + 21 * 8) != base + combatUpdateRva) {
             result = 1003;
@@ -286,7 +286,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
                 result = 1100 + status;
                 break;
             }
-            const uintptr_t rvas[] = {0x1e1d600, 0x1ce2f40, 0x1cdfa70, 0x1cdf840, combatUpdateRva};
+            const uintptr_t rvas[] = {0x232bcb0, 0x21f15a0, 0x21ee0d0, 0x21edea0, combatUpdateRva};
             void* detours[] = {reinterpret_cast<void*>(commit), reinterpret_cast<void*>(clearInput),
                                reinterpret_cast<void*>(digital), reinterpret_cast<void*>(analog),
                                reinterpret_cast<void*>(combatUpdate)};

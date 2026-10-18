@@ -69,7 +69,7 @@ def main():
             m = struct.unpack_from('<16f', raw, 144)
             if any(m[0:3]):
                 return dict(r0=list(m[0:3]), r1=list(m[4:7]), r2=list(m[8:11]), pos=list(m[12:15]), via='bridge')
-            t = game.transform(game.pointer(game.base + 0x7a34dd0))
+            t = game.transform(game.pointer(game.base + 0x83ea910))
             if t:
                 r = t['basis']
                 return dict(r0=list(r[0]), r1=list(r[1]), r2=list(r[2]), pos=list(t['position']), via='global')

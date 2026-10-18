@@ -2,7 +2,7 @@
 from research_game import Research
 r = Research()
 for start, end, _ in r.functions:
-    if not 0x2e35000 <= start < 0x2ea8000:
+    if not 0x2e35000 <= start < 0x33cf1b0:
         continue
     instructions = r.disassemble(start)
     matches = [i for i, (_, _, op, args) in enumerate(instructions)

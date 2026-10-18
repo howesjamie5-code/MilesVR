@@ -15,7 +15,7 @@ __declspec(dllexport) Data SpidyRenderMemoryData;
 namespace {
 using Create = uint8_t (*)(void*);
 using Rollover = void (*)(void*);
-constexpr uintptr_t allocatorRva = 0x7938880, createRva = 0x1872d90, rolloverRva = 0x1872b90;
+constexpr uintptr_t allocatorRva = 0x82eccc0, createRva = 0x1d7e010, rolloverRva = 0x1d7de10;
 Create originalCreate{};
 Rollover originalRollover{};
 void *createHook{}, *rolloverHook{};
@@ -121,19 +121,19 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRenderMemoryStart(void* megab
         const unsigned char createBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
                                              0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57,
                                              0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x30};
-        const unsigned char createCall[] = {0x48, 0x8d, 0x0d, 0xe4, 0xe6, 0x0a,
-                                            0x06, 0xe8, 0xef, 0x8b, 0xfe, 0xff};
+        const unsigned char createCall[] = {0x48, 0x8d, 0x0d, 0xb4, 0x76, 0x55,
+                                            0x06, 0xe8, 0xff, 0x89, 0xfe, 0xff};
         const unsigned char rolloverBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83,
                                                0xec, 0x30, 0x83, 0x79, 0x28, 0x00, 0x48, 0x8b,
                                                0xd9, 0x8b, 0x41, 0x1c, 0xc6, 0x41, 0x42, 0x00};
-        const unsigned char rolloverCall[] = {0x48, 0x8d, 0x0d, 0x56, 0xa2, 0x0b,
-                                              0x06, 0xe8, 0x61, 0x45, 0xff, 0xff};
+        const unsigned char rolloverCall[] = {0x48, 0x8d, 0x0d, 0x36, 0x32, 0x56,
+                                              0x06, 0xe8, 0x81, 0x43, 0xff, 0xff};
         Fields f{};
         if (!GetModuleHandleW(L"Spider-Man.exe") || wanted > 1024 || (wanted && wanted < 128) ||
             !entry(createRva, createBytes, sizeof(createBytes)) ||
-            !entry(0x188a195, createCall, sizeof(createCall)) ||
+            !entry(0x1d95605, createCall, sizeof(createCall)) ||
             !entry(rolloverRva, rolloverBytes, sizeof(rolloverBytes)) ||
-            !entry(0x187e623, rolloverCall, sizeof(rolloverCall)) ||
+            !entry(0x1d89a83, rolloverCall, sizeof(rolloverCall)) ||
             !read(base + allocatorRva + 0x10, &f, sizeof(f)) || (f.ring && !usable(f))) {
             result = 7001;
             break;

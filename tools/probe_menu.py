@@ -37,9 +37,9 @@ OUTPUT = ROOT/'reports/menu-probe'
 EXPORTS = ('SpidyMenuStart', 'SpidyMenuSample', 'SpidyMenuStop')
 # game_menu.cpp's hooks: the UI's Flash calls, the pause menu's Settings callbacks, the settings system's questions
 # about a setting (kind, value, whether it can change, default, default choice), its set and reset, and text lookups.
-HOOKS = (0x1d1cf30, 0x7dc400, 0x72d640, 0x72d650, 0x72e1d0, 0x72d5f0, 0x72d610, 0x730ee0, 0x730ae0, 0x1749970,
-         0x80a220,
-         0x1749ae0)
+HOOKS = (0x222bac0, 0x94d0e0, 0x72d640, 0x89faa0, 0x72e1d0, 0x72d5f0, 0x89fa60, 0x8a26d0, 0x8a22b0, 0x1c55d40,
+         0x9838c0,
+         0x1c55eb0)
 MAGIC = 0x554e4d53
 # ProbeSettings / ProbeSample flags, as XrData's settings bits plus the aim markers and a body calibration asked for.
 FLAGS = dict(web_grab=1, punch=2, body=4, air_webs=8, web_shooter=16, aim_markers=32, calibrate=64, flips=128,

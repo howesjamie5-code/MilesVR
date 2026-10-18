@@ -14,7 +14,7 @@ enum Mode : uint32_t { input = 1, cameraOffset = 2 };
 // The player's cameras (Camera2 vtables, image offsets): what Data::mover's
 // first word is while the player's own camera commits. The combat camera is
 // a fight.
-constexpr uintptr_t followCamera = 0x3871fd8, combatCamera = 0x38720d0;
+constexpr uintptr_t followCamera = 0x3dc8708, combatCamera = 0x3dc8800;
 struct Config {
     uint32_t magic = configMagic, protocol = version, bytes = sizeof(Config), pid{};
     uint64_t imageBase{}, hero{}, actorRecord{};

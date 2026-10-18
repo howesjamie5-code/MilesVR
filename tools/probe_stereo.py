@@ -116,7 +116,7 @@ def main():
     if a.display_pass and not a.create_views:p.error('Display pass requires --create-views')
     game=Game(find_game());process=None;exports=None;stopped=False;samples=[];objects=[]
     try:
-        pe=PE(pathlib.Path(game.path).read_bytes());rvas=(0x18a0bb0,0x189bd30,0x186cc00,0x1846c20,0x19223e0,0x189e310,0x189e3a0)
+        pe=PE(pathlib.Path(game.path).read_bytes());rvas=(0x1dac200,0x1da7350,0x1d77de0,0x1d517b0,0x1e2db90,0x1da9960,0x1da99f0)
         code={r:pe.bytes(r,16) for r in rvas}
         if any(game.read(game.base+r,16)!=v for r,v in code.items()):raise RuntimeError('View lifecycle already patched')
         process=open_process(0x0400|0x0010|0x0020|0x0008|0x0002,False,game.pid)

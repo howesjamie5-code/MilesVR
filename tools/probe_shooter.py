@@ -33,8 +33,8 @@ from run_game_vr import shooter_snapshot
 from vr_launcher import bring_to_front
 
 # The shooter's hooks: the camera's update (shots go out on the main thread) and the weapons' muzzle.
-SHOOTER_ENTRIES = (0x897d30, 0x2150c40)
-SHOT_WEB_SHOOTER = 0x3907d30
+SHOOTER_ENTRIES = (0xa24e90, 0x265d730)
+SHOT_WEB_SHOOTER = 0x3e75998
 
 
 def follow(game, component, seconds=1.6):

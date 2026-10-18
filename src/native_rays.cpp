@@ -105,10 +105,10 @@ uint32_t queryOne(void* world, const void* nativeQuery, const Ray& ray, Hit& res
     std::memcpy(query + 0x50, inverse, 16);
     alignas(16) uint8_t hits[16 * 0x90]{};
     alignas(16) uint8_t collector[0x50]{};
-    put(collector, 0, config.base + 0x3d0a948);
+    put(collector, 0, config.base + 0x4400bc8);
     put(collector, 0x38, reinterpret_cast<uintptr_t>(hits));
     put(collector, 0x40, uint32_t{16});
-    if (!read(config.base + 0x6b14b40, collector + 0x10, 16))
+    if (!read(config.base + 0x7522b90, collector + 0x10, 16))
         return 2102;
     original(world, query, collector);
     // A full collector holds the nearest hits: past its capacity the game's
@@ -188,9 +188,9 @@ void cast(void* world, const void* nativeQuery, void* nativeCollector) {
     ++calls;
     const auto queryAddress = reinterpret_cast<uintptr_t>(nativeQuery);
     const auto address = reinterpret_cast<uintptr_t>(world);
-    const bool worker = caller == config.base + 0x18180fe && queryAddress >= 0x10020 &&
-                        pointer(queryAddress - 0x20) == config.base + 0x3d0a9c8;
-    if ((!worker && caller != config.base + 0x18173d1) || address != pointer(config.base + 0x78939e8) ||
+    const bool worker = caller == config.base + 0x1d2295e && queryAddress >= 0x10020 &&
+                        pointer(queryAddress - 0x20) == config.base + 0x4400c48;
+    if ((!worker && caller != config.base + 0x1d21c31) || address != pointer(config.base + 0x8247e68) ||
         pointer(queryAddress + 8) != pointer(address + 0x498) || busy.test_and_set())
         return;
     Busy batchGuard;
@@ -286,7 +286,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayStart(void* input) {
         const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
                                     0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
         uint8_t actual[sizeof(expected)]{};
-        if (!read(config.base + 0x2e67010, actual, sizeof(actual)) ||
+        if (!read(config.base + 0x338e1c0, actual, sizeof(actual)) ||
             std::memcmp(actual, expected, sizeof(actual))) {
             result = 1002;
             break;
@@ -296,7 +296,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayStart(void* input) {
             result = 1100 + status;
             break;
         }
-        hook = reinterpret_cast<void*>(config.base + 0x2e67010);
+        hook = reinterpret_cast<void*>(config.base + 0x338e1c0);
         status = MH_CreateHook(hook, reinterpret_cast<void*>(cast), reinterpret_cast<void**>(&original));
         if (status != MH_OK) {
             result = 1200 + status;

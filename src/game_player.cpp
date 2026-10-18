@@ -12,8 +12,8 @@ extern "C" {
 __declspec(dllexport) DWORD WINAPI SpidyPlayerFind(void* output);
 }
 namespace {
-constexpr uintptr_t registryTable = 0x7a44320, registryCount = 0x7a44340;
-constexpr uintptr_t heroLocal = 0x38a93c8, heroMover = 0x38b2c98, moverStandard = 0x4f70168;
+constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
+constexpr uintptr_t heroLocal = 0x3e05ad8, heroMover = 0x3e123d8, moverStandard = 0x57d7700;
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)

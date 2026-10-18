@@ -61,7 +61,7 @@ def main():
         resources=[]
         for e in stereo['final']['eyes']:
             obj=game.pointer(game.pointer(e['view']+0x1f70)+0x40)
-            if game.pointer(obj)!=game.base+0x4e56c80:raise RuntimeError('Unexpected eye texture wrapper')
+            if game.pointer(obj)!=game.base+0x557f280:raise RuntimeError('Unexpected eye texture wrapper')
             resources.append(game.pointer(game.pointer(obj+0x38)))
         process=open_process(0x0400|0x0010|0x0020|0x0008|0x0002,False,game.pid)
         if not process:raise c.WinError(c.get_last_error())

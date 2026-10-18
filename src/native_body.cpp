@@ -147,7 +147,7 @@ struct RigData {
 // The game's conversion of a local pose to model space, guarded.
 bool toModel(float* out, uintptr_t local, uintptr_t joints, uint32_t count) {
     __try {
-        reinterpret_cast<ToModel>(base + 0x1600770)(out, reinterpret_cast<const void*>(local),
+        reinterpret_cast<ToModel>(base + 0x1b092a0)(out, reinterpret_cast<const void*>(local),
                                                     reinterpret_cast<const void*>(joints), count);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -514,8 +514,8 @@ uint32_t native_body::start(uintptr_t gameBase) {
         const unsigned char writerBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x55, 0x56, 0x57, 0x41, 0x54,
                                              0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x20};
         const unsigned char modelBytes[] = {0x48, 0x8b, 0xc4, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
-        if (!base || !entry(0x1601290, writerBytes, sizeof(writerBytes)) ||
-            !entry(0x1600770, modelBytes, sizeof(modelBytes))) {
+        if (!base || !entry(0x1b09dc0, writerBytes, sizeof(writerBytes)) ||
+            !entry(0x1b092a0, modelBytes, sizeof(modelBytes))) {
             result = 7001;
             break;
         }
@@ -525,7 +525,7 @@ uint32_t native_body::start(uintptr_t gameBase) {
                 result = 7100 + s;
                 break;
             }
-            writerHook = reinterpret_cast<void*>(base + 0x1601290);
+            writerHook = reinterpret_cast<void*>(base + 0x1b09dc0);
             if (const auto c = MH_CreateHook(writerHook, reinterpret_cast<void*>(writer),
                                              reinterpret_cast<void**>(&originalWriter));
                 c != MH_OK) {

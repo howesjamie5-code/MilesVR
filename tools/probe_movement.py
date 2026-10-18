@@ -51,10 +51,10 @@ def main():
     bridge_stopped = True
     try:
         pe = PE(game.path.read_bytes())
-        original = pe.bytes(0x1fc2e10, 16)
-        if game.read(game.base+0x1fc2e10, 16) != original:
+        original = pe.bytes(0x24d1160, 16)
+        if game.read(game.base+0x24d1160, 16) != original:
             raise RuntimeError('Movement request entry already patched')
-        LIVE_VTABLES['hero_mover'] = 0x38b2c98
+        LIVE_VTABLES['hero_mover'] = 0x3e123d8
         found = game.registered_candidates()
         heroes = [x for x in found if x['kind'] == 'hero_local']
         if len(heroes) != 1:
@@ -65,7 +65,7 @@ def main():
             raise RuntimeError('Exactly one local hero mover is required')
         handle = struct.unpack('<I', game.read(int(movers[0]['object'], 16)+0xdb4, 4))[0]
         mover = component(game, handle)
-        if game.pointer(mover) != game.base+0x4f70168 or game.pointer(mover+8) != int(hero['actor_record'], 16):
+        if game.pointer(mover) != game.base+0x57d7700 or game.pointer(mover+8) != int(hero['actor_record'], 16):
             raise RuntimeError('Local MoverStandard ownership failed validation')
         process = open_process(0x0400 | 0x0010 | 0x0020 | 0x0008 | 0x0002, False, game.pid)
         if not process:
@@ -132,7 +132,7 @@ def main():
         code = call_remote(process, exports['SpidyStop'])
         stopped = code == 0
         state = snapshot(game, exports['SpidyMovementData'])
-        restored = game.read(game.base+0x1fc2e10, 16) == original
+        restored = game.read(game.base+0x24d1160, 16) == original
         if bridge:
             bridge_stopped = call_remote(process, bridge['SpidyStop']) == 0
             restored &= all(game.read(game.base+rva, 16) == pe.bytes(rva, 16) for rva in HOOKS)

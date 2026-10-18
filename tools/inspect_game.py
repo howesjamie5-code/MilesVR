@@ -39,11 +39,11 @@ def file_version(path):
 # These are byte/address facts, independently checked against the local PE.
 # A match does NOT establish a valid calling convention or render hook.
 FUNCTIONS = {
-    "camera_update": (0x897D30, "48 8b c4 48 89 58 10 44 88 48 20 44 88 40 18 55"),
-    "havok_cast_ray": (0x2E67010, "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18"),
-    "havok_pre_collide": (0x2E54300, "41 56 48 83 ec 50 48 89 5c 24 60 48 89 6c 24 68"),
+    "camera_update": (0xA24E90, "48 8b c4 48 89 58 10 44 88 48 20 44 88 40 18 55"),
+    "havok_cast_ray": (0x338E1C0, "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18"),
+    "havok_pre_collide": (0x337B4B0, "41 56 48 83 ec 50 48 89 5c 24 60 48 89 6c 24 68"),
 }
-VTABLES = {"hero_local": 0x38A93C8, "hero_camera_manager": 0x38B1DD0}
+VTABLES = {"hero_local": 0x3E05AD8, "hero_camera_manager": 0x3E101F0}
 
 class PE:
     def __init__(self, data):

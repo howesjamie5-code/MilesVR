@@ -310,7 +310,7 @@ bool owned(void* view) {
     if (!view)
         return false;
     for (unsigned slot = 0; slot < 8; ++slot)
-        if (pointer(base + 0x7a34e00 + slot * 8) == reinterpret_cast<uintptr_t>(view))
+        if (pointer(base + 0x83ea940 + slot * 8) == reinterpret_cast<uintptr_t>(view))
             return true;
     return false;
 }
@@ -330,7 +330,7 @@ bool entry(uintptr_t rva, const unsigned char* expected, size_t n) {
 void giveOcclusion(void* view) {
     const auto address = reinterpret_cast<uintptr_t>(view);
     if (!pointer(address + 0x1ba0) && pointer(address + 0x1640))
-        reinterpret_cast<void (*)(void*)>(base + 0x189fed0)(view);
+        reinterpret_cast<void (*)(void*)>(base + 0x1dab520)(view);
 }
 void appearanceEvent(unsigned eye, bool avatar) {
     AcquireSRWLockExclusive(&telemetry);
@@ -358,11 +358,11 @@ bool unitTransform(const float* m) {
 // 24..31) through the 16-byte table at 7a436e8. A live instance is its own
 // table entry. DrawOff/DrawOn mark the same index in the table at 7a43710.
 bool registered(uintptr_t instance, uint32_t& handle) {
-    const auto table = pointer(base + 0x7a436e8);
+    const auto table = pointer(base + 0x83f9368);
     int32_t count{};
     uint8_t slotGeneration{};
     if (!instance || !table || !read(instance + 0x64, &handle, 4) || !(handle >> 24) ||
-        !read(base + 0x7a43704, &count, 4))
+        !read(base + 0x83f9384, &count, 4))
         return false;
     const uint64_t index = handle & 0xffffff;
     return static_cast<int64_t>(index) < count && pointer(table + index * 16) == instance &&
@@ -391,7 +391,7 @@ int eyeView(uintptr_t view) {
     return -1;
 }
 bool headMirror(uintptr_t view) {
-    const auto primary = pointer(base + 0x7a34dd0);
+    const auto primary = pointer(base + 0x83ea910);
     return activeAligned.load(std::memory_order_relaxed) && primary && view &&
            (view == primary || pointer(view + 0x1f40) == primary);
 }
@@ -482,7 +482,7 @@ void updateHero(bool immersive, bool hide) {
         // Restore only the same live instance this module switched off.
         if (registered(previous, current) && current == hiddenHandle && read(previous + 0x5c, &previousFlags, 4) &&
             (previousFlags & 0x20)) {
-            reinterpret_cast<Visibility>(base + 0x191b880)(reinterpret_cast<void*>(previous));
+            reinterpret_cast<Visibility>(base + 0x1e27060)(reinterpret_cast<void*>(previous));
             restored = true;
         }
         hiddenHero = 0;
@@ -492,7 +492,7 @@ void updateHero(bool immersive, bool hide) {
     }
     if (hide && drawable && !(flags & 0x20)) {
         // A hero already hidden by the game stays owned by the game.
-        reinterpret_cast<Visibility>(base + 0x191afb0)(reinterpret_cast<void*>(frame.instance));
+        reinterpret_cast<Visibility>(base + 0x1e26790)(reinterpret_cast<void*>(frame.instance));
         hiddenHero = frame.instance;
         hiddenHandle = handle;
         hid = true;
@@ -606,7 +606,7 @@ void placeHud(const HudPlacement& placed, const FrameHead& head) {
     const bool done = shape.halfWidth > 0 && registered(placed.instance, handle) &&
                       native_hud::panel(head.panel, placed.scale, placed.distance, stockHalfWidth, shape, transform);
     if (done)
-        reinterpret_cast<SetTransform>(base + 0x191c0e0)(reinterpret_cast<void*>(placed.instance),
+        reinterpret_cast<SetTransform>(base + 0x1e278c0)(reinterpret_cast<void*>(placed.instance),
                                                          transform.data(),
                                                          reinterpret_cast<void*>(placed.instance + 0x70));
     const float turn = std::acos(std::clamp(head.pose[8] * head.panel[8] + head.pose[9] * head.panel[9] +
@@ -643,7 +643,7 @@ void placeScreenHud(const HudPlacement& placed, const native_eyes::Command& comm
     float m[16]{}, sphere[4]{};
     uint32_t handle{}, flags{};
     // Not a panel the game has switched off (+5c bit 0x20: DrawOff).
-    bool done = read(pointer(base + 0x7a34dd0), &main, sizeof(main)) && native_view::valid(main) &&
+    bool done = read(pointer(base + 0x83ea910), &main, sizeof(main)) && native_view::valid(main) &&
                 registered(placed.instance, handle) && read(placed.instance, m, sizeof(m)) &&
                 read(placed.instance + 0x5c, &flags, 4) && !(flags & 0x20);
     const auto pose = main.pose();
@@ -666,7 +666,7 @@ void placeScreenHud(const HudPlacement& placed, const native_eyes::Command& comm
         m[12] = moved.x;
         m[13] = moved.y;
         m[14] = moved.z;
-        reinterpret_cast<SetTransform>(base + 0x191c0e0)(reinterpret_cast<void*>(placed.instance), m,
+        reinterpret_cast<SetTransform>(base + 0x1e278c0)(reinterpret_cast<void*>(placed.instance), m,
                                                          reinterpret_cast<void*>(placed.instance + 0x70));
         screenHudFrame = frameIndex;
         native_hud::onScreen();
@@ -691,7 +691,7 @@ void hudPlace(void* follower) {
     native_hud::follower(address);
     HudPlacement placed;
     float m[16]{};
-    if (pointer(address) != base + 0x38929c8 || !(placed.instance = pointer(pointer(address + 8))) ||
+    if (pointer(address) != base + 0x3dec440 || !(placed.instance = pointer(pointer(address + 8))) ||
         !read(placed.instance, m, sizeof(m)) || !read(address + 0x48, &placed.distance, 4)) {
         hiddenHud = 0;
         return;
@@ -773,13 +773,13 @@ void setupDisplay(void* view, void* settings, void* profile, uint32_t flags) {
             // immediately before GUI geometry (+15c0), after tone mapping.
             // This retains the HUD and avoids applying scene HDR gain to it.
             using Enqueue = void (*)(void*, uint32_t, uint64_t, void*);
-            reinterpret_cast<Enqueue>(base + 0x187e130)(reinterpret_cast<void*>(address + 0x15b0), 0x88, 0,
+            reinterpret_cast<Enqueue>(base + 0x1d89590)(reinterpret_cast<void*>(address + 0x15b0), 0x88, 0,
                                                         nullptr);
             appearanceEvent(eye, false);
             // 19203c2 queues TemporalAa (0x8a) unless the profile's +68c is set.
             uint8_t left{};
             if ((eyeTemporal.load() & 4) && read(reinterpret_cast<uintptr_t>(profile) + 0x68c, &left, 1) && left)
-                reinterpret_cast<Enqueue>(base + 0x187e130)(reinterpret_cast<void*>(address + 0x1630), 0x8a, 1,
+                reinterpret_cast<Enqueue>(base + 0x1d89590)(reinterpret_cast<void*>(address + 0x1630), 0x8a, 1,
                                                             nullptr);
             break;
         }
@@ -841,7 +841,7 @@ bool initBuffers(void* buffers, const void* description, const char* name) {
                 sizingEye[0] = config.width;
                 sizingEye[1] = config.height;
             }
-            const auto mask = reinterpret_cast<uint32_t*>(base + 0x3d11b18 + 2 * 4);
+            const auto mask = reinterpret_cast<uint32_t*>(base + 0x4407dc8 + 2 * 4);
             DWORD protection{};
             const bool writable = VirtualProtect(mask, 4, PAGE_READWRITE, &protection);
             const uint32_t stock = *mask;
@@ -873,8 +873,8 @@ bool initBuffers(void* buffers, const void* description, const char* name) {
 // which nothing reads.
 bool shareExposure(uintptr_t job, unsigned eye) {
     uint64_t pool{};
-    const auto primary = pointer(base + 0x7a34dd0);
-    if (ownExposure || !(config.createViews & 4) || !read(base + 0x7a34dd8, &pool, 8) || !(pool & 1) ||
+    const auto primary = pointer(base + 0x83ea910);
+    if (ownExposure || !(config.createViews & 4) || !read(base + 0x83ea918, &pool, 8) || !(pool & 1) ||
         !primary || !pointer(job + 0x16f0))
         return false;
     // A resting game view (restGameView) adapts nothing: the left eye keeps
@@ -900,7 +900,7 @@ void copyJob(void* view, void* settings, void* a, void* b, bool c) {
         return;
     if (SpidyCommandData.tracing) {
         const auto job = pointer(reinterpret_cast<uintptr_t>(settings) + 0x4b0);
-        if (reinterpret_cast<uintptr_t>(view) == pointer(base + 0x7a34dd0))
+        if (reinterpret_cast<uintptr_t>(view) == pointer(base + 0x83ea910))
             tracedJobs[0] = job;
         for (unsigned i = 0; i < 2; ++i)
             if (view == eyes[i].load())
@@ -1018,7 +1018,7 @@ void update(void* view) {
         // eyes take the main view's, as their images do (shareExposure); what
         // each eye measured for itself stays in +1720 and +1724.
         // (With the game's view resting, the left eye's own, for the right eye.)
-        auto source = pointer(base + 0x7a34dd0);
+        auto source = pointer(base + 0x83ea910);
         if (rested.load())
             source = view == eyes[1].load() ? reinterpret_cast<uintptr_t>(eyes[0].load()) : 0;
         float exposure[2]{};
@@ -1051,12 +1051,12 @@ void copyFinal(void* view) {
     static_assert(sizeof(Payload) == 0x30);
     using Allocate = void* (*)(void*, uint32_t, const char*);
     using Enqueue = void (*)(void*, uint32_t, uint64_t, void*);
-    auto payload = static_cast<Payload*>(reinterpret_cast<Allocate>(base + 0x1872860)(
-        reinterpret_cast<void*>(base + 0x7938880), sizeof(Payload), "Spidy display readback"));
+    auto payload = static_cast<Payload*>(reinterpret_cast<Allocate>(base + 0x1d7dae0)(
+        reinterpret_cast<void*>(base + 0x82eccc0), sizeof(Payload), "Spidy display readback"));
     if (!payload)
         return;
     *payload = {address + 0x14e40, texture + 0x40, buffer, bytes, 0, address + 0x14e74, 0};
-    reinterpret_cast<Enqueue>(base + 0x187e130)(reinterpret_cast<void*>(address + 0x1630), 0xad, 0x41a,
+    reinterpret_cast<Enqueue>(base + 0x1d89590)(reinterpret_cast<void*>(address + 0x1630), 0xad, 0x41a,
                                                 payload);
 }
 // Player position from the hero's render transform, as updateHero() reads it.
@@ -1083,7 +1083,7 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
     const auto& head = latchHead();
     uint64_t mask{};
     Descriptor stock{};
-    if (!read(base + 0x7a34dd8, &mask, 8) || !(mask & 1) ||
+    if (!read(base + 0x83ea918, &mask, 8) || !(mask & 1) ||
         !read(reinterpret_cast<uintptr_t>(incoming), &stock, sizeof(stock)) || !native_view::valid(stock))
         return false;
     // The flat screen keeps the stock camera's shape whichever view is drawn.
@@ -1101,10 +1101,10 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
     if (placed) {
         out = stock;
         // Keep the stock camera's clip planes and temporal jitter.
-        reinterpret_cast<Lens>(base + 0x187bb00)(&out, stock.nearZ(), stock.farZ(), lens.left, lens.right,
+        reinterpret_cast<Lens>(base + 0x1d86f60)(&out, stock.nearZ(), stock.farZ(), lens.left, lens.right,
                                                  lens.top, lens.bottom, 0, 0, stock.values[0x428 / 4],
                                                  stock.values[0x42c / 4], false, false);
-        reinterpret_cast<SetPose>(base + 0x187ca10)(&out, pose.data());
+        reinterpret_cast<SetPose>(base + 0x1d87e70)(&out, pose.data());
         placed = native_view::valid(out);
     }
     AcquireSRWLockExclusive(&telemetry);
@@ -1130,8 +1130,8 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
 // the frame dispatch reads the active view for occlusion and 1722b10 before it
 // runs view maintenance.
 void submit(void* view, const Descriptor* incoming) {
-    if (enabled && reinterpret_cast<uintptr_t>(_ReturnAddress()) == base + 0x1647044 &&
-        reinterpret_cast<uintptr_t>(view) == pointer(base + 0x7a34dd0)) {
+    if (enabled && reinterpret_cast<uintptr_t>(_ReturnAddress()) == base + 0x1b51ba4 &&
+        reinterpret_cast<uintptr_t>(view) == pointer(base + 0x83ea910)) {
         Descriptor aligned{};
         const bool replaced = activeView(incoming, aligned);
         activeAligned = replaced;
@@ -1206,7 +1206,7 @@ void* enqueueHook{};
 void enqueueCommand(void* list, uint32_t command, uint64_t order, void* payload) {
     if (SpidyCommandData.tracing && command < 256) {
         const auto at = reinterpret_cast<uintptr_t>(list);
-        const uintptr_t views[3] = {pointer(base + 0x7a34dd0), reinterpret_cast<uintptr_t>(eyes[0].load()),
+        const uintptr_t views[3] = {pointer(base + 0x83ea910), reinterpret_cast<uintptr_t>(eyes[0].load()),
                                     reinterpret_cast<uintptr_t>(eyes[1].load())};
         unsigned owner = 0;
         for (unsigned i = 0; i < 3 && !owner; ++i) {
@@ -1231,7 +1231,7 @@ void enqueueCommand(void* list, uint32_t command, uint64_t order, void* payload)
 // temporal anti-aliasing saw no camera motion.
 void placeEyes() {
     Descriptor main{};
-    const auto primary = pointer(base + 0x7a34dd0);
+    const auto primary = pointer(base + 0x83ea910);
     const bool render = read(primary, &main, sizeof(main)) && native_view::valid(main) && !retiring();
     // This frame's hero rope update, if one ran since the previous frame.
     uint64_t ropeSamples{};
@@ -1321,10 +1321,10 @@ void placeEyes() {
             pose[13] += placed.offset.y;
             pose[14] += placed.offset.z;
             auto aligned = main;
-            reinterpret_cast<Lens>(base + 0x187bb00)(
+            reinterpret_cast<Lens>(base + 0x1d86f60)(
                 &aligned, main.nearZ(), main.farZ(), lens.left, lens.right, lens.top, lens.bottom,
                 0, 0, main.values[0x428 / 4], main.values[0x42c / 4], false, false);
-            reinterpret_cast<SetPose>(base + 0x187ca10)(&aligned, pose.data());
+            reinterpret_cast<SetPose>(base + 0x1d87e70)(&aligned, pose.data());
             if (native_view::valid(aligned)) {
                 // Covers both eyes: what the first eye fits its shadow cascades to.
                 shadowLens = aligned;
@@ -1362,13 +1362,13 @@ void placeEyes() {
                             pose[12 + i] += pose[i] * side;
                         shift = index == 0 ? apart.shift : -apart.shift;
                     }
-                    reinterpret_cast<Lens>(base + 0x187bb00)(
+                    reinterpret_cast<Lens>(base + 0x1d86f60)(
                         &descriptor, main.nearZ(), main.farZ(), main.values[0x400 / 4] + shift,
                         main.values[0x404 / 4] + shift, main.values[0x408 / 4], main.values[0x40c / 4], 0, 0,
                         jitter[0], jitter[1], false, false);
-                    reinterpret_cast<SetPose>(base + 0x187ca10)(&descriptor, pose.data());
+                    reinterpret_cast<SetPose>(base + 0x1d87e70)(&descriptor, pose.data());
                 }
-                reinterpret_cast<Submit>(base + 0x1899ab0)(eye, &descriptor);
+                reinterpret_cast<Submit>(base + 0x1da50d0)(eye, &descriptor);
                 continue;
             }
             auto pose = controlled
@@ -1383,12 +1383,12 @@ void placeEyes() {
             const float aspect = static_cast<float>(config.width) / config.height;
             const auto& fov = desired.eyes[index].fov;
             const auto jitter = eyeJitter();
-            reinterpret_cast<Lens>(base + 0x187bb00)(
+            reinterpret_cast<Lens>(base + 0x1d86f60)(
                 &descriptor, main.nearZ(), main.farZ(), controlled ? std::tan(fov[0]) : -aspect,
                 controlled ? std::tan(fov[1]) : aspect, controlled ? -std::tan(fov[3]) : -1,
                 controlled ? -std::tan(fov[2]) : 1, 0, 0, jitter[0], jitter[1], false, false);
-            reinterpret_cast<SetPose>(base + 0x187ca10)(&descriptor, pose.data());
-            reinterpret_cast<Submit>(base + 0x1899ab0)(eye, &descriptor);
+            reinterpret_cast<SetPose>(base + 0x1d87e70)(&descriptor, pose.data());
+            reinterpret_cast<Submit>(base + 0x1da50d0)(eye, &descriptor);
         }
 }
 // A KeyLightContext's cascades: +d and +f count them, +150 holds one each
@@ -1493,9 +1493,9 @@ uint8_t renderOffscreen() {
     return originalRenderOffscreen();
 }
 void maintain(void* manager) {
-    const bool ours = reinterpret_cast<uintptr_t>(manager) == base + 0x7a34dd0;
+    const bool ours = reinterpret_cast<uintptr_t>(manager) == base + 0x83ea910;
     Descriptor main{};
-    auto primary = pointer(base + 0x7a34dd0);
+    auto primary = pointer(base + 0x83ea910);
     const bool valid = ours && read(primary, &main, sizeof(main)) && native_view::valid(main);
     AcquireSRWLockExclusive(&creation);
     // A load can replace the native view pool. Check ownership before any write.
@@ -1521,7 +1521,7 @@ void maintain(void* manager) {
         for (unsigned i = 0; i < 2; ++i) {
             if (!eyes[i]) {
                 creatingEye = true;
-                eyes[i] = reinterpret_cast<Create>(base + 0x18a09c0)(manager, names[i], main.nearZ(),
+                eyes[i] = reinterpret_cast<Create>(base + 0x1dac010)(manager, names[i], main.nearZ(),
                                                                      main.farZ(), 90.f, config.width,
                                                                      config.height, 28, nullptr);
                 creatingEye = false;
@@ -1544,7 +1544,7 @@ void maintain(void* manager) {
                     // Use the engine's own asynchronous GPU readback path.
                     // This is enabled once, before deferred view initialization.
                     if (config.createViews & 2)
-                        reinterpret_cast<Maintain>(base + 0x186c670)(eyes[i].load());
+                        reinterpret_cast<Maintain>(base + 0x1d77850)(eyes[i].load());
                 } else {
                     SpidyStereoData.error = 2001 + i;
                     stopRequested = true;
@@ -1599,7 +1599,7 @@ void maintain(void* manager) {
             continue;
         bool present = false;
         for (unsigned slot = 0; slot < 8; ++slot)
-            present |= pointer(base + 0x7a34e00 + slot * 8) == reinterpret_cast<uintptr_t>(eyes[i].load());
+            present |= pointer(base + 0x83ea940 + slot * 8) == reinterpret_cast<uintptr_t>(eyes[i].load());
         if (!present) {
             eyes[i] = nullptr;
             if (!retired[i])
@@ -1614,7 +1614,7 @@ void maintain(void* manager) {
         e.textureObject = pointer(e.texture + 0x40);
         // Register before the render worker records this frame. GPU state is
         // learned from actual submitted transitions, never an assumed UAV state.
-        if (e.textureObject && pointer(e.textureObject) == base + 0x4e56c80)
+        if (e.textureObject && pointer(e.textureObject) == base + 0x557f280)
             native_gpu::registerEye(
                 i, reinterpret_cast<ID3D12Resource*>(pointer(pointer(e.textureObject + 0x38))));
         e.updates = updates[i].load();
@@ -1693,10 +1693,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         }
         const unsigned char maintainBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10};
         const unsigned char createBytes[] = {0x4c, 0x8b, 0xdc, 0x49, 0x89, 0x5b, 0x10};
-        const unsigned char updateBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x7c, 0x24, 0x10};
+        const unsigned char updateBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
         const unsigned char readbackBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10};
         const unsigned char copyFinalBytes[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0xf6,
-                                                0x81, 0x7c, 0x4e, 0x01, 0x00, 0x20};
+                                                0x81, 0x3c, 0x50, 0x01, 0x00, 0x20};
         const unsigned char toneBytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x50, 0x10};
         const unsigned char lensBytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x55};
         const unsigned char copyJobBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x20, 0x55, 0x56, 0x57};
@@ -1722,14 +1722,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
                                              0x83, 0xe0, 0xdf, 0x89, 0x41, 0x5c};
         // View submit, the stock camera's call to it in 1646e10, and the pose setter.
         const unsigned char submitBytes[] = {0x48, 0x3b, 0xd1, 0x74, 0x7c, 0x48, 0x8b, 0xc1};
-        const unsigned char cameraSubmitBytes[] = {0xe8, 0x6c, 0x2a, 0x25, 0x00};
+        const unsigned char cameraSubmitBytes[] = {0xe8, 0x2c, 0x35, 0x25, 0x00};
         const unsigned char poseBytes[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x10, 0x02};
         // Offscreen render setup, its only call (in the frame function 175a060,
         // after the history shift 18a13c0 and before view maintenance), and the
         // history shift's per-view copy 189ee00 that placeEyes() relies on.
         const unsigned char renderOffscreenBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24,
                                                       0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x40, 0xb7, 0x01};
-        const unsigned char frameOffscreenBytes[] = {0xe8, 0x92, 0x57, 0x1c, 0x00};
+        const unsigned char frameOffscreenBytes[] = {0xe8, 0x12, 0x63, 0x1c, 0x00};
         const unsigned char submitSceneBytes[] = {0x44, 0x88, 0x4c, 0x24, 0x20, 0x44, 0x89, 0x44, 0x24, 0x18, 0x48,
                                                   0x89, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54};
         const unsigned char fitCascadesBytes[] = {0x48, 0x8b, 0xc4, 0x4c, 0x89, 0x48, 0x20, 0x4c, 0x89, 0x40, 0x18, 0x48,
@@ -1746,38 +1746,38 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         const unsigned char setTransformBytes[] = {0x40, 0x53, 0x48, 0x83, 0xec, 0x40, 0x0f, 0x10, 0x02, 0x33, 0xc0};
         // A view's adapted luminance for shaders: its own buffer at +16f0.
         const unsigned char adaptedLumBytes[] = {0x48, 0x8d, 0x81, 0xf0, 0x16, 0x00, 0x00, 0x48, 0x8b, 0x10};
-        if (!entry(0x18a0bb0, maintainBytes, sizeof(maintainBytes)) ||
+        if (!entry(0x1dac200, maintainBytes, sizeof(maintainBytes)) ||
             !entry(0x189c710, adaptedLumBytes, sizeof(adaptedLumBytes)) ||
-            !entry(0x1899ab0, submitBytes, sizeof(submitBytes)) ||
-            !entry(0x164703f, cameraSubmitBytes, sizeof(cameraSubmitBytes)) ||
-            !entry(0x187ca10, poseBytes, sizeof(poseBytes)) ||
-            !entry(0x1920240, renderOffscreenBytes, sizeof(renderOffscreenBytes)) ||
-            !entry(0x19206a0, submitSceneBytes, sizeof(submitSceneBytes)) ||
-            !entry(0x170fbc0, fitCascadesBytes, sizeof(fitCascadesBytes)) ||
-            !entry(0x175aaa9, frameOffscreenBytes, sizeof(frameOffscreenBytes)) ||
-            !entry(0x189ee00, historyBytes, sizeof(historyBytes)) ||
-            !entry(0x18a09c0, createBytes, sizeof(createBytes)) ||
-            !entry(0x189bd30, updateBytes, sizeof(updateBytes)) ||
-            ((config.createViews & 2) && !entry(0x186c670, readbackBytes, sizeof(readbackBytes))) ||
-            ((config.createViews & 16) && !entry(0x189fed0, occlusionBytes, sizeof(occlusionBytes))) ||
-            !entry(0x186cc00, copyFinalBytes, sizeof(copyFinalBytes)) ||
-            !entry(0x1846c20, toneBytes, sizeof(toneBytes)) ||
-            !entry(0x187bb00, lensBytes, sizeof(lensBytes)) ||
-            !entry(0x19223e0, copyJobBytes, sizeof(copyJobBytes)) ||
-            !entry(0x189e310, beginJobBytes, sizeof(beginJobBytes)) ||
-            !entry(0x189e3a0, beginJobBytes, sizeof(beginJobBytes)) ||
+            !entry(0x1da50d0, submitBytes, sizeof(submitBytes)) ||
+            !entry(0x1b51b9f, cameraSubmitBytes, sizeof(cameraSubmitBytes)) ||
+            !entry(0x1d87e70, poseBytes, sizeof(poseBytes)) ||
+            !entry(0x1e2b9f0, renderOffscreenBytes, sizeof(renderOffscreenBytes)) ||
+            !entry(0x1e2be50, submitSceneBytes, sizeof(submitSceneBytes)) ||
+            !entry(0x1c1ac30, fitCascadesBytes, sizeof(fitCascadesBytes)) ||
+            !entry(0x1c656d9, frameOffscreenBytes, sizeof(frameOffscreenBytes)) ||
+            !entry(0x1daa450, historyBytes, sizeof(historyBytes)) ||
+            !entry(0x1dac010, createBytes, sizeof(createBytes)) ||
+            !entry(0x1da7350, updateBytes, sizeof(updateBytes)) ||
+            ((config.createViews & 2) && !entry(0x1d77850, readbackBytes, sizeof(readbackBytes))) ||
+            ((config.createViews & 16) && !entry(0x1dab520, occlusionBytes, sizeof(occlusionBytes))) ||
+            !entry(0x1d77de0, copyFinalBytes, sizeof(copyFinalBytes)) ||
+            !entry(0x1d517b0, toneBytes, sizeof(toneBytes)) ||
+            !entry(0x1d86f60, lensBytes, sizeof(lensBytes)) ||
+            !entry(0x1e2db90, copyJobBytes, sizeof(copyJobBytes)) ||
+            !entry(0x1da9960, beginJobBytes, sizeof(beginJobBytes)) ||
+            !entry(0x1da99f0, beginJobBytes, sizeof(beginJobBytes)) ||
             !entry(0x1873470, initBuffersBytes, sizeof(initBuffersBytes)) ||
-            !entry(0x1874f40, sizeBuffersBytes, sizeof(sizeBuffersBytes)) ||
-            !entry(0x1875270, targetKindBytes, sizeof(targetKindBytes)) ||
-            !entry(0x3d11b18, kindMaskBytes, sizeof(kindMaskBytes)) ||
-            !entry(0x1842e10, temporalBytes, sizeof(temporalBytes)) ||
-            !entry(0x17991a0, renderActorBytes, sizeof(renderActorBytes)) ||
-            !entry(0x1920310, setupDisplayBytes, sizeof(setupDisplayBytes)) ||
-            !entry(0x187e130, enqueueBytes, sizeof(enqueueBytes)) ||
-            !entry(0x191afb0, drawOffBytes, sizeof(drawOffBytes)) ||
-            !entry(0x191b880, drawOnBytes, sizeof(drawOnBytes)) ||
-            !entry(0x73ab80, hudPlaceBytes, sizeof(hudPlaceBytes)) ||
-            !entry(0x191c0e0, setTransformBytes, sizeof(setTransformBytes))) {
+            !entry(0x1d802d0, sizeBuffersBytes, sizeof(sizeBuffersBytes)) ||
+            !entry(0x1d80600, targetKindBytes, sizeof(targetKindBytes)) ||
+            !entry(0x4407dc8, kindMaskBytes, sizeof(kindMaskBytes)) ||
+            !entry(0x1d4d9a0, temporalBytes, sizeof(temporalBytes)) ||
+            !entry(0x1ca4100, renderActorBytes, sizeof(renderActorBytes)) ||
+            !entry(0x1e2bac0, setupDisplayBytes, sizeof(setupDisplayBytes)) ||
+            !entry(0x1d89590, enqueueBytes, sizeof(enqueueBytes)) ||
+            !entry(0x1e26790, drawOffBytes, sizeof(drawOffBytes)) ||
+            !entry(0x1e27060, drawOnBytes, sizeof(drawOnBytes)) ||
+            !entry(0x8ac280, hudPlaceBytes, sizeof(hudPlaceBytes)) ||
+            !entry(0x1e278c0, setTransformBytes, sizeof(setTransformBytes))) {
             result = 1002;
             break;
         }
@@ -1787,22 +1787,22 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
                 result = 1100 + s;
                 break;
             }
-            maintainHook = reinterpret_cast<void*>(base + 0x18a0bb0);
-            updateHook = reinterpret_cast<void*>(base + 0x189bd30);
-            copyFinalHook = reinterpret_cast<void*>(base + 0x186cc00);
-            toneHook = reinterpret_cast<void*>(base + 0x1846c20);
-            copyJobHook = reinterpret_cast<void*>(base + 0x19223e0);
-            beginJobHook = reinterpret_cast<void*>(base + 0x189e310);
-            endJobHook = reinterpret_cast<void*>(base + 0x189e3a0);
+            maintainHook = reinterpret_cast<void*>(base + 0x1dac200);
+            updateHook = reinterpret_cast<void*>(base + 0x1da7350);
+            copyFinalHook = reinterpret_cast<void*>(base + 0x1d77de0);
+            toneHook = reinterpret_cast<void*>(base + 0x1d517b0);
+            copyJobHook = reinterpret_cast<void*>(base + 0x1e2db90);
+            beginJobHook = reinterpret_cast<void*>(base + 0x1da9960);
+            endJobHook = reinterpret_cast<void*>(base + 0x1da99f0);
             initBuffersHook = reinterpret_cast<void*>(base + 0x1873470);
-            sizeBuffersHook = reinterpret_cast<void*>(base + 0x1874f40);
-            renderActorHook = reinterpret_cast<void*>(base + 0x17991a0);
-            setupDisplayHook = reinterpret_cast<void*>(base + 0x1920310);
-            submitHook = reinterpret_cast<void*>(base + 0x1899ab0);
-            renderOffscreenHook = reinterpret_cast<void*>(base + 0x1920240);
-            hudPlaceHook = reinterpret_cast<void*>(base + 0x73ab80);
-            submitSceneHook = reinterpret_cast<void*>(base + 0x19206a0);
-            fitCascadesHook = reinterpret_cast<void*>(base + 0x170fbc0);
+            sizeBuffersHook = reinterpret_cast<void*>(base + 0x1d802d0);
+            renderActorHook = reinterpret_cast<void*>(base + 0x1ca4100);
+            setupDisplayHook = reinterpret_cast<void*>(base + 0x1e2bac0);
+            submitHook = reinterpret_cast<void*>(base + 0x1da50d0);
+            renderOffscreenHook = reinterpret_cast<void*>(base + 0x1e2b9f0);
+            hudPlaceHook = reinterpret_cast<void*>(base + 0x8ac280);
+            submitSceneHook = reinterpret_cast<void*>(base + 0x1e2be50);
+            fitCascadesHook = reinterpret_cast<void*>(base + 0x1c1ac30);
             s = MH_CreateHook(maintainHook, reinterpret_cast<void*>(maintain),
                               reinterpret_cast<void**>(&originalMaintain));
             if (s == MH_OK)
@@ -1914,7 +1914,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStop(void*) {
     while ((live || hiddenHero.load()) && GetTickCount64() < limit)
         Sleep(10);
     // The game's own view renders again (placeEyes no longer runs).
-    restGameView(pointer(base + 0x7a34dd0), false);
+    restGameView(pointer(base + 0x83ea910), false);
     // The HUD's texture goes back to the game's size while frames still run
     // (SpidyHudData's restored says whether it did).
     native_hud::stop(1000);
@@ -1937,7 +1937,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStop(void*) {
         uint32_t handle{}, flags{};
         if (registered(previous, handle) && handle == hiddenHandle && read(previous + 0x5c, &flags, 4) &&
             (flags & 0x20)) {
-            reinterpret_cast<Visibility>(base + 0x191b880)(reinterpret_cast<void*>(previous));
+            reinterpret_cast<Visibility>(base + 0x1e27060)(reinterpret_cast<void*>(previous));
             AcquireSRWLockExclusive(&telemetry);
             InterlockedIncrement64(&SpidyAppearanceData.sequence);
             ++SpidyAppearanceData.nativeRestores;
@@ -1981,7 +1981,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyCommandTrace(void* on) {
     if (!base)
         return 4201;
     if (on && !enqueueHook) {
-        enqueueHook = reinterpret_cast<void*>(base + 0x187e130);
+        enqueueHook = reinterpret_cast<void*>(base + 0x1d89590);
         auto s = MH_CreateHook(enqueueHook, reinterpret_cast<void*>(enqueueCommand),
                                reinterpret_cast<void**>(&originalEnqueue));
         if (s == MH_OK)

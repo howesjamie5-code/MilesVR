@@ -13,9 +13,9 @@ __declspec(dllexport) Data SpidyWarpData;
 namespace {
 // Hero::HeroTransitionManager: its vtable, its way onto a wall (+0x360,
 // 980f50) and the hero's state machine it asks (+0x50: a SyncStateMachine).
-constexpr uintptr_t managerVtable = 0x38b4350, enterSlot = 0x360, enterRva = 0x980f50;
-constexpr uintptr_t machineVtable = 0x4f84148;
-constexpr uintptr_t registryTable = 0x7a44320, registryCount = 0x7a44340;
+constexpr uintptr_t managerVtable = 0x3e144c8, enterSlot = 0x360, enterRva = 0xb3e840;
+constexpr uintptr_t machineVtable = 0x57eaab0;
+constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
 using Enter = bool(__fastcall*)(void* manager, const Vec3* point, const Vec3* normal, const Vec3* hint,
                                 uint32_t, float, uint8_t, uint8_t);
 uintptr_t base{};

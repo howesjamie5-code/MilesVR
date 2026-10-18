@@ -35,7 +35,7 @@ BRIDGE_EXPORTS = ('SpidyStart', 'SpidyStop', 'SpidySubmit', 'SpidyRetarget', 'Sp
 BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'back': 0x20, 'ls': 0x40, 'rs': 0x80,
            'lb': 0x100, 'rb': 0x200, 'a': 0x1000, 'b': 0x2000, 'x': 0x4000, 'y': 0x8000}
 # The cameras the VR gate accepts (game_bridge.cpp): follow and combat.
-GAMEPLAY_MOVERS = {0x3871fd8: 'follow', 0x38720d0: 'combat'}
+GAMEPLAY_MOVERS = {0x3dc8708: 'follow', 0x3dc8800: 'combat'}
 
 
 def attach():
@@ -87,7 +87,7 @@ def find_player(game, process, xr):
 
 def outside_player(game):
     """The launcher's search before the seventh build of October 5, from outside the process."""
-    LIVE_VTABLES['hero_mover'] = 0x38b2c98
+    LIVE_VTABLES['hero_mover'] = 0x3e123d8
     found = game.registered_candidates()
     heroes = [x for x in found if x['kind'] == 'hero_local']
     return dict(hero=heroes[0]['object'], record=heroes[0]['actor_record']) if len(heroes) == 1 else None

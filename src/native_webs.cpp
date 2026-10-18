@@ -114,11 +114,11 @@ bool entry(uintptr_t rva, const unsigned char* expected, size_t n) {
 }
 // Instance handles resolve through the 16-byte table at 7a436e8 (191ba30).
 uintptr_t instance(uint32_t handle) {
-    const auto table = pointer(base + 0x7a436e8);
+    const auto table = pointer(base + 0x83f9368);
     int32_t count{};
     uint8_t generation{};
     const uint64_t index = handle & 0xffffff;
-    if (!(handle >> 24) || !table || !read(base + 0x7a43704, &count, 4) || static_cast<int64_t>(index) >= count ||
+    if (!(handle >> 24) || !table || !read(base + 0x83f9384, &count, 4) || static_cast<int64_t>(index) >= count ||
         !read(table + index * 16 + 8, &generation, 1) || generation != handle >> 24)
         return 0;
     return pointer(table + index * 16);
@@ -143,7 +143,7 @@ void publishParts(uintptr_t manager) {
 void update(void* manager, float dt) {
     const auto mgr = reinterpret_cast<uintptr_t>(manager);
     const auto heroRecord = record.load();
-    if (!enabled || !heroRecord || pointer(mgr) != base + 0x38b3df8 || pointer(mgr + 8) != heroRecord) {
+    if (!enabled || !heroRecord || pointer(mgr) != base + 0x3e13930 || pointer(mgr + 8) != heroRecord) {
         originalUpdate(manager, dt);
         return;
     }
@@ -176,10 +176,10 @@ void update(void* manager, float dt) {
     }
     if (live && placed)
         native_eyes::reanchorOffset(wanted.feet, {hero[12], hero[13], hero[14]}, travel);
-    const auto ensure = reinterpret_cast<Ensure>(base + 0x677d20);
-    const auto target = reinterpret_cast<Target>(base + 0x67d7c0);
-    const auto release = reinterpret_cast<Release>(base + 0x67b610);
-    const auto get = reinterpret_cast<Get>(base + 0x67b7b0);
+    const auto ensure = reinterpret_cast<Ensure>(base + 0x7cb3b0);
+    const auto target = reinterpret_cast<Target>(base + 0x7d1950);
+    const auto release = reinterpret_cast<Release>(base + 0x7cf270);
+    const auto get = reinterpret_cast<Get>(base + 0x7cf4d0);
     uint64_t created{}, released{}, failures{};
     uint32_t failed{}, count{}, drawn{}, builtMask{};
     Vec3 built[2]{};
@@ -368,15 +368,15 @@ uint32_t native_webs::start(uintptr_t gameBase, uintptr_t heroRecord) {
         const unsigned char ensureBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83,
                                              0xec, 0x20, 0x48, 0x8b, 0xf9, 0x45, 0x8b, 0xd8};
         const unsigned char targetBytes[] = {0x0f, 0xb7, 0xc2, 0x83, 0xf8, 0x10, 0x73, 0x56,
-                                             0x4c, 0x69, 0xc8, 0xc8, 0x07, 0x00, 0x00, 0x41};
+                                             0x4c, 0x69, 0xc8, 0xd8, 0x07, 0x00, 0x00, 0x41};
         const unsigned char releaseBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83,
                                               0xec, 0x20, 0x44, 0x8b, 0x1a, 0x41, 0x0f, 0xb6};
         const unsigned char getBytes[] = {0x0f, 0xb7, 0xc2, 0x83, 0xf8, 0x10, 0x73, 0x30,
-                                          0x4c, 0x69, 0xc0, 0xc8, 0x07, 0x00, 0x00, 0x41};
-        if (!base || !record.load() || !entry(0x676dd0, updateBytes, sizeof(updateBytes)) ||
-            !entry(0x677d20, ensureBytes, sizeof(ensureBytes)) ||
-            !entry(0x67d7c0, targetBytes, sizeof(targetBytes)) ||
-            !entry(0x67b610, releaseBytes, sizeof(releaseBytes)) || !entry(0x67b7b0, getBytes, sizeof(getBytes))) {
+                                          0x4c, 0x69, 0xc0, 0xd8, 0x07, 0x00, 0x00, 0x41};
+        if (!base || !record.load() || !entry(0x7ca2f0, updateBytes, sizeof(updateBytes)) ||
+            !entry(0x7cb3b0, ensureBytes, sizeof(ensureBytes)) ||
+            !entry(0x7d1950, targetBytes, sizeof(targetBytes)) ||
+            !entry(0x7cf270, releaseBytes, sizeof(releaseBytes)) || !entry(0x7cf4d0, getBytes, sizeof(getBytes))) {
             result = 6001;
             break;
         }
@@ -386,7 +386,7 @@ uint32_t native_webs::start(uintptr_t gameBase, uintptr_t heroRecord) {
                 result = 6100 + s;
                 break;
             }
-            updateHook = reinterpret_cast<void*>(base + 0x676dd0);
+            updateHook = reinterpret_cast<void*>(base + 0x7ca2f0);
             if (const auto c = MH_CreateHook(updateHook, reinterpret_cast<void*>(update),
                                              reinterpret_cast<void**>(&originalUpdate));
                 c != MH_OK) {
@@ -399,8 +399,8 @@ uint32_t native_webs::start(uintptr_t gameBase, uintptr_t heroRecord) {
         // piece of a web held in both hands between them, as before.
         const unsigned char handPointsBytes[] = {0x48, 0x8b, 0xc4, 0xf3, 0x0f, 0x11, 0x50, 0x18,
                                                  0x55, 0x53, 0x56, 0x41, 0x56, 0x48, 0x8d, 0xa8};
-        if (!heldHooked && entry(0x95f9c0, handPointsBytes, sizeof(handPointsBytes))) {
-            handPointsHook = reinterpret_cast<void*>(base + 0x95f9c0);
+        if (!heldHooked && entry(0xb17990, handPointsBytes, sizeof(handPointsBytes))) {
+            handPointsHook = reinterpret_cast<void*>(base + 0xb17990);
             heldHooked = MH_CreateHook(handPointsHook, reinterpret_cast<void*>(handPoints),
                                        reinterpret_cast<void**>(&originalHandPoints)) == MH_OK;
         }

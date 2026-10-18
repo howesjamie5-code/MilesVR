@@ -26,8 +26,8 @@ from observe_game import call_remote, call_with_payload
 from probe_stereo import snapshot as stereo_snapshot, frame_snapshot, motion_command
 from probe_stereo_gpu import discover_queue, snapshot as gpu_snapshot, save_eye_images
 
-HOOKS = (0x18a0bb0, 0x189bd30, 0x186cc00, 0x1846c20, 0x19223e0, 0x189e310, 0x189e3a0, 0x1873470,
-         0x17991a0, 0x1920310, 0x1899ab0, 0x1920240)
+HOOKS = (0x1dac200, 0x1da7350, 0x1d77de0, 0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1873470,
+         0x1ca4100, 0x1e2bac0, 0x1da50d0, 0x1e2b9f0)
 COUNTERS = ('copies', 'same_frame_poses', 'late_frame_poses', 'history_moved', 'history_still')
 
 

@@ -9,8 +9,8 @@
 #include <windows.h>
 
 namespace {
-constexpr uintptr_t cameraUpdateRva = 0x897d30;
-constexpr uintptr_t cameraVtableRva = 0x38b1dd0;
+constexpr uintptr_t cameraUpdateRva = 0xa24e90;
+constexpr uintptr_t cameraVtableRva = 0x3e101f0;
 constexpr unsigned char signature[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x44,
                                        0x88, 0x48, 0x20, 0x44, 0x88, 0x40, 0x18, 0x55};
 // Disassembly: RCX=this, XMM1=dt, R8B/R9B=flags. Preserve the full

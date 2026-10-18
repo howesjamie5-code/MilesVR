@@ -108,7 +108,7 @@ bool entry(uintptr_t rva, const unsigned char* expected, size_t n) {
 }
 // The second movie's window: the size its viewport (+a0) was given.
 bool movieSize(uint32_t size[2]) {
-    const auto movie = pointer(base + 0x7be3e00);
+    const auto movie = pointer(base + 0x859a1a0);
     int32_t viewport[2]{};
     if (!movie || !read(movie + 0xa0, viewport, sizeof(viewport)) || viewport[0] < 64 || viewport[1] < 64 ||
         viewport[0] > 16384 || viewport[1] > 16384)
@@ -120,7 +120,7 @@ bool movieSize(uint32_t size[2]) {
 void stream(void* self) {
     const auto s = reinterpret_cast<uintptr_t>(self);
     uint8_t panel{};
-    if (!enabled || pointer(s) != base + 0x4f87960 || !read(s + 0xa0, &panel, 1) || !panel) {
+    if (!enabled || pointer(s) != base + 0x57ee2d0 || !read(s + 0xa0, &panel, 1) || !panel) {
         originalStream(self);
         return;
     }
@@ -135,7 +135,7 @@ void stream(void* self) {
     const bool vr = !stopping && movieSize(window);
     if (vr) {
         float factor{};
-        read(base + 0x7a4ae50, &factor, 4);
+        read(base + 0x8400ad0, &factor, 4);
         want[0] = native_hud::textureBase(window[0], std::max(factor, 1.f));
         want[1] = window[1];
     } else {
@@ -187,16 +187,16 @@ void render(void* payload, uint32_t count) {
     if (texture && enabled && (hudSize.load() || screenEyes.load()) && eyesRecent() &&
         !(count && payload && pointer(reinterpret_cast<uintptr_t>(payload) + 8))) {
         // The list this frame draws, as the command picks it.
-        const uint32_t frame = *reinterpret_cast<const uint32_t*>(base + 0x7a30b00);
+        const uint32_t frame = *reinterpret_cast<const uint32_t*>(base + 0x83e6610);
         int list = -1;
-        if (*reinterpret_cast<const uint32_t*>(base + 0x7be5740) == frame)
+        if (*reinterpret_cast<const uint32_t*>(base + 0x859bae0) == frame)
             list = 0;
-        else if (*reinterpret_cast<const uint32_t*>(base + 0x7be5744) == frame)
+        else if (*reinterpret_cast<const uint32_t*>(base + 0x859bae4) == frame)
             list = 1;
         if (list >= 0) {
-            const uint32_t n = std::min(*reinterpret_cast<const uint32_t*>(base + 0x7be3f38 + list * 4), 128u);
-            auto* items = reinterpret_cast<Item*>(base + 0x7be3f40 + list * 128 * sizeof(Item));
-            const auto movie = pointer(base + 0x7be3e00);
+            const uint32_t n = std::min(*reinterpret_cast<const uint32_t*>(base + 0x859a2d8 + list * 4), 128u);
+            auto* items = reinterpret_cast<Item*>(base + 0x859a2e0 + list * 128 * sizeof(Item));
+            const auto movie = pointer(base + 0x859a1a0);
             int panel = -1;
             for (uint32_t i = 0; i < n; ++i) {
                 if (items[i].target == texture && panel < 0)
@@ -286,11 +286,11 @@ uint32_t native_hud::start(uintptr_t imageBase) {
                                                 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40, 0x48};
         const unsigned char projectBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83,
                                               0xec, 0x40, 0x48, 0x8b, 0xfa, 0x0f, 0x29, 0x74};
-        if (!base || !entry(0x2104400, streamBytes, sizeof(streamBytes)) ||
-            !entry(0x1d2b6c0, renderBytes, sizeof(renderBytes)) ||
-            !entry(0x1f10ad0, projectXYBytes, sizeof(projectXYBytes)) ||
-            !entry(0x1f10b60, projectBytes, sizeof(projectBytes)) ||
-            pointer(base + 0x4f87960 + 0x18) != base + 0x2104400) {
+        if (!base || !entry(0x2610e40, streamBytes, sizeof(streamBytes)) ||
+            !entry(0x223a280, renderBytes, sizeof(renderBytes)) ||
+            !entry(0x241f110, projectXYBytes, sizeof(projectXYBytes)) ||
+            !entry(0x241f1a0, projectBytes, sizeof(projectBytes)) ||
+            pointer(base + 0x57ee2d0 + 0x18) != base + 0x2610e40) {
             result = 9501;
             break;
         }
@@ -300,10 +300,10 @@ uint32_t native_hud::start(uintptr_t imageBase) {
                 result = 9600 + s;
                 break;
             }
-            streamHook = reinterpret_cast<void*>(base + 0x2104400);
-            renderHook = reinterpret_cast<void*>(base + 0x1d2b6c0);
-            projectXYHook = reinterpret_cast<void*>(base + 0x1f10ad0);
-            projectHook = reinterpret_cast<void*>(base + 0x1f10b60);
+            streamHook = reinterpret_cast<void*>(base + 0x2610e40);
+            renderHook = reinterpret_cast<void*>(base + 0x223a280);
+            projectXYHook = reinterpret_cast<void*>(base + 0x241f110);
+            projectHook = reinterpret_cast<void*>(base + 0x241f1a0);
             s = MH_CreateHook(streamHook, reinterpret_cast<void*>(stream), reinterpret_cast<void**>(&originalStream));
             if (s == MH_OK)
                 s = MH_CreateHook(renderHook, reinterpret_cast<void*>(render),
@@ -404,7 +404,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyHudSet(void* input) {
     return 0;
 }
 void native_hud::follower(uintptr_t address) {
-    if (pointer(address) == base + 0x38929c8)
+    if (pointer(address) == base + 0x3dec440)
         hudFollower = address;
 }
 uint32_t native_hud::stop(uint32_t waitMs) {

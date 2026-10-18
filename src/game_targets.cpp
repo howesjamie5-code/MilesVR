@@ -9,7 +9,7 @@
 using namespace spidy;
 using namespace spidy::game_targets;
 namespace {
-constexpr uintptr_t registryTable = 0x7a44320, registryCount = 0x7a44340;
+constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)
@@ -273,7 +273,7 @@ uint64_t game_targets::resolve(uintptr_t base, uint32_t handle) {
     return address;
 }
 uint64_t game_targets::botMover(uintptr_t base, const Candidate& c) {
-    constexpr uintptr_t moverStandard = 0x4f70168;
+    constexpr uintptr_t moverStandard = 0x57d7700;
     uint32_t handle{};
     if (c.kind != Kind::bot || !read(c.component + 0xdb4, &handle, 4))
         return 0;

@@ -39,7 +39,7 @@ from probe_native_rays import snapshot as ray_snapshot, command as ray_command
 from vr_launcher import bring_to_front
 
 # The movement module's airborne-event hooks, besides the swing's own entries.
-AIR_ENTRIES = (0xa7b3a0, 0x1f9db60)
+AIR_ENTRIES = (0xc63ab0, 0x24abfe0)
 SUSPEND_RESUME = 0x0800
 ntdll = c.WinDLL('ntdll')
 ntdll.NtSuspendProcess.argtypes = ntdll.NtResumeProcess.argtypes = [c.c_void_p]

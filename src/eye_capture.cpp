@@ -233,7 +233,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyCapture(void*) {
     for(auto view:config.views) {
         uint32_t flags{};if(!readable(view+0x14e7c,&flags,4) || !(flags&1) || (flags&6))return 2002;
         bool owned=false;for(unsigned i=0;i<8;++i) {
-            uint64_t slot{};readable(config.base+0x7a34e00+i*8,&slot,8);owned|=slot==view;
+            uint64_t slot{};readable(config.base+0x83ea940+i*8,&slot,8);owned|=slot==view;
         }
         if(!owned)return 2003;
     }

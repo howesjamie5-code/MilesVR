@@ -21,7 +21,7 @@ RENDER_MEMORY_DLL=ROOT/'build/windows-ninja/spidy_render_memory.dll'
 RENDER_RING_MB=512
 # The module's hooks: the ring's creation and its end-of-frame rollover. They are in place from the
 # game's start, so they are no sign of another session's leftovers.
-RENDER_MEMORY_HOOKS=(0x1872d90,0x1872b90)
+RENDER_MEMORY_HOOKS=(0x1d7e010,0x1d7de10)
 STEAM_APP_ID='1817070'
 # Seconds a new game process may refuse to be opened before the refusal counts as final.
 REFUSAL_PATIENCE=5
@@ -212,7 +212,7 @@ def steam_has_game(steam):
 
 
 def ready_player(game):
-    LIVE_VTABLES['hero_mover']=0x38b2c98
+    LIVE_VTABLES['hero_mover']=0x3e123d8
     candidates=game.registered_candidates()
     heroes=[h for h in candidates if h['kind']=='hero_local']
     return len(heroes)==1 and sum(h['kind']=='hero_mover' and h['actor_record']==heroes[0]['actor_record']

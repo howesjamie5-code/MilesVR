@@ -17,7 +17,7 @@ import time
 from inspect_game import EXPECTED_SHA256, EXPECTED_VERSION, VTABLES, FUNCTIONS, file_version
 
 # Address fact independently checked by discover_render_types.py.
-LIVE_VTABLES = {**VTABLES, 'follow_camera': 0x38715C8}
+LIVE_VTABLES = {**VTABLES, 'follow_camera': 0x3DC7CF8}
 
 if sys.platform != 'win32':
     raise SystemExit('Live capture requires Windows; inspect_game.py works offline.')
@@ -190,8 +190,8 @@ class Game:
         object's own handle agree. Callers can fall back to bounded discovery.
         This samples CPU objects; it is not a simulation-thread snapshot.
         """
-        table = self.pointer(self.base + 0x7a44320)
-        raw_count = self.read(self.base + 0x7a44340, 4)
+        table = self.pointer(self.base + 0x83f9fa0)
+        raw_count = self.read(self.base + 0x83f9fc0, 4)
         if not table or len(raw_count) != 4:
             return []
         count = struct.unpack('<i', raw_count)[0]
@@ -220,7 +220,7 @@ class Game:
             value = self.candidate(address, kind)
             if value:
                 found.append(value)
-        if self.pointer(self.base + 0x7a44320) != table:
+        if self.pointer(self.base + 0x83f9fa0) != table:
             return []
         return found
 

@@ -23,29 +23,29 @@ using SetMatrix = void (*)(void*, const float*, void*);
 using RequestState = bool (*)(void*, void*, void*);
 using MakeParams = void* (*)(void*);
 using StateType = void* (*)();
-constexpr uintptr_t preCollideRva = 0x2e54300, setFreebodyRva = 0x1810530, setModeRva = 0x1835780,
-                    rebuildRva = 0x1830930, rebuildAssetRva = 0x1834b70, modelOverrideRva = 0x1776050,
-                    setVelocityRva = 0x2e48b80, setSpinRva = 0x2e48830, setMatrixRva = 0x191c0e0,
-                    requestStateRva = 0x20e51c0, flungParamsRva = 0x556040, flungTypeRva = 0x300440;
-constexpr uintptr_t worldGlobal = 0x78939e8, physicsGlobal = 0x609a570, recordTable = 0x1ea98,
-                    physicsComponent = 0x3d0a460, actorTable = 0x7a436e8, actorCount = 0x7a43704,
-                    registryTable = 0x7a44320, registryCount = 0x7a44340, stateMachine = 0x4f843d0,
-                    flungState = 0x3832fd8, flungDriver = 0x386c448;
+constexpr uintptr_t preCollideRva = 0x337b4b0, setFreebodyRva = 0x1d1ad90, setModeRva = 0x1d40310,
+                    rebuildRva = 0x1d3b4c0, rebuildAssetRva = 0x1d3f700, modelOverrideRva = 0x1c80e30,
+                    setVelocityRva = 0x336fd30, setSpinRva = 0x336f9e0, setMatrixRva = 0x1e278c0,
+                    requestStateRva = 0x25f1b90, flungParamsRva = 0x556040, flungTypeRva = 0x300440;
+constexpr uintptr_t worldGlobal = 0x8247e68, physicsGlobal = 0x6aa15c0, recordTable = 0x1ea98,
+                    physicsComponent = 0x44006d8, actorTable = 0x83f9368, actorCount = 0x83f9384,
+                    registryTable = 0x83f9fa0, registryCount = 0x83f9fc0, stateMachine = 0x57ead40,
+                    flungState = 0x3d74430, flungDriver = 0x3db89f8;
 // The DamageSystem, its direct request (target, hit direction, point,
 // normal), the request it hands out when its pool is full, and the actor
 // table actor handles index.
-constexpr uintptr_t damageSystem = 0x62a4ec0, directDamageRva = 0x1eb6d60, spareRequest = 0x123868,
-                    actorRecords = 0x7a44380, actorRecordCount = 0x7a4439c;
+constexpr uintptr_t damageSystem = 0x6cae3f0, directDamageRva = 0x23c5260, spareRequest = 0x123868,
+                    actorRecords = 0x83fa000, actorRecordCount = 0x83fa01c;
 using DirectDamage = uint8_t* (*)(void*, const uint32_t*, const Vec3*, const Vec3*, const Vec3*);
 // A status entry in a request's StatusData (request, amount, type, duration,
 // action count; -1 leaves the count unset), as the game's shot damage adds one.
-constexpr uintptr_t addStatusRva = 0x1ed20e0;
+constexpr uintptr_t addStatusRva = 0x23e0710;
 using AddStatus = void (*)(void*, float, int32_t, float, float);
 // A record's component of a type, as the game looks one up: in the record's
 // table at +0x80 when it has one (its size at +0x88), else in its list at
 // +0x58. BotAttackResponseManager's type, and the name its type holds at
 // +0x60.
-constexpr uintptr_t findInTableRva = 0x16799a0, findInListRva = 0x167ab40, attackResponses = 0x6c74b40,
+constexpr uintptr_t findInTableRva = 0x1b844b0, findInListRva = 0x1b85650, attackResponses = 0x76a8320,
                     attackResponsesName = 0x3836df0;
 using FindComponent = uintptr_t (*)(void*, const void*);
 constexpr uint16_t debris = 3; // the mode the game's own throws use
@@ -671,7 +671,7 @@ uint32_t native_bodies::start(uintptr_t gameBase) {
             !entry(findInListRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
                                    0xda, 0x48, 0x8b, 0xf9}) ||
             pointer(base + attackResponses + 0x60) != base + attackResponsesName ||
-            pointer(base + damageSystem) != base + 0x4f5db58) {
+            pointer(base + damageSystem) != base + 0x57c51a8) {
             result = 8001;
             break;
         }

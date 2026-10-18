@@ -127,10 +127,10 @@ def main():
     bridge_active = rays_active = swing_active = False
     try:
         pe = PE(game.path.read_bytes())
-        entries = (*HOOKS, 0x2e67010, 0x1fbe360, 0x1fbda50)
+        entries = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0)
         if any(game.read(game.base+rva, 16) != pe.bytes(rva,16) for rva in entries):
             raise RuntimeError('A required entry is already patched')
-        LIVE_VTABLES['hero_mover'] = 0x38b2c98
+        LIVE_VTABLES['hero_mover'] = 0x3e123d8
         objects = game.registered_candidates()
         heroes = [o for o in objects if o['kind'] == 'hero_local']
         if len(heroes) != 1:

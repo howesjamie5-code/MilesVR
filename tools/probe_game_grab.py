@@ -34,18 +34,18 @@ from run_game_vr import shooter_snapshot, write_rgb_png
 from vr_launcher import bring_to_front
 
 OUTPUT = ROOT/'reports/grab-probe'
-REGISTRY, REGISTRY_COUNT = 0x7a44320, 0x7a44340
-HERO_LOCAL, HERO_MOVERS, BOT_MOVERS, THROWABLE = 0x38a93c8, 0x38b2c98, 0x38533e0, 0x38489c0
+REGISTRY, REGISTRY_COUNT = 0x83f9fa0, 0x83f9fc0
+HERO_LOCAL, HERO_MOVERS, BOT_MOVERS, THROWABLE = 0x3e05ad8, 0x3e123d8, 0x3d9b7d8, 0x3d90bc0
 # Bots the webs leave alone (game_targets::enemy): CivilianBot, AllyBot (the police), MissionFollowBot.
-FRIENDLY = (0x383c480, 0x3835e80, 0x38ecc00)
+FRIENDLY = (0x3d84408, 0x3d77bb0, 0x3e51b80)
 # Hooks the probe's modules install: castRay, mover prequery and gravity, hknpWorld::preCollide.
-ENTRIES = (0x2e67010, 0x1fbe360, 0x1fbda50, 0x2e54300)
+ENTRIES = (0x338e1c0, 0x24cc6b0, 0x24cbda0, 0x337b4b0)
 LIFT = {'throwable': .45, 'bot': .95}
 PHASES = {0: 'none', 1: 'tethered', 2: 'yanked', 3: 'held'}
 GRAB_SIZE = 368
 # Hero::HeroRopeManager: 16 rope slots of 0x7c8 bytes from +0x50; in a slot, +0x70c bit 0 in use, bit 1 released,
 # +0x6b8 seconds since released, +0x67c the target position SetRopeTargetPosition writes, +0x720 the anchor drawn.
-ROPE_MANAGER = 0x38b3df8
+ROPE_MANAGER = 0x3e13930
 STEREO_DLL = ROOT/'build/windows-ninja/spidy_stereo_probe.dll'
 
 
@@ -65,7 +65,7 @@ def ropes(game, manager):
     return out
 
 
-WORLD, PHYSICS = 0x78939e8, 0x609a570
+WORLD, PHYSICS = 0x8247e68, 0x6aa15c0
 
 
 def prop_bodies(game, actor):
@@ -192,7 +192,7 @@ def resolve(game, handle):
 def camera(game):
     """The game camera's forward vector and position (HeroCameraManager +0x744: side, up, forward rows)."""
     for address, vtable, _, _ in registry(game):
-        if vtable == 0x38b1dd0:
+        if vtable == 0x3e101f0:
             m = struct.unpack('<16f', game.read(address+0x744, 64))
             return m[8:11], m[12:15]
     return None, None
@@ -259,7 +259,7 @@ def fling_test(game, process, rays, motion, output):
     """What the web does to a bot, on the nearest one at any distance: flung, steered, handed back."""
     pe = PE(game.path.read_bytes())
     components = list(registry(game))
-    machines = {r: a for a, v, r, _ in components if v == 0x4f843d0}
+    machines = {r: a for a, v, r, _ in components if v == 0x57ead40}
     bots = []
     hero = next(r for a, v, r, _ in components if v == HERO_LOCAL)
     feet = game.transform(game.pointer(hero))['position']
@@ -450,7 +450,7 @@ def main():
                                                    struct.pack('<4IQ', 0x53484f43, 1, 24, game.pid, game.base)))
             shooter_active = not shooter['start']
             print(f"Shooter start: {shooter['start']}", flush=True)
-        machine = next((a for a, v, r, _ in components if v == 0x4f843d0 and r == target_record), None)
+        machine = next((a for a, v, r, _ in components if v == 0x57ead40 and r == target_record), None)
         state_names = {}
         if webs:
             invoke(webs['SpidyWebsStart'], struct.pack('<4I2Q', 0x53574243, 1, 32, game.pid, game.base, record))
@@ -582,7 +582,7 @@ def main():
         rays_active = stop_rays != 0
         final = grab_snapshot(game, rays['SpidyGrabData'])
         restored = all(game.read(game.base+rva, 16) == pe.bytes(rva, 16) for rva in
-                       ENTRIES[:2]+(0x2e54300,)+((0x897d30, 0x2150c40, 0xd2a570) if shooter is not None else ()))
+                       ENTRIES[:2]+(0x337b4b0,)+((0xa24e90, 0x265d730, 0xf55310) if shooter is not None else ()))
         path = [s['target'] for s in samples if s['target']]
         start_pos = path[0] if path else None
         # Carried: where the web's end (the prop's centre) hung from the hand, and how hard the web pulled.

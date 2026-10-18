@@ -82,24 +82,24 @@ uintptr_t pointer(uintptr_t p) {
     return v;
 }
 bool live() {
-    const auto table = pointer(config.base + 0x7a44320);
+    const auto table = pointer(config.base + 0x83f9fa0);
     const auto index = handle & 0xfffff;
     uint32_t count{}, generation{}, own{};
-    return table && read(config.base + 0x7a44340, &count, 4) && index < count && count <= 0x100000 &&
+    return table && read(config.base + 0x83f9fc0, &count, 4) && index < count && count <= 0x100000 &&
            read(table + index * 16 + 8, &generation, 4) && generation == (handle >> 20) && generation &&
-           pointer(table + index * 16) == config.mover && pointer(config.mover) == config.base + 0x4f70168 &&
+           pointer(table + index * 16) == config.mover && pointer(config.mover) == config.base + 0x57d7700 &&
            pointer(config.mover + 8) == config.record && read(config.mover + 0x14, &own, 4) && own == handle;
 }
 // A registered MoverStandard on `record`, under its own handle.
 bool moverLive(uintptr_t mover, uintptr_t record) {
-    const auto table = pointer(config.base + 0x7a44320);
+    const auto table = pointer(config.base + 0x83f9fa0);
     uint32_t count{}, generation{}, own{};
-    if (!table || !read(mover + 0x14, &own, 4) || !read(config.base + 0x7a44340, &count, 4) ||
+    if (!table || !read(mover + 0x14, &own, 4) || !read(config.base + 0x83f9fc0, &count, 4) ||
         count > 0x100000)
         return false;
     const auto index = own & 0xfffff;
     return index < count && read(table + index * 16 + 8, &generation, 4) && generation == (own >> 20) &&
-           generation && pointer(table + index * 16) == mover && pointer(mover) == config.base + 0x4f70168 &&
+           generation && pointer(table + index * 16) == mover && pointer(mover) == config.base + 0x57d7700 &&
            pointer(mover + 8) == record && record;
 }
 Command leased() {
@@ -128,7 +128,7 @@ uintptr_t handleAir(void* self, void* event) {
     const auto address = reinterpret_cast<uintptr_t>(self);
     const auto table = pointer(address);
     if (!enabled || GetTickCount64() >= deadline || !live() || pointer(address + 8) != config.record ||
-        (table != config.base + 0x38c1340 && table != config.base + 0x38c9090))
+        (table != config.base + 0x3e23000 && table != config.base + 0x3e2c620))
         return airEvent(self, event);
     const auto c = leased();
     const float dt = timestep(self);
@@ -338,13 +338,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
         constexpr uint8_t b[] = {0x40, 0x53, 0x48, 0x81, 0xec, 0x80, 0, 0, 0};
         constexpr uint8_t c[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30};
         constexpr uint8_t d[] = {0xf3, 0x0f, 0x10, 0x4a, 0x08, 0x0f, 0x16, 0x0a};
-        constexpr uint8_t e[] = {0xf2, 0x0f, 0x10, 0x05, 0xe0, 0x91, 0x40, 0x06, 0x66, 0x0f, 0x5a, 0xc0};
-        constexpr uint8_t f[] = {0x40, 0x55, 0x53, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec, 0x60};
+        constexpr uint8_t e[] = {0xf2, 0x0f, 0x10, 0x05, 0x10, 0x44, 0x8b, 0x06, 0x66, 0x0f, 0x5a, 0xc0};
+        constexpr uint8_t f[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8b, 0xec, 0x48, 0x83, 0xec};
         constexpr uint8_t g[] = {0x48, 0x83, 0xec, 0x28, 0x48, 0x63, 0xc2, 0x4d, 0x8b, 0xd0};
-        if (!signature(0x1fbe360, a, sizeof(a)) || !signature(0x1fbda50, b, sizeof(b)) ||
-            !signature(0x1fc2e10, c, sizeof(c)) || !signature(0x1fb88d0, d, sizeof(d)) ||
-            !signature(0x16769f0, e, sizeof(e)) || !signature(0xa7b3a0, f, sizeof(f)) ||
-            !signature(0x1f9db60, g, sizeof(g))) {
+        if (!signature(0x24cc6b0, a, sizeof(a)) || !signature(0x24cbda0, b, sizeof(b)) ||
+            !signature(0x24d1160, c, sizeof(c)) || !signature(0x24c6c20, d, sizeof(d)) ||
+            !signature(0x1b81500, e, sizeof(e)) || !signature(0xc63ab0, f, sizeof(f)) ||
+            !signature(0x24abfe0, g, sizeof(g))) {
             result = 1003;
             break;
         }
@@ -360,7 +360,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
                 result = 1100 + s;
                 break;
             }
-            const uintptr_t rvas[] = {0x1fbe360, 0x1fbda50, 0xa7b3a0, 0x1f9db60};
+            const uintptr_t rvas[] = {0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0};
             void* detours[] = {reinterpret_cast<void*>(query), reinterpret_cast<void*>(applyGravity),
                                reinterpret_cast<void*>(handleAir), reinterpret_cast<void*>(readEvent)};
             void** originals[] = {reinterpret_cast<void**>(&prequery), reinterpret_cast<void**>(&gravity),
@@ -377,9 +377,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
             if (result)
                 break;
         }
-        request = reinterpret_cast<Request>(config.base + 0x1fc2e10);
-        setTarget = reinterpret_cast<SetTarget>(config.base + 0x1fb88d0);
-        timestep = reinterpret_cast<Timestep>(config.base + 0x16769f0);
+        request = reinterpret_cast<Request>(config.base + 0x24d1160);
+        setTarget = reinterpret_cast<SetTarget>(config.base + 0x24c6c20);
+        timestep = reinterpret_cast<Timestep>(config.base + 0x1b81500);
         deadline = config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
         enabled = true;
         for (unsigned i = 0; i < hookCount; ++i) {

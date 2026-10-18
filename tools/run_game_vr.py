@@ -30,17 +30,17 @@ from vr_launcher import (LauncherLock, alive, bring_to_front, wait_for_game, enl
 import vr_display
 import xr_runtime
 
-GAME_HOOKS = (*HOOKS, 0x2e67010, 0x1fbe360, 0x1fbda50, 0xa7b3a0, 0x1f9db60,
-              0x18a0bb0, 0x189bd30, 0x186cc00, 0x1846c20, 0x19223e0,
-              0x189e310, 0x189e3a0, 0x1873470, 0x17991a0, 0x1920310, 0x676dd0, 0x1920240,
+GAME_HOOKS = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0,
+              0x1dac200, 0x1da7350, 0x1d77de0, 0x1d517b0, 0x1e2db90,
+              0x1da9960, 0x1da99f0, 0x1873470, 0x1ca4100, 0x1e2bac0, 0x7ca2f0, 0x1e2b9f0,
               # The web shooter: the camera's update (shots go out on the main thread), the weapons' muzzle
               # and the shots' events (what they strike).
-              0x897d30, 0x2150c40, 0xd2a570,
+              0xa24e90, 0x265d730, 0xf55310,
               # Slow motion: the update of the game's time system (game_time.hpp).
-              0x19bb430,
+              0x1ec6bd0,
               # The HUD in VR (native_hud.hpp): its panel's placement, its texture's stream, the render command
               # that draws its second movie, and the projections of its world markers.
-              0x73ab80, 0x2104400, 0x1d2b6c0, 0x1f10ad0, 0x1f10b60)
+              0x8ac280, 0x2610e40, 0x223a280, 0x241f110, 0x241f1a0)
 # The render scale's range in percent (spidy::minimumRenderScale and maximumRenderScale).
 RENDER_SCALES = (50, 200)
 # Upscaling: the percent of the eye's size, per side, the eyes' scene is rendered at, and its default
@@ -510,10 +510,10 @@ PRESENTATIONS = {0: 'none', 1: 'immersive', 2: 'flat', 3: 'game_screen', 4: 'gam
 GATE_REASONS = ((1, 'no_player'), (2, 'bridge_stopped'), (4, 'no_camera_commit'), (8, 'other_camera'),
                 (16, 'tracking'))
 # Camera movers (Camera2 vtables, image offsets) the gate has names for.
-CAMERA_MOVERS = {0x3871fd8: 'follow', 0x38720d0: 'combat', 0x38727f0: 'death', 0x3872860: 'exterior',
-                 0x38721e0: 'look', 0x38728f0: 'look_game', 0x3872a08: 'melee_animation',
-                 0x385b3f0: 'relative_animation', 0x3872c18: 'turret', 0x3872d28: 'vehicle',
-                 0x4f76d90: 'photo_mode'}
+CAMERA_MOVERS = {0x3dc8708: 'follow', 0x3dc8800: 'combat', 0x3dc8f10: 'death', 0x3dc8f80: 'exterior',
+                 0x3dc8910: 'look', 0x38728f0: 'look_game', 0x3dc9008: 'melee_animation',
+                 0x3da4090: 'relative_animation', 0x3dc9208: 'turret', 0x3dc9318: 'vehicle',
+                 0x57dd9f0: 'photo_mode'}
 
 
 # What the VR settings (the SPIDY VR tab in the game's Settings, and X) changed, as XrData reports it. A session

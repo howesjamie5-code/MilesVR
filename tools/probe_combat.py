@@ -52,9 +52,9 @@ BOT_MARKER = 'BotMoverManager'
 TRAITS = {'HoverMoverManager': 'hover', 'ThugBot': 'thug', 'CivilianBot': 'civilian', 'AllyBot': 'ally',
           'MissionFollowBot': 'ally', 'StatusEffectTrackerWebbed': 'webbable', 'BreakableSystemComponent': 'breakable',
           'BirdBot': 'neutral', 'Helicopter': 'neutral', 'SilverSableCraftBot': 'neutral'}
-MACHINE, BOT_HEALTH, HEALTH, MOVER_STANDARD, MOVER_BODY_SIZE = 0x4f843d0, 0x3839e98, 0x3839e08, 0x4f70168, 0x500e870
+MACHINE, BOT_HEALTH, HEALTH, MOVER_STANDARD, MOVER_BODY_SIZE = 0x57ead40, 0x3d7c748, 0x3d7c6b8, 0x57d7700, 0x58744a0
 # The hooks the ray module installs: castRay, mover prequery and gravity, preCollide, camera update, muzzle, shot event.
-ENTRIES = (0x2e67010, 0x1fbe360, 0x1fbda50, 0x2e54300, 0x897d30, 0x2150c40, 0xd2a570)
+ENTRIES = (0x338e1c0, 0x24cc6b0, 0x24cbda0, 0x337b4b0, 0xa24e90, 0x265d730, 0xf55310)
 # A street thug's chest above his feet (the shooter's aim), his centre (the grab's) and where a fist goes.
 CHEST, CENTRE, FIST = 1.15, .95, 1.3
 

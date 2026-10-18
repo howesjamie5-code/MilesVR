@@ -85,12 +85,12 @@ struct Candidate {
 };
 // The two components the web moves an actor through, by their own classes
 // (image offsets of their vtables), and the class of a mover's body.
-constexpr uint64_t physicsComponent = 0x3d0a460, syncStaticStateMachine = 0x4f843d0,
-                   moverBodySize = 0x500e870;
+constexpr uint64_t physicsComponent = 0x44006d8, syncStaticStateMachine = 0x57ead40,
+                   moverBodySize = 0x58744a0;
 // The classes that keep an actor's hit points (a float at +0x88): a bot's own
 // and the plain one (tools/probe_combat.py: a street thug's 50 went to 19.34
 // with one punch, October 9).
-constexpr uint64_t botHealth = 0x3839e98, plainHealth = 0x3839e08;
+constexpr uint64_t botHealth = 0x3d7c748, plainHealth = 0x3d7c6b8;
 // A bot the hero fights: every bot but the civilians, his side and the
 // neutral ones, so every enemy class there is (ThugBot and the bosses derived
 // from it, GrenadierBot, SlayerBot, SwordsmanBot, CorruptedBot, DroneBot and

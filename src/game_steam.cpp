@@ -20,7 +20,7 @@ __declspec(dllexport) SteamGuardData SpidySteamData;
 namespace {
 // The game's context for its Steam user interface (the interface pointer is
 // its third word), the call that asks for the ticket, and where it returns.
-constexpr uintptr_t userContext = 0x5d69010, ticketCall = 0x2aa63f7, ticketReturn = 0x2aa6400;
+constexpr uintptr_t userContext = 0x66c8010, ticketCall = 0x2fcd29f, ticketReturn = 0x2fcd2a8;
 constexpr unsigned ticketSlot = 13;
 using Ticket = uint32_t(__fastcall*)(void*, void*, int, uint32_t*, const void*);
 Ticket original{};

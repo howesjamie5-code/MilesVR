@@ -47,8 +47,8 @@ MAX_JOINTS = 256
 STATUS_SIZE, POSES_SIZE = 144, 56 + 64 + 3*MAX_JOINTS*64
 PROBLEMS = {0: 'none', 1: 'no hero', 2: 'no rig yet', 3: 'unknown rig', 4: 'bad rest pose', 5: 'bad instance'}
 STATES = {0: 'off', 1: 'waiting', 2: 'active', 3: 'failed'}
-SYNC_MACHINE, HEALTH, BOT_HEALTH = 0x4f843d0, 0x3839e08, 0x3839e98
-HERO_HEALTH = 0x38a6df0
+SYNC_MACHINE, HEALTH, BOT_HEALTH = 0x57ead40, 0x3d7c6b8, 0x3d7c748
+HERO_HEALTH = 0x3e026c0
 # Bits of native_body::Flags.
 BODY_ON, HIDE_HEAD, HAND_TURN, AIRBORNE, CALIBRATED = 1, 2, 4, 8, 16
 
@@ -433,7 +433,7 @@ def mirror_sample(game, stereo):
     views = snapshot(game, stereo['SpidyStereoData'])
     if not views or len(views['eyes']) != 2:
         return None
-    addresses = [game.pointer(game.base+0x7a34dd0), *(eye['view'] for eye in views['eyes'])]
+    addresses = [game.pointer(game.base+0x83ea910), *(eye['view'] for eye in views['eyes'])]
     if not all(addresses):
         return None
     for _ in range(8):

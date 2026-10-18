@@ -57,9 +57,9 @@ from probe_stereo_gpu import discover_queue, snapshot as gpu_snapshot
 from run_game_vr import appearance_snapshot, hud_snapshot, rgb_rows, write_rgb_png
 from vr_launcher import enlarge_render_memory, RENDER_MEMORY_HOOKS
 
-ENTRIES = (*HOOKS, 0x2e67010, 0x1fbe360, 0x1fbda50, 0xa7b3a0, 0x1f9db60, 0x18a0bb0, 0x189bd30, 0x186cc00,
-           0x1846c20, 0x19223e0, 0x189e310, 0x189e3a0, 0x1873470, 0x17991a0, 0x1920310, 0x1899ab0,
-           0x1920240, 0x676dd0)
+ENTRIES = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0, 0x1dac200, 0x1da7350, 0x1d77de0,
+           0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1873470, 0x1ca4100, 0x1e2bac0, 0x1da50d0,
+           0x1e2b9f0, 0x7ca2f0)
 HEAD = 1.6          # eye height above the feet, metres
 REACH, DROP = .6, .15   # web start: in front of and below the eye centre
 HALF_IPD = .032
@@ -201,7 +201,7 @@ def main():
         entries = {rva: pe.bytes(rva, 16) for rva in (*ENTRIES, *RENDER_MEMORY_HOOKS)}
         if any(game.read(game.base+rva, 16) != entries[rva] for rva in ENTRIES):
             raise RuntimeError('A required entry is already patched. Start a fresh game process.')
-        LIVE_VTABLES['hero_mover'] = 0x38b2c98
+        LIVE_VTABLES['hero_mover'] = 0x3e123d8
         objects = game.registered_candidates()
         heroes = [o for o in objects if o['kind'] == 'hero_local']
         if len(heroes) != 1:

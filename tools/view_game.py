@@ -50,8 +50,8 @@ def main():
         p.error('Use signed left/right/down/up bounds in (-85,85) degrees')
     game=Game(find_game());process=None;exports=None;stopped=False;frames=[]
     try:
-        pe=PE(pathlib.Path(game.path).read_bytes());code=pe.bytes(0x1899ab0,16)
-        if game.read(game.base+0x1899ab0,16)!=code:raise RuntimeError('View submit already patched')
+        pe=PE(pathlib.Path(game.path).read_bytes());code=pe.bytes(0x1da50d0,16)
+        if game.read(game.base+0x1da50d0,16)!=code:raise RuntimeError('View submit already patched')
         process=open_process(0x0400|0x0010|0x0020|0x0008|0x0002,False,game.pid)
         if not process:raise c.WinError(c.get_last_error())
         exports,digest=prepare(game.pid,process,ROOT/'build/windows-ninja/spidy_view.dll',
@@ -76,7 +76,7 @@ def main():
                 frame['seconds']=elapsed;frames.append(frame);last_seq=frame['sequence']
             time.sleep(.02)
         stopped=call_remote(process,exports['SpidyStop'])==0
-        restored=game.read(game.base+0x1899ab0,16)==code
+        restored=game.read(game.base+0x1da50d0,16)==code
         result=dict(pid=game.pid,module_base=hex(game.base),dll_sha256=digest,
             stopped=stopped,entry_restored=restored,native_stereo_verified=False,
             test=dict(yaw=a.yaw,offset=a.offset,fov=a.fov,rebuild=a.rebuild),samples=frames)

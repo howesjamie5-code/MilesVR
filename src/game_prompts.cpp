@@ -13,7 +13,7 @@ using namespace spidy::game_prompts;
 
 namespace {
 // The UI's markup resolver (a pointer to the object), and its slot.
-constexpr uintptr_t resolverGlobal = 0x7be5ba0;
+constexpr uintptr_t resolverGlobal = 0x859bf40;
 constexpr unsigned resolveSlot = 5;
 using Resolve = void(__fastcall*)(void*, void*, const char*);
 Resolve original{};
@@ -21,7 +21,7 @@ void* target{};
 // Research: the game's calls into Flash (the UI's call wrapper, which
 // game_menu hooks in a VR session; here only where it has not), by name with
 // their first arguments. A Scaleform value as the game lays it out.
-constexpr uintptr_t invokeWrapper = 0x1d1cf30;
+constexpr uintptr_t invokeWrapper = 0x222bac0;
 struct GfxValue {
     unsigned char head[16];
     void* objects;
@@ -33,7 +33,7 @@ Invoke originalInvoke{};
 void* invokeTarget{};
 // Research: the game's localized texts (its lookup by tag hash, which
 // game_menu hooks in a VR session), those with markup in them.
-constexpr uintptr_t textLookup = 0x1749970;
+constexpr uintptr_t textLookup = 0x1c55d40;
 using Text = const char*(__fastcall*)(uint32_t, const char*);
 Text originalText{};
 void* textTarget{};
@@ -186,7 +186,7 @@ constexpr Call promptCalls[] = {
     {0x3896cd0, true},  // HidePlaceablePrompt
     {0x3896d00, false}, // SetPlaceablePromptProgress (a hold running on)
     {0x3895ca0, false}, // UpdateInWorldPrompt
-    {0x38982c8, false}, // POIInteractAvailable
+    {0x3df2498, false}, // POIInteractAvailable
     {0x3896e5c, false}, // AddQTE
     {0x3896eb8, false}, // UpdateQTE
     {0x3896e68, true},  // ClearQTE
@@ -195,7 +195,7 @@ constexpr Call promptCalls[] = {
     // naming its buttons as `[BTN_B]`. HideText(channel, ...) ends it. The
     // localized lookup never carried one of these texts, in two sessions.
     {0x4f44af0, false, 1}, // ShowText
-    {0x4f44b00, true},     // HideText
+    {0x57ac658, true},     // HideText
 };
 static_assert(std::size(promptCalls) == callNames);
 std::atomic<bool> reading{}, rewriting{};

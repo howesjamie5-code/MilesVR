@@ -14,32 +14,32 @@
 // registered while Spider-Man is played. Its R1 shot, measured October 7 by
 // tracing the game's own fire with the Impact Web: the hero's weapon state
 // (HeroWeaponStateFiringLocal) hands the weapon a fire event (vtable +0x108,
-// WeaponGame 0xe3bd80), on the main thread. That stores the event's aim in
-// the weapon (+0x670...) and fires (0x2150460): SpawnShot (vtable +0x110,
-// 0x2150830) takes the muzzle (vtable +0x160, 0x2150c40: the emitter
+// WeaponGame 0x1075f60), on the main thread. That stores the event's aim in
+// the weapon (+0x670...) and fires (0x265cf50): SpawnShot (vtable +0x110,
+// 0x265d320) takes the muzzle (vtable +0x160, 0x265d730: the emitter
 // component at +0x1b8 + 0x38 * index, the hero's wrists) and spawns the shot
-// actor (+0x2f8, 0x215c190), a ShotWebShooter (vtable 3907d30) whose handle
+// actor (+0x2f8, 0x2668c80), a ShotWebShooter (vtable 3907d30) whose handle
 // the weapon keeps at +0x518 + 4 * index. Fired that way with Spidy's own
 // event and muzzle, the shot left the scripted hand and flew straight to the
 // aim point at 53-61 m/s, ending there or at the first surface it met.
 //
 // The event (0x44 bytes): the game's header (+0..+9); +0xa the emitter (0
 // right wrist, 1 left); +0xb 1, a shot; +0xc the shot's id, from the game's
-// own counter (0x215f040 on the shot table 656d9f0, which registers it in a
+// own counter (0x266bb30 on the shot table 656d9f0, which registers it in a
 // ring of 1024 slots a player, clearing what an old shot left in its slot);
-// +0x10 the target actor's reference (0x1f7b8e0 makes it from the actor);
+// +0x10 the target actor's reference (0x2489d60 makes it from the actor);
 // +0x18 which of its aim points; +0x20 the aim point; +0x2c the facing,
 // level; +0x38 1: no target, the aim point counts; +0x39 1: resolve the
 // target, whose aim point then replaces it; +0x3b 1, as the game sets it;
 // +0x3c and +0x40 the web shooter's own options, which it fills itself
-// (vtable +0x100, 0xe55310). Spidy's shots take no gadget ammo.
+// (vtable +0x100, 0x10967d0). Spidy's shots take no gadget ammo.
 //
 // The hit. A shot fired this way does nothing where it lands (measured
 // October 8 at a street crime): its damage action, from the shot's own
 // DamageData, carries no damage, type and status, and its handler
-// (ShotWebShooter vtable +0xd8, 0xd2a570) webs a limb only for the hero's
+// (ShotWebShooter vtable +0xd8, 0xf55310) webs a limb only for the hero's
 // melee web shots (the anim event HeroAnimWebShooterFireEvent sets the
-// weapon's options, +0x6ac/+0x6a8, around its fire at 0xe55800). So Spidy
+// weapon's options, +0x6ac/+0x6a8, around its fire at 0x1096cc0). So Spidy
 // hooks that handler: when one of its own shots (the ShotWebShooter keeps
 // its registry handle at +0x14 and its shot id at +0x104) collides
 // (event 0xd930bcb2), the event's HitActor (0x21eb297b), HitPosition

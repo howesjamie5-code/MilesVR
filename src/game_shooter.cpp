@@ -24,18 +24,18 @@ __declspec(dllexport) Data SpidyShooterData;
 namespace {
 // The camera's update, once a frame on the main thread in play and in fights
 // (where shots go out), and the muzzle every weapon asks its emitters for.
-constexpr uintptr_t frameRva = 0x897d30, muzzleRva = 0x2150c40;
+constexpr uintptr_t frameRva = 0xa24e90, muzzleRva = 0x265d730;
 // The weapon's fire event, its own part of one, the shot it spawns, the
 // game's shot ids and actor references.
-constexpr uintptr_t weaponEventRva = 0xe3bd80, fillEventRva = 0xe55310, spawnShotRva = 0x2150830,
-                    newShotIdRva = 0x215f040, makeRefRva = 0x1f7b8e0;
-constexpr uintptr_t webShooter = 0x391c950, shotTable = 0x656d9f0, registryTable = 0x7a44320,
-                    registryCount = 0x7a44340, actorRecords = 0x7a44380, actorRecordCount = 0x7a4439c;
+constexpr uintptr_t weaponEventRva = 0x1075f60, fillEventRva = 0x10967d0, spawnShotRva = 0x265d320,
+                    newShotIdRva = 0x266bb30, makeRefRva = 0x2489d60;
+constexpr uintptr_t webShooter = 0x3eec7b8, shotTable = 0x6f77340, registryTable = 0x83f9fa0,
+                    registryCount = 0x83f9fc0, actorRecords = 0x83fa000, actorRecordCount = 0x83fa01c;
 // The shot's event handler (ShotWebShooter vtable +0xd8) and the readers it
 // takes a collision's fields with: a field's index by its name hash, the
 // field, and the actor record an actor reference names.
-constexpr uintptr_t shotWebShooter = 0x3907d30, shotEventRva = 0xd2a570, findFieldRva = 0x1bcf3e0,
-                    readFieldRva = 0x1f9db60, refRecordRva = 0x1f7b760;
+constexpr uintptr_t shotWebShooter = 0x3e75998, shotEventRva = 0xf55310, findFieldRva = 0x20dbcd0,
+                    readFieldRva = 0x24abfe0, refRecordRva = 0x2489be0;
 constexpr uint32_t collisionEvent = 0xd930bcb2, hitActorField = 0x21eb297b, hitPositionField = 0x568973e3,
                    hitNormalField = 0xc3272bc7;
 // The player's gadgets. A component of an actor by its type (as
@@ -44,14 +44,14 @@ constexpr uint32_t collisionEvent = 0xd930bcb2, hitActorField = 0x21eb297b, hitP
 // it holds, for a trigger (vtable +0x188 and +0x190, every gadget's own:
 // float (weapon, index)). Every gadget's weapon class by its table, in the
 // order of spidy::Gadget.
-constexpr uintptr_t findInTableRva = 0x16799a0, findInListRva = 0x167ab40, weaponManagerType = 0x6dd84e0,
-                    weaponManagerTable = 0x38b59b8, weaponByIdRva = 0x21633c0, ammoNowRva = 0xe3b710,
-                    ammoMostRva = 0xe3b790;
-constexpr uintptr_t gadgetTables[] = {0x391c950, 0x3919a80, 0x391bfc0, 0x3919110, 0x391ace0,
-                                      0x391b1a0, 0x391b658, 0x39186a0, 0x391bb10};
+constexpr uintptr_t findInTableRva = 0x1b844b0, findInListRva = 0x1b85650, weaponManagerType = 0x78446a0,
+                    weaponManagerTable = 0x3e160d8, weaponByIdRva = 0x266feb0, ammoNowRva = 0x10759f0,
+                    ammoMostRva = 0x1075a70;
+constexpr uintptr_t gadgetTables[] = {0x3eec7b8, 0x3ee8ff0, 0x3eebe38, 0x3ee81e0, 0x3eea6e0,
+                                      0x3eeb030, 0x3eeb4e0, 0x3ee7698, 0x3eeb990};
 // Each gadget's own part of its fire event (vtable +0x100), in that order.
-constexpr uintptr_t gadgetFills[] = {0xe55310, 0xe4e6f0, 0xe535d0, 0xe4d960, 0xe51950,
-                                     0xe51f90, 0xe52620, 0xe490a0, 0xe52eb0};
+constexpr uintptr_t gadgetFills[] = {0x10967d0, 0x108d340, 0x1094a90, 0x108bb90, 0x1090f50,
+                                     0x1093560, 0x1093b90, 0x10869e0, 0x1094370};
 // Equipping one, as the game's own wheel does (791c20, 793320): the hero's
 // GameInventoryManager (by its type), its GameEquipInventory (bbfba0), whose
 // items (its vtable +0x3a0 the count, +0x1b0 one by index) are weapons at
@@ -60,11 +60,11 @@ constexpr uintptr_t gadgetFills[] = {0xe55310, 0xe4e6f0, 0xe535d0, 0xe4d960, 0xe
 // inventory allows it (+0x30), through a request (bbb8d0, its byte 4 set)
 // that the game carries out the next frame (bbb9a0). The game's own call
 // with a GUID (bbc2d0) makes the item when it finds none: never used here.
-constexpr uintptr_t inventoryManagerType = 0x6e096f0, equipInventoryTable = 0x38e2440, inventoryOfRva = 0xbbfba0,
-                    itemCountRva = 0x1f60060, itemAtRva = 0x1f55ed0, canEquipRva = 0x1f56900,
-                    offeredRva = 0xbbc3d0, requestRva = 0xbbb8d0, equipRva = 0xbbb9a0;
+constexpr uintptr_t inventoryManagerType = 0x787a980, equipInventoryTable = 0x3e47d48, inventoryOfRva = 0xdaa190,
+                    itemCountRva = 0x246e4e0, itemAtRva = 0x2464350, canEquipRva = 0x2464d80,
+                    offeredRva = 0xda6690, requestRva = 0xda5b60, equipRva = 0xda5c30;
 // A weapon's charge to fire (vtable +0x180: bool (weapon, cost, trigger)).
-constexpr uintptr_t hasAmmoRva = 0xe3b650;
+constexpr uintptr_t hasAmmoRva = 0x1075930;
 using FindComponent = uintptr_t (*)(void*, const void*);
 using WeaponById = uintptr_t (*)(void*, uint32_t);
 using Ammo = float (*)(void*, uint32_t);
@@ -868,8 +868,8 @@ uint32_t game_shooter::start(uintptr_t gameBase) {
         };
         if (!entry(frameRva, {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x44, 0x88, 0x48, 0x20, 0x44, 0x88, 0x40,
                               0x18, 0x55}) ||
-            !entry(muzzleRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x28, 0x05, 0x4f,
-                               0x00, 0x6f}) ||
+            !entry(muzzleRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x60, 0x0f, 0x28, 0x05, 0x8f,
+                               0x1a, 0x71}) ||
             !entry(weaponEventRva, {0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x41, 0x56, 0x48,
                                     0x81, 0xec, 0xb0}) ||
             !entry(fillEventRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xfa,
@@ -911,12 +911,12 @@ uint32_t game_shooter::start(uintptr_t gameBase) {
                                       0x8b, 0xfa, 0x48}) &&
                 entry(ammoNowRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xfa, 0x48, 0x8b,
                                    0xd9, 0x33}) &&
-                entry(ammoMostRva, {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xda, 0xe8, 0x03, 0x85, 0x31, 0x01,
+                entry(ammoMostRva, {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xda, 0xe8, 0x13, 0xad, 0x5e, 0x01,
                                     0x48, 0x85, 0xc0}) &&
                 entry(hasAmmoRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x30, 0x0f, 0x29, 0x74,
                                    0x24, 0x20, 0x41}) &&
                 entry(inventoryOfRva, {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x81, 0xc1, 0x18, 0x01, 0x00, 0x00,
-                                       0xe8, 0x3e, 0x9d}) &&
+                                       0xe8, 0x5e, 0xa2}) &&
                 entry(offeredRva, {0x48, 0x83, 0xec, 0x28, 0x83, 0xba, 0x88, 0x00, 0x00, 0x00, 0x03, 0x75, 0x13,
                                    0x48, 0x8b, 0xca}) &&
                 entry(requestRva, {0xc7, 0x41, 0x08, 0x4c, 0xab, 0xac, 0x6d, 0x48, 0x8b, 0xc1, 0xc7, 0x01, 0xff,
@@ -927,7 +927,7 @@ uint32_t game_shooter::start(uintptr_t gameBase) {
                 entry(itemAtRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x70, 0x48, 0x8b, 0xf9, 0x8b,
                                   0xda, 0x48}) &&
                 entry(canEquipRva, {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x83, 0xc1, 0x50,
-                                    0xe8, 0x4e, 0x9c}) &&
+                                    0xe8, 0x8e, 0x40}) &&
                 table(equipInventoryTable, 0x30, canEquipRva) && table(equipInventoryTable, 0x1b0, itemAtRva) &&
                 table(equipInventoryTable, 0x3a0, itemCountRva);
             for (size_t k = 0; k < std::size(gadgetTables); ++k)

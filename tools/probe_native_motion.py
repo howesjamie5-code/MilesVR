@@ -63,10 +63,10 @@ def main():
     bridge_active = motion_active = False
     try:
         pe = PE(game.path.read_bytes())
-        entries = (*HOOKS, 0x1fbe360, 0x1fbda50, 0x1fc2e10, 0x1fb88d0, 0x16769f0, 0xa7b3a0, 0x1f9db60)
+        entries = (*HOOKS, 0x24cc6b0, 0x24cbda0, 0x24d1160, 0x24c6c20, 0x1b81500, 0xc63ab0, 0x24abfe0)
         if any(game.read(game.base+rva, 16) != pe.bytes(rva, 16) for rva in entries):
             raise RuntimeError('A required native motion entry is already patched')
-        LIVE_VTABLES['hero_mover'] = 0x38b2c98
+        LIVE_VTABLES['hero_mover'] = 0x3e123d8
         found = game.registered_candidates()
         heroes = [x for x in found if x['kind'] == 'hero_local']
         if len(heroes) != 1:
@@ -77,7 +77,7 @@ def main():
             raise RuntimeError('Exactly one local movement manager is required')
         handle = struct.unpack('<I', game.read(int(movers[0]['object'], 16)+0xdb4, 4))[0]
         mover = component(game, handle)
-        if game.pointer(mover) != game.base+0x4f70168 or game.pointer(mover+8) != int(hero['actor_record'], 16):
+        if game.pointer(mover) != game.base+0x57d7700 or game.pointer(mover+8) != int(hero['actor_record'], 16):
             raise RuntimeError('Local movement ownership failed')
         process = open_process(0x0400 | 0x0010 | 0x0020 | 0x0008 | 0x0002, False, game.pid)
         if not process:
