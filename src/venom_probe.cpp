@@ -151,16 +151,14 @@ void spidy::venom_probe::sample(uintptr_t base, uintptr_t record) {
                     ++words;
                 }
             if (!line.empty())
-                std::fprintf(out, "%llu,diff,%llx,%s,,%s
-", now - started,
+                std::fprintf(out, "%llu,diff,%llx,%s,,%s\n", now - started,
                              static_cast<unsigned long long>(w.address), w.name.c_str(), line.c_str());
         } else if (got) {
             std::fprintf(out, "%llu,snapshot,%llx,%s,,", now - started, static_cast<unsigned long long>(w.address),
                          w.name.c_str());
             for (size_t k = 0; k < got; ++k)
                 std::fprintf(out, "%02x", bytes[k]);
-            std::fputc('
-', out);
+            std::fputc('\n', out);
         }
         if (got)
             w.last.assign(bytes.begin(), bytes.begin() + got);
