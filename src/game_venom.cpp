@@ -3,12 +3,16 @@
 #include <windows.h>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace {
 // The component registry (game_targets.cpp): 16-byte entries of an address and a generation; a
 // component's handle (+0x14) is its generation << 20 | its entry's index.
 constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
-constexpr ULONGLONG scanMs = 1000;
+// Searched again this often while one is known (another may have appeared), and at most this often
+// while none is.
+constexpr ULONGLONG rescanMs = 2000, scanMs = 1000;
+constexpr size_t mostCandidates = 8;
 
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
@@ -29,69 +33,107 @@ struct Head {
     uintptr_t vtable, record;
     uint32_t pad, handle;
 };
-// The player's HeroMeleeManager, the registry entry it was found in, and its actor record.
-uintptr_t component{}, owner{};
-uint32_t entryIndex{}, entryGeneration{};
+struct Candidate {
+    uintptr_t address{};
+    uint32_t index{}, generation{};
+};
+std::vector<Candidate> candidates;
+uintptr_t owner{};
+// The one read from, the meter it read when chosen, and whether that has moved since.
+uintptr_t chosen{};
+float chosenAt{};
+bool moved{};
 ULONGLONG lastScan{};
 
-bool mine(uintptr_t base, uintptr_t address, uintptr_t record, uint32_t index, uint32_t generation) {
+bool mine(uintptr_t base, const Candidate& c, uintptr_t record) {
     Head h{};
-    return read(address, &h, sizeof(h)) && h.vtable == base + spidy::venom_punch::meleeManagerVtable &&
-           h.record == record && h.handle == (generation << 20 | index);
+    return read(c.address, &h, sizeof(h)) && h.vtable == base + spidy::venom_punch::meleeManagerVtable &&
+           h.record == record && h.handle == (c.generation << 20 | c.index);
 }
 // Still the registry's: a challenge restarted, or a load, makes a new component and may leave the old
 // one in memory as it was (0.1.10: the meter read as spent while the game's showed full).
-bool registered(uintptr_t base) {
+bool registered(uintptr_t base, const Candidate& c) {
     uintptr_t table{};
     Entry e{};
-    return read(base + registryTable, &table, 8) && table && read(table + entryIndex * 16ull, &e, sizeof(e)) &&
-           e.address == component && e.generation == entryGeneration;
+    return read(base + registryTable, &table, 8) && table && read(table + c.index * 16ull, &e, sizeof(e)) &&
+           e.address == c.address && e.generation == c.generation;
 }
-bool find(uintptr_t base, uintptr_t record) {
+void scan(uintptr_t base, uintptr_t record) {
+    candidates.clear();
     uintptr_t table{};
     int32_t count{};
     if (!read(base + registryTable, &table, 8) || !table || !read(base + registryCount, &count, 4) || count <= 0 ||
         count > 0x100000)
-        return false;
-    for (uint32_t i = 0; i < static_cast<uint32_t>(count); ++i) {
+        return;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(count) && candidates.size() < mostCandidates; ++i) {
         Entry e{};
-        if (read(table + i * 16ull, &e, sizeof(e)) && e.address >= 0x10000 && !(e.address % 8) && e.generation &&
-            e.generation <= 0xfff && mine(base, e.address, record, i, e.generation)) {
-            component = e.address;
-            entryIndex = i;
-            entryGeneration = e.generation;
-            return true;
-        }
+        if (!read(table + i * 16ull, &e, sizeof(e)) || e.address < 0x10000 || e.address % 8 || !e.generation ||
+            e.generation > 0xfff)
+            continue;
+        const Candidate c{e.address, i, e.generation};
+        if (mine(base, c, record))
+            candidates.push_back(c);
     }
-    return false;
+}
+bool meter(uintptr_t address, float& value) {
+    return read(address + spidy::venom_punch::meterOffset, &value, 4) && std::isfinite(value) && value >= 0 &&
+           value <= spidy::venom_punch::fullMeter * 2;
 }
 } // namespace
 
 spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t record) {
     Meter out;
     if (!base || !record) {
-        component = owner = 0;
+        reset();
         return out;
     }
-    if (record != owner ||
-        (component && (!registered(base) || !mine(base, component, record, entryIndex, entryGeneration)))) {
-        component = 0;
+    if (record != owner) {
+        candidates.clear();
+        chosen = 0;
         owner = record;
+        lastScan = 0;
     }
+    std::erase_if(candidates, [&](const Candidate& c) { return !registered(base, c) || !mine(base, c, record); });
     const ULONGLONG now = GetTickCount64();
-    if (!component && now - lastScan >= scanMs) {
+    if (now - lastScan >= (candidates.empty() ? scanMs : rescanMs)) {
         lastScan = now;
-        find(base, record);
+        scan(base, record);
     }
-    float value{};
-    if (component && read(component + venom_punch::meterOffset, &value, 4) && std::isfinite(value) &&
-        value >= 0 && value <= venom_punch::fullMeter * 2) {
-        out.address = component + venom_punch::meterOffset;
-        out.value = value;
+    // The highest meter is the one the game counts in: the others have stood still.
+    uintptr_t best{};
+    float bestValue = -1;
+    for (const auto& c : candidates) {
+        float value{};
+        if (!meter(c.address, value))
+            continue;
+        if (value > bestValue) {
+            if (best)
+                out.other = std::max(out.other, bestValue);
+            best = c.address;
+            bestValue = value;
+        } else {
+            out.other = std::max(out.other, value);
+        }
     }
+    out.candidates = static_cast<uint32_t>(candidates.size());
+    if (!best) {
+        chosen = 0;
+        return out;
+    }
+    if (best != chosen) {
+        chosen = best;
+        chosenAt = bestValue;
+        moved = false;
+    }
+    moved = moved || bestValue != chosenAt;
+    out.value = bestValue;
+    if (candidates.size() == 1 || moved)
+        out.address = best + venom_punch::meterOffset;
     return out;
 }
 void spidy::game_venom::reset() {
-    component = owner = 0;
+    candidates.clear();
+    owner = chosen = 0;
+    moved = false;
     lastScan = 0;
 }

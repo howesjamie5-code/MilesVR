@@ -131,7 +131,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 37, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 38, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -347,8 +347,14 @@ struct XrData {
     // emptied.
     float venomMeter = -1, venomGrip{}, venomGlow{};
     uint32_t venomFlags{}, venomFills{}, venomCharges{}, venomBlows{}, venomSpent{};
+    // Version 38: the player's HeroMeleeManagers found (game_venom.hpp), the
+    // highest meter of the others (-1: none), and whether the meter is
+    // written to (the only one, or its meter has moved by itself).
+    uint32_t venomCandidates{};
+    float venomOther = -1;
+    uint32_t venomWritable{}, venomSpare{};
 };
-static_assert(sizeof(XrData) == 1184);
+static_assert(sizeof(XrData) == 1200);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -2647,6 +2653,9 @@ DWORD WINAPI run(void*) {
                         d.venomCharges = venomCharges;
                         d.venomBlows = static_cast<uint32_t>(venomBlowsBefore);
                         d.venomSpent = static_cast<uint32_t>(venomSpentBefore);
+                        d.venomCandidates = venomMeter.candidates;
+                        d.venomOther = venomMeter.other;
+                        d.venomWritable = venomMeter.address != 0;
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];

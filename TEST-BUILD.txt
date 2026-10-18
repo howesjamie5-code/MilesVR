@@ -1,5 +1,23 @@
-MilesVR 0.1.15 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.16 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.15: THE VENOM METER AFTER A RESTART, AND A CRASH
+--------------------------------------------------
+Your 0.1.15 test: three venom punches, the meter refilling in about ten hits
+each time. Then you restarted the challenge: the meter showed full, the grip
+shot webs, and the game crashed soon after. The mod had picked up a copy of
+Miles's melee data the game was not using (it read 0, not full), and the
+crash came right after the mod added a hit's venom to it.
+Now the mod keeps every copy it finds, reads the one that counts (the
+highest), looks again every 2 seconds, and only changes the meter once it is
+sure it has the game's own. The session report records how many copies it
+found.
+
+What to try:
+1. Venom punch as before, a few times.
+2. Restart the challenge with the meter full: do the webs switch off and the
+   venom punch work? Does the game stay up?
+3. Keep the reports folder, especially if anything goes wrong.
 
 What changed since 0.1.14: YOUR HITS CHARGE THE VENOM METER
 --------------------------------------------------
