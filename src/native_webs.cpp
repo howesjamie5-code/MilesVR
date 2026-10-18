@@ -13,6 +13,10 @@
 #include <windows.h>
 using namespace spidy;
 namespace {
+// MilesVR: Hero::HeroRopeManager in MilesMorales.exe. Each of its 16 rope slots is 0x10 longer
+// (0x7d8, not 0x7c8), so the fields after them are 0x100 further on: the rope update (7ca2f0) reads
+// +7dd0..+7e48 and points at +7e78 where Spider-Man.exe's (676dd0) has +7cd0..+7d48 and +7d78. The
+// hashes (+7e40) and the hands' point arrays (+7e60, +7e78, +7e90, +7ea8) here are moved by the same.
 using Update = void (*)(void*, float);
 using Ensure = bool (*)(void*, uint32_t*, uint32_t, uint32_t, void*, uint32_t, uint32_t);
 using Target = void (*)(void*, uint32_t, const float*);
@@ -235,8 +239,8 @@ void update(void* manager, float dt) {
         // hand) from skeleton joints whose hashes (7d40..7d5f) are non-zero.
         // Supply tracked positions for this update only and restore the hashes.
         uint32_t hashes[8]{};
-        std::memcpy(hashes, reinterpret_cast<void*>(mgr + 0x7d40), sizeof(hashes));
-        std::memset(reinterpret_cast<void*>(mgr + 0x7d40), 0, sizeof(hashes));
+        std::memcpy(hashes, reinterpret_cast<void*>(mgr + 0x7e40), sizeof(hashes));
+        std::memset(reinterpret_cast<void*>(mgr + 0x7e40), 0, sizeof(hashes));
         Vec3 starts[2]{};
         bool wrote[2]{};
         for (unsigned hand = 0; hand < 2; ++hand) {
@@ -253,8 +257,8 @@ void update(void* manager, float dt) {
             // wrist as a second strand. Grip (0,0,0) keeps one hand point, so
             // the rope runs straight from Start to the anchor.
             const Vec3 none{};
-            for (const auto [offset, point] : {std::pair{0x7d60, start}, std::pair{0x7d78, none},
-                                               std::pair{0x7d90, start}, std::pair{0x7da8, start}})
+            for (const auto [offset, point] : {std::pair{0x7e60, start}, std::pair{0x7e78, none},
+                                               std::pair{0x7e90, start}, std::pair{0x7ea8, start}})
                 std::memcpy(reinterpret_cast<void*>(mgr + offset + hand * 12), &point, sizeof(point));
             starts[hand] = start;
             wrote[hand] = true;
@@ -301,17 +305,17 @@ void update(void* manager, float dt) {
             lay.rope = slot;
             laying[hand] = lay;
             const Vec3 from = lay.points[lay.count - 1];
-            std::memcpy(reinterpret_cast<void*>(mgr + 0x7d60 + hand * 12), &from, sizeof(from));
+            std::memcpy(reinterpret_cast<void*>(mgr + 0x7e60 + hand * 12), &from, sizeof(from));
         }
         originalUpdate(manager, dt);
         const auto laid = laying;
         laying = {};
-        std::memcpy(reinterpret_cast<void*>(mgr + 0x7d40), hashes, sizeof(hashes));
+        std::memcpy(reinterpret_cast<void*>(mgr + 0x7e40), hashes, sizeof(hashes));
         // Start is the wrist again between updates: the hero's own update
         // (95f6c0) takes the hand's velocity from how it moves.
         for (unsigned hand = 0; hand < 2; ++hand)
             if (laid[hand].rope)
-                std::memcpy(reinterpret_cast<void*>(mgr + 0x7d60 + hand * 12), &starts[hand], sizeof(Vec3));
+                std::memcpy(reinterpret_cast<void*>(mgr + 0x7e60 + hand * 12), &starts[hand], sizeof(Vec3));
         // 679dc0 starts each attached rope's points (rope +1c) at Start. A
         // released one (+70c bit 2) drifts from it, and the tail above moved
         // point 0 away, so a gap here means the rope does not leave the wrist.

@@ -1,9 +1,21 @@
-MilesVR 0.1.2 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.3 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.1
+What changed since 0.1.2
 ------------------------
-0.1.0 and 0.1.1 crashed the moment the headset started tracking. Found by
+0.1.2 no longer crashed: the menus showed in the headset and VR took over the
+camera, then stopped with "No native eye images reached OpenXR within 3
+seconds" (code 1). Miles Morales keeps the eye's render job 16 bytes further
+into the game's render context than Remastered did, so Spidy never saw an eye
+image. Fixed, with three more fields of the same kind:
+- the render context's anti-aliasing switch (+0x424, was +0x40c): Spidy was
+  writing to the wrong field;
+- the HUD panel's texture flag (+0xd0, was +0xc0);
+- the web ropes' bookkeeping after the 16 rope slots (0x100 further on), which
+  the webs you see while swinging use.
+
+Before that, 0.1.2 fixed the crash when the headset began tracking:
+0.1.0 and 0.1.1 crashed the moment the headset started tracking, found by
 switching Spidy's VR hooks off in halves with the headset on: the hook on the
 game's view update. Miles Morales's version of that function takes a second
 argument (a flag that makes it resize the view's render buffers) that Spider-Man

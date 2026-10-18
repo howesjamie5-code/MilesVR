@@ -918,12 +918,16 @@ bool shareExposure(uintptr_t job, unsigned eye) {
     std::memcpy(reinterpret_cast<void*>(job + 0x16f8), &shared, 8);
     return true;
 }
+// The render context copyJob fills: MilesMorales.exe keeps the view's job at +4c0 (copyJob 1e2dcd2,
+// Spider-Man.exe +4b0) and its anti-aliasing at +424 (TemporalAa's test at 1d4d9a0 reads the
+// context's copy at 83e3d00 + 424; Spider-Man.exe +40c).
+constexpr uintptr_t kContextJob = 0x4c0, kContextAntiAliasing = 0x424;
 void copyJob(void* view, void* settings, void* a, void* b, bool c) {
     originalCopyJob(view, settings, a, b, c);
     if (!enabled)
         return;
     if (SpidyCommandData.tracing) {
-        const auto job = pointer(reinterpret_cast<uintptr_t>(settings) + 0x4b0);
+        const auto job = pointer(reinterpret_cast<uintptr_t>(settings) + kContextJob);
         if (reinterpret_cast<uintptr_t>(view) == pointer(base + 0x83ea910))
             tracedJobs[0] = job;
         for (unsigned i = 0; i < 2; ++i)
@@ -932,7 +936,7 @@ void copyJob(void* view, void* settings, void* a, void* b, bool c) {
     }
     for (unsigned i = 0; i < 2; ++i)
         if (view == eyes[i].load()) {
-            const auto job = reinterpret_cast<void*>(pointer(reinterpret_cast<uintptr_t>(settings) + 0x4b0));
+            const auto job = reinterpret_cast<void*>(pointer(reinterpret_cast<uintptr_t>(settings) + kContextJob));
             if (!job)
                 return;
             // The job's render context (0x7a0 bytes, copied to 7a2e200 while its
@@ -943,7 +947,7 @@ void copyJob(void* view, void* settings, void* a, void* b, bool c) {
             // then had no anti-aliasing at all.
             if (eyeTemporal.load() & 2) {
                 const uint32_t temporal = 1;
-                std::memcpy(static_cast<uint8_t*>(settings) + 0x40c, &temporal, 4);
+                std::memcpy(static_cast<uint8_t*>(settings) + kContextAntiAliasing, &temporal, 4);
             }
             if (shareExposure(reinterpret_cast<uintptr_t>(job), i)) {
                 AcquireSRWLockExclusive(&telemetry);

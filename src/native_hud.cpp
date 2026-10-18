@@ -160,7 +160,9 @@ void stream(void* self) {
         // The panel's material still holds the old texture: the follower's
         // update, later this frame, binds the new one when +c0 is clear.
         const uint8_t bind{};
-        write(hudFollower + 0xc0, &bind, 1);
+        // +d0 in MilesMorales.exe (the follower's update, PlayerModelHudFollower slot 0, writes it;
+        // Spider-Man.exe's +c0): Miles Morales adds 16 bytes to the follower after +60.
+        write(hudFollower + 0xd0, &bind, 1);
     }
     vrTexture = vr && target && made[0] == window[0] && made[1] == window[1] ? target : 0;
     const bool back = !vr && size[0] == gameBase[0] && size[1] == gameBase[1] && !resized;
