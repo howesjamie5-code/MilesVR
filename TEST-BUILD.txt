@@ -4,7 +4,7 @@ MilesVR 0.1.7 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 What changed since 0.1.6: THE VENOM RECORDING BUILD (watches every component now)
 --------------------------------------------------
 Same as 0.1.5, plus a recorder for Miles's venom meter (for the venom punch to
-come). It only reads the game's memory, and writes reportsenom-probe-*.csv.
+come). It only reads the game's memory, and writes reports\venom-probe-*.csv.
 
 What to do (about 5 minutes):
 1. Start VR as usual and load a save where you can fight (street thugs are fine).
