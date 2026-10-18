@@ -1,5 +1,28 @@
-MilesVR 0.1.9 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.10 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.9: THE VENOM PUNCH IS ON THE RIGHT GRIP
+--------------------------------------------------
+Your idea: the venom punch moves from the right stick to the RIGHT GRIP.
+(In 0.1.9, holding the right stick in also switched on the pad layer - the
+both-sticks mode - which cancelled the charge.)
+- When the venom meter is FULL, the right controller's webs switch OFF (no
+  web, no web ball, no aim marker on that hand) and the right hand rumbles.
+  The left hand swings as usual. A web the right hand is holding when the
+  meter fills stays until you let go, so you don't drop out of a swing.
+- HOLD the RIGHT GRIP: the fist crackles with gold venom; a strong rumble
+  says it is charged (about a third of a second).
+- PUNCH toward the MARKED enemy with your right fist: within 2 m it lands on
+  him at once; farther, the web strike flies you to him and lands it.
+- The meter empties, and the right webs come back.
+- The right stick's click is LB + RB again (doors and grates), but never in
+  a fight, so it throws nothing at the enemies.
+
+What to try:
+1. Fill the meter. Do the right webs stop, with a rumble?
+2. Hold the right grip until the rumble. Does the fist glow?
+3. Punch toward the marked enemy, up close and from across the room. Does he
+   fly off stunned, does the meter empty, and do the right webs come back?
 
 What changed since 0.1.8: THE VENOM PUNCH LANDS, NO MORE THROWS
 --------------------------------------------------

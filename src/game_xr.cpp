@@ -727,6 +727,11 @@ DWORD WINAPI run(void*) {
         uint64_t venomBlowsBefore{}, venomSpentBefore{};
         float venomGlow{};
         bool venomFullBefore{};
+        // The right web button while the meter is full (the venom charge's,
+        // 0 otherwise), and whether a web the right hand held as the meter
+        // filled still goes on until it is let go.
+        float venomGrip{};
+        bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{};
         // Seconds since an enemy was last within a strike's reach: in a fight
         // the right stick's click is no LB + RB, which the game takes there
         // as its web throw of the nearest object at them (the user, 0.1.8: "it
@@ -1608,6 +1613,26 @@ DWORD WINAPI run(void*) {
                         for (auto& hand : motion.swing.hands)
                             hand.trigger = hand.grip = 0;
                     }
+                    // Miles's venom punch: with the meter full the right controller
+                    // shoots no web (nor web ball); its web button charges the right
+                    // fist (venom_punch.hpp). A web it holds as the meter fills
+                    // stays until let go: no drop out of a swing.
+                    {
+                        auto& right = motion.swing.hands[1];
+                        const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
+                                               !calibrationInput && !padLayer.latched();
+                        if (!venomHand)
+                            venomKeepWeb = false;
+                        else if (!venomHandBefore && swingState.webs[1].attached && right.grip > venom_punch::gripOff)
+                            venomKeepWeb = true;
+                        if (venomKeepWeb && right.grip < venom_punch::gripOff)
+                            venomKeepWeb = false;
+                        venomHandBefore = venomHand;
+                        venomHandOn = venomHand && !venomKeepWeb;
+                        venomGrip = venomHandOn ? right.grip : 0.f;
+                        if (venomHandOn)
+                            right.grip = right.trigger = 0;
+                    }
                     // Slow motion: the left thumbstick's click, in VR play outside the calibration.
                     const bool slowAllowed = immersive && calibration.phase() == CalibrationPhase::idle;
                     stepSlowMotion(frame.seconds,
@@ -2294,18 +2319,16 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(1, 1);
                             message(3, 0, "Web pull - the game's LB + RB, for as long as you hold both web buttons");
                         }
-                        // Miles's venom punch: with the meter full, the right stick's
-                        // click held charges the right fist, and is no LB + RB
-                        // (venom_punch.hpp); the punch module lands the charged blow.
+                        // Miles's venom punch: with the meter full, the right web
+                        // button held charges the right fist (venom_punch.hpp); the
+                        // punch module lands the charged blow.
                         const bool venomFull = venom_punch::full(venomMeter.value);
-                        auto venom =
-                            venomCharge.update(frame.seconds, steering && !layerOn && !calibrationInput, venomFull,
-                                               frame.hands[1].stickClick, frame.hands[0].stickClick);
-                        if (calmSeconds < venom_punch::fightCalmSeconds)
-                            venom.pull = false;
+                        const auto venom = venomCharge.update(
+                            frame.seconds, steering && !layerOn && !calibrationInput, venomFull, venomGrip);
                         if (venomFull && !venomFullBefore && steering) {
                             runtime.haptic(1, .4f, .08f);
-                            message(3, 0, "Venom full - hold the right stick's click to charge your right fist");
+                            message(3, 0, "Venom full - the right hand's webs are off: hold its grip to charge "
+                                          "your fist");
                         }
                         venomFullBefore = venomFull;
                         if (venom.charged) {
@@ -2342,7 +2365,9 @@ DWORD WINAPI run(void*) {
                             }
                         }
                         const bool pulled =
-                            pullPress.update(frame.seconds, reaching, venom.pull, frame.hands[0].stickClick) ||
+                            pullPress.update(frame.seconds, reaching,
+                                             frame.hands[1].stickClick && calmSeconds >= venom_punch::fightCalmSeconds,
+                                             frame.hands[0].stickClick) ||
                             (yanked && playing);
                         // A yank at a thing the game is prompting for sends what it
                         // asks (its LT + RT for a vent as readily as its LB + RB for a
@@ -2905,6 +2930,9 @@ DWORD WINAPI run(void*) {
                         saved.aims[i] = aims.hands[i];
                         saved.offers[i] = pointing[i] ? *pointing[i] : offer_pointing::Pointed{};
                     }
+                    // The right hand shoots no web while it holds the venom.
+                    if (venomHandOn)
+                        saved.aims[1] = {};
                     saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
                     saved.strandUpper = webRopes.upper();
                     if (calibration.phase() != body_calibration::Phase::idle) {
@@ -3375,8 +3403,7 @@ DWORD WINAPI run(void*) {
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts (hold: step "
                                   "up to it), X opens the game menu (hold: the gadget wheel), the menu button "
                                   "pauses, the left stick's click slows time; a trigger pulled at your temple "
-                                  "scans; right stick: click is the game's LB + RB (venom full: hold it to charge "
-                                  "a venom punch), down heals, up is its LT + RT (vents)");
+                                  "scans; right stick: click is the game's LB + RB (not in a fight), down heals, up is its LT + RT (vents)");
                 }
             }
             {

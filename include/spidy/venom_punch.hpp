@@ -4,12 +4,11 @@
 #include <cstdint>
 
 // Miles's venom punch (MilesVR). With the venom meter full, the right
-// thumbstick's click held charges the right fist with venom; charged, the
-// next blow that fist lands (a punch, or the web strike it opens at the
-// marked enemy) is a venom blow and spends the meter. While the meter is
-// full the stick's click is no LB + RB (the web pull of doors and grates):
-// the user's design, October 18, so the two never clash. Below full it is
-// the LB + RB it was.
+// controller shoots no web: its web button (the grip) held charges the right
+// fist with venom; charged, a right punch at the marked enemy is a venom blow
+// (game_punch) and spends the meter. The user's design, October 19, after
+// the right thumbstick's click of 0.1.8 and 0.1.9 (a stick held in is half
+// of the pad layer's chord, and in 0.1.9 it latched the pad layer instead).
 namespace spidy::venom_punch {
 // The meter: a float from 0 to fullMeter at +meterOffset in the player's
 // Hero::HeroMeleeManager (its vtable, MilesMorales.exe 4.630.0.0). Found
@@ -18,14 +17,16 @@ namespace spidy::venom_punch {
 // 41.75 at the next heal (reports\venom-probe-20261018-234812.csv).
 constexpr uintptr_t meleeManagerVtable = 0x3e122a8, meterOffset = 0x28c;
 constexpr float fullMeter = 100;
-// Within this long of an enemy near, the player is in a fight: the click is
-// no LB + RB there (the game's web throw), full meter or not.
+// Within this long of an enemy near, the player is in a fight: the right
+// stick's click is no LB + RB there (the game's web throw of an object).
 constexpr float fightCalmSeconds = 3;
 inline bool full(float meter) {
     return std::isfinite(meter) && meter >= fullMeter - .01f;
 }
 
-// The right stick's click, read as the venom charge or as the pull.
+// The web button pressed past `on` and let go below `off`.
+constexpr float gripOn = .6f, gripOff = .35f;
+// The right web button, read as the venom charge.
 class Charge {
   public:
     // Held this long, the fist is charged; let go charged, it stays charged
@@ -35,20 +36,15 @@ class Charge {
         float glow{};   // 0..1: how bright the fist's venom shows
         bool armed{};   // the next blow of the right fist is venom
         bool charged{}; // it became armed at this update (a rumble)
-        bool pull{};    // the click goes on as the pull's (PullPress's `mine`)
     };
     // seconds: since the previous update. play: VR play, the right fist free
-    // to punch. full: the meter is full. held: the right stick's click.
-    // other: the left stick's click (both together are the pad layer's
-    // chord: no charge from it).
-    State update(float seconds, bool play, bool full, bool held, bool other) {
+    // to punch. full: the meter is full. grip: the right web button, 0..1.
+    State update(float seconds, bool play, bool full, float grip) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
         State out;
-        out.pull = held && !full;
-        if (!held)
-            chord_ = false;
-        chord_ = chord_ || (held && other);
-        if (!play || !full || chord_) {
+        held_ = std::isfinite(grip) && grip >= (held_ ? gripOff : gripOn);
+        const bool held = held_;
+        if (!play || !full) {
             charge_ = keep_ = 0;
             return out;
         }
@@ -69,7 +65,7 @@ class Charge {
         out.glow = out.armed && !held ? std::min(1.f, keep_ / fadeSeconds) : charge_;
         return out;
     }
-    // The venom blow landed: the charge is gone, and a click still held
+    // The venom blow landed: the charge is gone, and a grip still held
     // charges nothing more until it is let go.
     void spent() {
         charge_ = keep_ = 0;
@@ -78,6 +74,6 @@ class Charge {
 
   private:
     float charge_{}, keep_{};
-    bool chord_{}, spent_{};
+    bool held_{}, spent_{};
 };
 } // namespace spidy::venom_punch
