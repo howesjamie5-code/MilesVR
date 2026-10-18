@@ -85,7 +85,11 @@ using Lens = void (*)(Descriptor*, float, float, float, float, float, float, flo
                       bool);
 using Tone = uint64_t (*)(void*, void*, void*, void*, void*, uint64_t);
 using RenderOffscreen = uint8_t (*)();
-Maintain originalMaintain{}, originalUpdate{}, originalCopyFinal{};
+Maintain originalMaintain{}, originalCopyFinal{};
+// MilesMorales.exe's view update takes a flag in rdx that Spider-Man.exe's did not: with it set
+// the update resizes the view's render buffers (1d7f900). It must reach the game as the caller gave it.
+using Update = void (*)(void*, uint8_t);
+Update originalUpdate{};
 Tone originalTone{};
 Submit originalSubmit{};
 RenderOffscreen originalRenderOffscreen{};
@@ -1025,11 +1029,11 @@ uint64_t tone(void* a, void* b, void* settings, void* view, void* e, uint64_t ge
         genericView = 0;
     return originalTone(a, b, settings, view, e, genericView);
 }
-void update(void* view) {
+void update(void* view, uint8_t resize) {
     for (unsigned i = 0; i < 2; ++i)
         if (view == eyes[i].load())
             ++updates[i];
-    originalUpdate(view);
+    originalUpdate(view, resize);
     if (enabled && (view == eyes[0].load() || view == eyes[1].load()) && owned(view)) {
         // +1708 and +170c are the processor's copy of the view's adapted and
         // measured luminance: 18a01c0 reads the "Adapted Lum" buffer back into

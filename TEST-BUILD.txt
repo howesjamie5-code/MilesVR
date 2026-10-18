@@ -1,18 +1,19 @@
-MilesVR 0.1.1 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.2 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.0
+What changed since 0.1.1
 ------------------------
-0.1.0 crashed a few seconds after VR started. The cause found: START VR could
-not start the game itself (a check still looked for Spider-Man Remastered's
-wording), so VR attached to a game you had started yourself, without the
-settings VR needs (its own render memory, a small window, vertical sync and
-Windows.Gaming.Input off). With those, a VR session ran for 90 seconds without
-a crash on this PC (SteamVR's test headset, which cannot track, so the
-in-headset part is still yours to test).
+0.1.0 and 0.1.1 crashed the moment the headset started tracking. Found by
+switching Spidy's VR hooks off in halves with the headset on: the hook on the
+game's view update. Miles Morales's version of that function takes a second
+argument (a flag that makes it resize the view's render buffers) that Spider-Man
+Remastered's did not, and the hook passed only the first, so the game resized
+buffers at random and the GPU driver crashed. The hook now passes both. Every
+other hooked function was checked the same way; only the (still disabled)
+SPIDY VR settings tab has the same kind of change.
 
-IMPORTANT: close the game before you press START VR, and let the launcher
-start it. Your own game settings come back when the game closes.
+0.1.1 also fixed START VR so it starts the game itself again: close the game
+before you press START VR and let the launcher start it.
 
 An unofficial port of Spidy 0.3.8 by Ilya Mezerowsky (GPL-3.0,
 https://github.com/IlyaMez/SpidyVR) from Spider-Man Remastered to Miles Morales.
