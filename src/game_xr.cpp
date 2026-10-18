@@ -38,6 +38,7 @@
 #include "spidy/xr_layers.hpp"
 #include "spidy/xr_session.hpp"
 #include "spidy/menu_pointer.hpp"
+#include "spidy/venom_probe.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1418,6 +1419,8 @@ DWORD WINAPI run(void*) {
                     // once: before that the player presses blind, and the title
                     // screen's QUIT GAME is two moves from the top.
                     headSeen = headSeen || validTrackedPose(frame.head);
+                    // MilesVR research: the venom state's recording (venom_probe.hpp).
+                    venom_probe::sample(config.base, player.record);
                     const auto mapping =
                         game_pad::mappingFor(viewing, headSeen, screen, padLayer.latched());
                     const bool inPlay =
@@ -3320,6 +3323,7 @@ DWORD WINAPI run(void*) {
     if (padInstalled)
         game_pad::uninstall();
     game_menu::uninstall();
+    venom_probe::stop();
     // The game's own time back, and no blow still sounding. The ticket's
     // guard stays for as long as the game runs: it is what keeps a quit to
     // the main menu after VR from closing the game.

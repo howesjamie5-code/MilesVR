@@ -822,11 +822,11 @@ uint32_t hookMask() {
         return ~0u;
     std::wstring file(path);
     file = file.substr(0, file.find_last_of(L"\\/") + 1) + L"hook_mask.txt";
-    FILE* f = _wfopen(file.c_str(), L"r");
-    if (!f)
+    FILE* f{};
+    if (_wfopen_s(&f, file.c_str(), L"r") != 0 || !f)
         return ~0u;
     unsigned value = ~0u;
-    if (fscanf(f, "%x", &value) != 1)
+    if (fscanf_s(f, "%x", &value) != 1)
         value = ~0u;
     fclose(f);
     return value;
