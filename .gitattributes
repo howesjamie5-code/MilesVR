@@ -1,0 +1,2 @@
+# Shell scripts run on Linux (tools/spidy-linux.sh): Unix line endings in every checkout.
+*.sh text eol=lf

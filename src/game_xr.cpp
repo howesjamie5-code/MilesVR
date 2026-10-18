@@ -1,0 +1,3365 @@
+// Bounded first-person OpenXR integration using the game's two native views.
+#include "spidy/native_appearance.hpp"
+#include "spidy/native_body.hpp"
+// The input bridge remains a separately verified, separately stoppable module.
+#include "spidy/body_calibration.hpp"
+#include "spidy/crawl_stick.hpp"
+#include "spidy/eye_resolution.hpp"
+#include "spidy/monitor_rate.hpp"
+#include "spidy/eye_snapshot.hpp"
+#include "spidy/game_bridge_protocol.hpp"
+#include "spidy/game_grab.hpp"
+#include "spidy/game_menu.hpp"
+#include "spidy/game_offers.hpp"
+#include "spidy/enclosure.hpp"
+#include "spidy/game_pad.hpp"
+#include "spidy/game_prompts.hpp"
+#include "spidy/game_player.hpp"
+#include "spidy/game_punch.hpp"
+#include "spidy/gadget_wheel.hpp"
+#include "spidy/game_shooter.hpp"
+#include "spidy/game_steam.hpp"
+#include "spidy/game_swing.hpp"
+#include "spidy/game_time.hpp"
+#include "spidy/game_tracking.hpp"
+#include "spidy/game_warp.hpp"
+#include "spidy/hand_pose.hpp"
+#include "spidy/impact_sound.hpp"
+#include "spidy/native_eye_frame.hpp"
+#include "spidy/native_eye_gpu.hpp"
+#include "spidy/native_eye_history.hpp"
+#include "spidy/native_hud.hpp"
+#include "spidy/native_webs.hpp"
+#include "spidy/offer_pointing.hpp"
+#include "spidy/presentation_gate.hpp"
+#include "spidy/slow_motion.hpp"
+#include "spidy/vr_settings.hpp"
+#include "spidy/web_pull.hpp"
+#include "spidy/xr_layers.hpp"
+#include "spidy/xr_session.hpp"
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <windows.h>
+#include <mmsystem.h>
+using namespace spidy;
+struct XrConfig {
+    uint32_t magic = 0x53585243, version = 23, bytes = sizeof(XrConfig), pid{};
+    // record and mover are no longer used: VR starts with the game, before
+    // there is a player, and finds each new player itself (game_player).
+    uint64_t base{}, queue{}, bridgeModule{}, rayModule{}, motionModule{}, record{}, mover{};
+    uint32_t durationMs = 20000, eyeSize = defaultEyeSize;
+    float swingSpeed = 32;
+    // bit 0: CPU eye capture; bit 1: Spidy's overlay webs instead of the game's;
+    // bit 2: keep the stock camera as the game's active (monitor) view in VR;
+    // bit 3: no web grab (webs never catch props or thugs);
+    // bit 4: no eye occlusion (each eye draws everything in its view, hidden or not);
+    // bit 5: no body (the hero stays hidden in VR, the overlay draws gloves);
+    // bit 6: no punching (fists pass through thugs);
+    // bit 7: aim markers start hidden (the SPIDY VR tab shows them);
+    // bit 8: no webs in open air (a web that meets nothing within reach misses);
+    // bit 9: no web shooter (a free hand's trigger shoots nothing);
+    // bit 10: no T-pose calibration at the first gameplay of a session without
+    // one (the player skipped it before; the SPIDY VR tab still offers it);
+    // bit 11: flips, experimental (A and the left stick in the air flip the player; FlipMotion);
+    // bit 12: the trigger webs and the grip reels (WEB BUTTON: TRIGGER);
+    // bit 13: the view stays upright on walls (STAND ON WALLS: OFF);
+    // bit 14: walls are the game's (its wall crawl takes a player who flies
+    // into one, as before the swing's own walls);
+    // bit 15: no anti-aliasing for the eyes (each eye is its scene as rendered,
+    // at the eye's size, as before October 10's eighth build: upscale is not used);
+    // bit 16: the game renders its own view on the head in immersive VR too,
+    // for the monitor (as before October 10's eighth build; without it the monitor shows the
+    // left eye);
+    // bit 17: each eye makes its own set of the key light's shadow cascades,
+    // as before October 11 (without it both use one set, fitted to a lens
+    // covering both: SpidyEyeShadows);
+    // bit 18: no targets for screen-space reflections in the eyes;
+    // bit 19: not used (until October 15, webs as before October 12: PHYSICAL
+    // WEBS off; webs are always physical since);
+    // bit 20: the game's own button prompts are left alone (neither read
+    // for the button they ask for nor named with the VR control, and the
+    // interact button is the game's Y as before; the pad layer stays)
+    uint32_t options{};
+    // OpenXR runtime manifest the launcher chose; empty: Virtual Desktop's if
+    // installed, else Windows' active runtime.
+    wchar_t runtime[260]{};
+    // The rest of the VR settings a session starts from (options bits 3, 5-9
+    // and 11-13, swingSpeed, weight, hud and flipSpeed give the others):
+    // degrees per snap turn (0: none), controller vibration in percent, the
+    // game screen's size (0-2), degrees a second of smooth turning (0: the
+    // stick snap turns).
+    uint32_t snapTurn = 30, haptics = 100, screenSize = 1, smoothTurn{};
+    // Eye resolution in percent of the runtime's recommendation, per side
+    // (eye_resolution.hpp; with eyeSize set, 100), and the player's weight
+    // while webs fly them, in percent of real gravity (40-300).
+    uint32_t renderScale = 100, weight = 100;
+    // The player's T-pose calibration (body_calibration.hpp): the eye height
+    // and arm length their body is sized to, millimetres. Both 0: none yet.
+    uint32_t eyeHeightMm{}, armLengthMm{};
+    // The game's HUD in the headset: 0 off, 1 small, 2 medium, 3 large
+    // (native_hud.hpp); how fast a flip turns the player at full tilt of the
+    // left stick, degrees a second (90-480; FlipMotion::speed).
+    uint32_t hud = 2, flipSpeed = 180;
+    // Percent of the eye's size, per side, the eyes' scene is rendered at
+    // (50-100; eye_resolution.hpp): the engine's temporal anti-aliasing brings
+    // it to the eye's size. And how often the game's window gets the left eye
+    // while the game renders no view of its own: presents a second (1-240), 0
+    // every frame (monitor_rate.hpp).
+    uint32_t upscale = defaultEyeUpscale, monitorRate = defaultMonitorRate;
+    // Version 23: how much depth scenes have on the game screen: 0 none (the
+    // game's flat frame), 1 low, 2 medium, 3 high (vr_settings::screenDepths);
+    // and a spare word.
+    uint32_t screenDepth = 2, spare{};
+};
+static_assert(sizeof(XrConfig) == 664);
+// Why the last frame had no gameplay (XrData::gate bits).
+enum GateReason : uint32_t {
+    gateNoPlayer = 1,     // no save loaded, or a level change in progress
+    gateBridge = 2,       // the input bridge is not running
+    gateNoCommit = 4,     // no camera commit for 100 ms: paused, loading, a cutscene
+    gateOtherCamera = 8,  // the camera is not the player's follow or combat camera
+    gateTracking = 16,    // the headset's pose or timing was not usable
+};
+struct XrData {
+    uint32_t magic = 0x53585244, version = 36, bytes = sizeof(XrData), status{};
+    int64_t sequence{};
+    uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
+    uint32_t nativeKeys{}, error{};
+    float head[16]{}, hands[2][16]{};
+    char message[256]{};
+    uint64_t uniqueSubmitted{}, reusedSubmitted{};
+    uint32_t flatScreen{}, toggles{}, eyeWidth{}, eyeHeight{};
+    // What the last frame showed (Presentation); B presses that reached the
+    // game as its B (the dodge; 0 from builds before it, where this was
+    // reserved); and frames that showed the game's presented frame on the
+    // screen because gameplay was unavailable.
+    uint32_t presentation{}, dodges{};
+    uint64_t screenSubmitted{};
+    // GateReason bits of the last frame, and the vtable (image offset) of the
+    // camera mover that last committed: which camera a scene without VR used.
+    uint32_t gate{}, cameraMover{};
+    // Players found so far (each loaded save, respawn or character switch),
+    // and the current one's actor record.
+    uint64_t players{}, playerRecord{};
+    // Xbox buttons the VR controllers hold for the game, and the game's reads
+    // of that virtual controller.
+    uint32_t padButtons{}, padInstalled{};
+    uint64_t padReads{};
+    // The input bridge's camera commits, and those on the player by an
+    // accepted camera. Both rising while the gate says other_camera: two
+    // cameras commit each frame and the other one commits last.
+    uint64_t cameraCommits{}, playerCommits{};
+    // Y presses that reached the game as its Y (interact, web strike; B
+    // presses until October 11); whether the aim markers show now; markers
+    // drawn so far, one per hand per headset frame that shows one.
+    uint32_t interacts{}, aimMarkers{};
+    uint64_t markers{};
+    // The VR settings now: the SPIDY VR tab in the game's Settings changes
+    // them during play. settings bits: 1 web grab,
+    // 2 punch, 4 body, 8 webs in open air, 16 web shooter, 32 flips, 64 the
+    // trigger webs (WEB BUTTON: TRIGGER; the grip reels), 128 STAND ON WALLS,
+    // 256 PHYSICAL WEBS.
+    // Then the changes
+    // made in that tab so far, the times the game built its Settings with it,
+    // whether its hooks are in, and why it is missing (game_menu: 93xx-94xx
+    // not hooked, 95xx not built).
+    uint32_t settings{}, snapTurn{}, haptics{}, screenSize{};
+    float swingSpeed{};
+    uint32_t settingChanges{};
+    uint64_t menuTabs{};
+    uint32_t menuInstalled{}, menuStatus{};
+    // Degrees a second of smooth turning now (0: the stick snap turns).
+    uint32_t smoothTurn{};
+    // Walls and ceilings the game held the player on (GameTrackingRig): the
+    // stretches and frames of play on one, the player's up (its actor's)
+    // now, the head's stand-off now (m), and on the last frame on one the
+    // head's height over it from the feet, before and after the stand-off.
+    uint32_t surfaceEntries{};
+    uint64_t surfaceFrames{};
+    float heroUp[3]{};
+    float standOff{}, surfaceHeight{}, surfaceClearance{};
+    // The weight now, percent of real gravity (the swing's gravity while webs
+    // fly the player), and the HUD row now (0 off, 1-3 small to large).
+    uint32_t weight{}, hud{};
+    // The T-pose calibration (body_calibration.hpp): its phase now and what its
+    // panel asks for (Phase, Hint), how far the hold is (0-1); the eye height
+    // and arm length the body is sized to (mm; 0: the headset's running height
+    // and the hero's own arms); calibrations finished and skipped this session;
+    // calibrationFlags bit 0: a session without one asks for none at its first
+    // gameplay (skipped); each arm's reach at the last one (m, 0 the left).
+    uint32_t calibrationPhase{}, calibrationHint{};
+    float calibrationProgress{};
+    uint32_t eyeHeightMm{}, armLengthMm{}, calibrations{}, calibrationSkips{}, calibrationFlags{};
+    float calibrationReach[2]{};
+    // The flip speed now, degrees a second at full tilt (FLIP SPEED), and how
+    // far the view leans from the world's up now, degrees: 0 level, 90 while
+    // the player stands on a wall (GameMotionFrame::viewTilt).
+    uint32_t flipSpeed{};
+    float viewTilt{};
+    // Version 21: the walks a held Y began (game_pad::InteractStep). Version
+    // 22: the GAME SCREEN 3D row now (0 off, 1-3 low to high), and the frames
+    // that showed the game screen in stereo (a scene's own two eye images;
+    // screenSubmitted counts them too).
+    uint32_t interactSteps{}, screenDepth{};
+    uint64_t stereoSubmitted{};
+    // Version 23: pushes of the right stick that reached the game as its
+    // D-pad down (heal) and as its LT + RT (the zip to a point).
+    uint32_t heals{}, zips{};
+    // Version 24: the game's own camera against where the head looks
+    // (game_pad::CameraLook): the angle between them now, degrees (the head to
+    // the camera's right: more than 0; 0 while the camera is not steered), and
+    // the times the right stick began to turn the camera.
+    float lookError{};
+    uint32_t lookTurns{};
+    // Version 25: the scans a trigger pulled at the temple began (the game's
+    // R3: game_pad::TemplePress), and the Charge Jumps a held A began (its
+    // RT + A: game_pad::ChargeJump).
+    uint32_t scans{}, chargeJumps{};
+    // Version 26: the layout the runtime uses for each hand's controller now
+    // (ControllerKind, controller_layout.hpp; left, right: 0 none yet,
+    // 1 Touch, 2 Index, 3 Steam Frame, 4 one of the runtime's own), the
+    // layouts the runtime took Spidy's controls for (bit 1 << ControllerKind)
+    // and a spare word. A Steam Frame whose hands say Touch plays SteamVR's
+    // translation of that layout: its B, X and Y are all B.
+    uint32_t controllers[2]{}, controllerLayouts{}, controllerSpare{};
+    // Version 27: the game's own prompts, read through game_menu's hooks
+    // (game_prompts.hpp). Its calls into Flash and the prompt and QTE
+    // interface's among them (`promptCalls` at 0 with `promptInvokes` rising
+    // says the names no longer match the game), prompts raised and taken
+    // away, texts that named a button and texts rewritten for a VR player;
+    // what the game is asking for now and the last thing it asked for
+    // (prompt_buttons::pack), the asks VR play could not have sent on its own
+    // (what the interact button now carries) and texts that came with the
+    // keyboard's icons, which name no pad button at all.
+    uint64_t promptInvokes{}, promptCalls{}, promptsRaised{}, promptsCleared{};
+    uint64_t promptTexts{}, promptRewrites{};
+    uint32_t promptDemand{}, promptLastDemand{}, promptBeyondPlay{}, promptKeyboardTexts{};
+    // Presses of the interact button that sent what a prompt asked for
+    // instead of the game's Y (game_pad::ContextPress), the times the pad
+    // layer was latched on and whether it is on now (game_pad::PadLayer),
+    // and a spare word.
+    // Then the presses of Y that went out while the player stood on a wall,
+    // which `playing` withheld until October 13 (the closed vent).
+    uint32_t contextPresses{}, padEntries{}, padLayerNow{}, wallInteracts{};
+    // Version 28: the VR controllers' own buttons as the runtime gives them
+    // (ControllerButton bits: 1 A, 2 B, 4 X, 8 Y, 16 menu, 32 the Steam
+    // Frame's View, 64-512 its D-pad) - held on the last frame, and every bit
+    // that went down at all in VR play. A report then says what the player
+    // pressed as well as what reached the game, which is what two October 13
+    // sessions could not tell apart: the game's Y never reached it in either
+    // (0 of 4230 and 0 of 3432 samples) while its B, from the other hand,
+    // reached it 30 times, and nothing said whether Y had been pressed.
+    uint32_t vrButtons{}, vrButtonsPlayed{};
+    // Version 29: presses of the interact that handed the player back to the
+    // game's own wall crawl, because the swing held him on a wall of its own
+    // and the game was offering nothing to press (game_pad::WallHandover).
+    // Then those of them the game answered by offering an interact again,
+    // which is the hand-over having worked: the two apart say whether it is
+    // worth its moment.
+    uint32_t wallHandovers{}, wallHandoversOffered{};
+    // Version 30: the room around the player (Enclosure) - frames the rule
+    // called him indoors, and the times the swing's walls were handed to the
+    // game because of it. Indoors the game's own crawl holds him, which is
+    // what makes its interacts work in a vent.
+    uint32_t indoorFrames{}, wallsToGame{};
+    // Version 31: the game's own wall crawl, now that the view turns onto it
+    // as it does onto a wall of the swing's (SurfaceHold::crawl). Frames the
+    // crawl held the player, and of those the frames the view had turned.
+    //
+    // Then what the game did with the stick there (CrawlStick): the mean turn
+    // from the direction sent to the direction taken, in the surface's own
+    // axes, and how alike those turns were - near 1 a frame fixed against the
+    // surface, which the stick wants rotating by that turn; near 0 no fixed
+    // frame at all, and the mover wants driving instead, as the swing drives
+    // it on a wall of its own. Then the mean speed taken. The crawl is the
+    // only state the game calls supported on a wall, so it is the only one
+    // whose interacts work there: what it does with the stick is the last
+    // thing in the way of a vent that behaves like the ground.
+    uint32_t crawlFrames{}, crawlStood{}, crawlStickSamples{};
+    float crawlStickTurn{}, crawlStickAgreement{}, crawlStickSpeed{};
+    // Frames the head was brought down to keep it under the surface over the
+    // player, and the least room there ever was over his feet (metres; zero
+    // where no ray ever found one). Inside the vent the head stood at the
+    // player's own eye height over its floor and so out through its roof.
+    uint32_t headDroppedFrames{};
+    float headroomLeast{};
+    // Version 32: handing the player from the swing's own wall to the game's,
+    // indoors (WallToGame). Tries, those the game answered by taking him -
+    // which is a vent that works - those it did not and the swing took the
+    // wall straight back, and the frames he was being driven into the wall.
+    // The three apart say whether the game catches a player let go of at a
+    // wall, which nothing could rig headlessly.
+    uint32_t wallToGameTries{}, wallToGameHanded{}, wallToGameRecovered{}, wallToGamePushFrames{};
+    // Version 33: the game's own crawl under the player at rest on the
+    // swing's wall (game_warp): crawls asked for, those the game's state
+    // machine took, refused, faulted; how the hand-overs ended - the crawl
+    // took him, or the swing had him back (the game did not begin or finish,
+    // or the body dropped). Then frames of the game's own wall run (its RT
+    // with the stick up the wall, `climbing`) and frames the view held its
+    // surface through a gap in the swing's reports (`holdGrace`).
+    uint32_t crawlAsked{}, crawlApplied{}, crawlRefused{}, crawlFaulted{};
+    uint32_t crawlTaken{}, crawlDeclined{}, gameRunFrames{}, holdGraceFrames{};
+    // Version 34: frames of play the rig could not place (the gate's
+    // `tracking`), and every reason seen for them (GameTrackingRig::Inactive
+    // bits); one shorter than blipSeconds keeps the view standing where it
+    // stood. Then frames the game crawled the player on a floor (a vent, a
+    // duct: game_swing::Surface::floor), of those the frames the head was
+    // held at the crawl's own height (crawlRoom), and frames the body knelt
+    // under a held head. Then the game camera's look and up at the latest
+    // frame: the frame the game's crawl takes its stick in.
+    uint32_t trackingGapFrames{}, trackingGapReasons{}, floorCrawlFrames{}, crawlCapFrames{};
+    // Version 35 in the slot after: the game_offers hooks (game_offers::Data
+    // status - 0 off, 1 hooked, 3 failed - and its error above the low byte).
+    uint32_t kneelFrames{}, offersState{};
+    float cameraForward[3]{}, cameraUp[3]{};
+    // Version 35: the game's interactions on Spidy's wall (game_offers,
+    // offer_pointing): frames a hand pointed at one the game would let the
+    // player use, and at one he had to come closer to; presses of the
+    // interact that asked for a use, those the game refused at once, those
+    // that came to the game's interact and of those the ones the game had
+    // picked the offer for first, and those given up (its crawl did not take
+    // him); the most offers the game gathered near him at once.
+    uint32_t offerPointFrames{}, offerReachFrames{}, offerAsks{}, offerRefusals{};
+    uint32_t offerPresses{}, offerPicked{}, offerFailures{}, offersSeen{};
+    // Version 36: game_offers' own counts at the latest frame - the player's
+    // offer updates run with the crawl's mask, the offers checked against the
+    // crawl's pose, the masked updates whose gather checked any offer and the
+    // most it checked at once, the spot searches for an aimed offer out of
+    // reach and those that found one, and the offers near the player now.
+    uint32_t offersMasked{}, offersPosed{}, offersGathered{}, offersMostChecked{};
+    // And the presses made again because the game still held the offer.
+    uint32_t offersSearches{}, offersSpots{}, offersNear{}, offerRetries{};
+};
+static_assert(sizeof(XrData) == 1152);
+// The game's own prompt and QTE calls, for one play session to say what their
+// arguments hold (game_prompts.hpp). The eight names matched the game on
+// October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
+// text reached the localized lookup (`texts` 0), so the text is not where a
+// session can read what the game is asking for, and these arguments are.
+struct PromptData {
+    uint32_t magic = 0x53505244, version = 4, bytes = sizeof(PromptData), status{};
+    int64_t sequence{};
+    uint64_t invokes{}, calls{}, raised{}, cleared{}, texts{}, rewrites{};
+    uint32_t demand{}, lastDemand{}, beyondPlay{}, keyboardTexts{};
+    // The newest of those calls, one a line with its arguments, oldest first;
+    // how many lines are filled; and how often each of the eight names came,
+    // in the order of game_prompts.cpp's table (ShowPlaceablePrompt,
+    // HidePlaceablePrompt, SetPlaceablePromptProgress, UpdateInWorldPrompt,
+    // POIInteractAvailable, AddQTE, UpdateQTE, ClearQTE, ShowText, HideText).
+    uint32_t lines{}, reserved{}, perName[game_prompts::callNames]{};
+    char line[game_prompts::callLines][game_prompts::callChars]{};
+    // Then the census: every distinct name the game called, in the order
+    // first seen, how often each came, and one call of each with its
+    // arguments. This is what names the call a prompt's text and its button
+    // arrive in, without anyone having to guess which it is.
+    uint32_t names{}, spare{}, censusCalls[game_prompts::censusNames]{};
+    char example[game_prompts::censusNames][game_prompts::censusChars]{};
+};
+static_assert(sizeof(PromptData) == 12112);
+// Slow motion (slow_motion.hpp, game_time.hpp): what the player did with it
+// and what the game's time did. status: 1 before VR starts, then 0 with the
+// game's time hooked, else why it is not (game_time::install) and slow
+// motion does nothing.
+struct SlowMotionData {
+    uint32_t magic = 0x574f4c53, version = 2, bytes = sizeof(SlowMotionData), status = 1;
+    int64_t sequence{};
+    // Presses that started it, ended it, or came with too little focus; the
+    // times focus ran out and play stopped it (a menu, the game screen, the
+    // flat screen); whether it is on now.
+    uint32_t starts{}, stops{}, refused{}, emptied{}, interrupted{}, active{};
+    // Real seconds in it so far; focus (0-1) and how far into it (0-1) now;
+    // the time scale asked of the game.
+    float seconds{}, focus = 1, blend{}, wanted = 1;
+    // The game's side in the last update of its time system: its own time
+    // scale, its world's (the smaller of that and Spidy's), Havok's step (s)
+    // and whether the game scales physics itself; its updates so far, and
+    // those Spidy slowed.
+    float gameScale = 1, worldScale = 1, physicsStep{};
+    uint32_t physicsScaled{};
+    uint64_t updates{}, slowedUpdates{};
+    // Version 2, moments (slow_motion.hpp's SlowMoments): those begun so far
+    // by kind (a heavy blow, a called blow, a thug pulled in the air, a
+    // perfect dodge), whether one is on now, and the time scale it asks for.
+    uint32_t moments[4]{};
+    uint32_t momentActive{};
+    float momentScale = 1;
+};
+static_assert(sizeof(SlowMotionData) == 120);
+extern "C" {
+__declspec(dllexport) XrData SpidyXrData;
+__declspec(dllexport) PromptData SpidyPromptData;
+__declspec(dllexport) SlowMotionData SpidySlowMotionData;
+__declspec(dllexport) XrTimingData SpidyXrTimingData;
+__declspec(dllexport) EyeSnapshot SpidyXrSnapshot;
+DWORD WINAPI SpidyStart(void*);
+DWORD WINAPI SpidyEyeTemporal(void*);
+DWORD WINAPI SpidyEyeShadows(void*);
+DWORD WINAPI SpidyMonitorRate(void*);
+DWORD WINAPI SpidyStop(void*);
+DWORD WINAPI SpidySetEyes(void*);
+float SpidyFlatAspect();
+}
+namespace {
+using BridgeCall = DWORD(WINAPI*)(void*);
+XrConfig config;
+BridgeCall submitInput{}, sampleBridge{}, stopBridge{}, retargetBridge{};
+BridgeCall startRays{}, submitRays{}, stopRays{};
+// The world rays' results, read where they are written: the bridge exports the
+// struct itself, and the session is in the same process as it.
+const native_rays::Data* rayResults{};
+BridgeCall startSwing{}, submitSwing{}, sampleSwing{}, stopSwing{}, retargetSwing{}, sampleGrab{}, sampleAim{};
+// Each web's edges (game_swing::Bends): optional, without it a web round an
+// edge is drawn to that edge.
+BridgeCall sampleBends{};
+BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{};
+BridgeCall startShooter{}, sampleShooter{}, stopShooter{}, wheelShooter{};
+// The game's own crawl under the player (game_warp, in the same module):
+// optional, for the session report.
+BridgeCall sampleWarp{};
+// The game's interactions on Spidy's wall (game_offers, in the same module):
+// what it gathered near the player, and the use of the one he points at.
+BridgeCall sampleOffers{}, useOffer{}, aimOffer{};
+std::mutex lifecycle, telemetry;
+HANDLE worker{};
+std::atomic<bool> stopRequested{};
+std::atomic<uint64_t> keepAliveDeadline{};
+void message(uint32_t status, uint32_t error, const char* text) {
+    std::lock_guard lock(telemetry);
+    InterlockedIncrement64(&SpidyXrData.sequence);
+    SpidyXrData.status = status;
+    SpidyXrData.error = error;
+    strncpy_s(SpidyXrData.message, text, _TRUNCATE);
+    InterlockedIncrement64(&SpidyXrData.sequence);
+}
+bool read(uintptr_t p, void* out, size_t bytes) {
+    __try {
+        if (p < 0x10000)
+            return false;
+        std::memcpy(out, reinterpret_cast<void*>(p), bytes);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+void check(DWORD code, const char* operation) {
+    if (code)
+        throw std::runtime_error(std::string(operation) + ": " + std::to_string(code));
+}
+// Publishes a completed eye copy, or withdraws the previous one before its
+// pixels are released.
+void publishSnapshot(EyeSnapshot shot, const D3D12Renderer::Captured* pixels) {
+    std::lock_guard lock(telemetry);
+    auto& d = SpidyXrSnapshot;
+    InterlockedIncrement64(&d.sequence);
+    const auto sequence = d.sequence;
+    const auto count = d.count + (pixels != nullptr);
+    d = shot;
+    d.sequence = sequence;
+    d.count = count;
+    if (pixels) {
+        d.pixels = reinterpret_cast<uint64_t>(pixels->pixels);
+        d.width = pixels->width;
+        d.height = pixels->height;
+        d.rowPitch = pixels->rowPitch;
+    }
+    InterlockedIncrement64(&d.sequence);
+}
+struct RuntimeSelection {
+    std::wstring previous;
+    bool present{};
+    explicit RuntimeSelection(const wchar_t* requested) {
+        const DWORD size = GetEnvironmentVariableW(L"XR_RUNTIME_JSON", nullptr, 0);
+        present = size != 0;
+        if (size) {
+            previous.resize(size);
+            GetEnvironmentVariableW(L"XR_RUNTIME_JSON", previous.data(), size);
+            previous.resize(size - 1);
+        }
+        constexpr auto virtualDesktop =
+            L"C:\\Program Files\\Virtual Desktop Streamer\\OpenXR\\virtualdesktop-openxr.json";
+        const wchar_t* manifest = *requested ? requested : virtualDesktop;
+        if (GetFileAttributesW(manifest) == INVALID_FILE_ATTRIBUTES) {
+            if (*requested)
+                throw std::runtime_error("The chosen OpenXR runtime is not installed");
+            return; // no Virtual Desktop: the loader uses Windows' active runtime
+        }
+        if (!SetEnvironmentVariableW(L"XR_RUNTIME_JSON", manifest))
+            throw std::runtime_error("Could not select the OpenXR runtime for this process");
+    }
+    ~RuntimeSelection() {
+        SetEnvironmentVariableW(L"XR_RUNTIME_JSON", present ? previous.c_str() : nullptr);
+    }
+};
+// OpenXR add-ons Spidy cannot run with (xr_layers.hpp), switched off in this
+// process while the loader reads them: as it creates the instance. Each by
+// the variable its own manifest names; one the player has set stays as it is.
+struct LayerSwitches {
+    std::vector<std::string> variables;
+    // The layers switched off, for the player.
+    std::string names;
+    explicit LayerSwitches(std::span<const xr_layers::Layer> layers = xr_layers::unsupported) {
+        for (const HKEY root : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
+            HKEY key{};
+            if (RegOpenKeyExW(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit", 0, KEY_READ, &key) !=
+                ERROR_SUCCESS)
+                continue;
+            // Each value: a manifest's path, and 0 while its layer is on.
+            for (DWORD index = 0; index < 256; ++index) {
+                wchar_t path[1024];
+                DWORD chars = static_cast<DWORD>(std::size(path)), type{}, off{}, bytes = sizeof(off);
+                const auto code = RegEnumValueW(key, index, path, &chars, nullptr, &type,
+                                                reinterpret_cast<BYTE*>(&off), &bytes);
+                if (code == ERROR_NO_MORE_ITEMS)
+                    break;
+                if (code != ERROR_SUCCESS || type != REG_DWORD || off)
+                    continue;
+                const HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                nullptr, OPEN_EXISTING, 0, nullptr);
+                if (file == INVALID_HANDLE_VALUE)
+                    continue;
+                std::string text(65536, '\0');
+                DWORD size{};
+                const bool loaded =
+                    ReadFile(file, text.data(), static_cast<DWORD>(text.size()), &size, nullptr);
+                CloseHandle(file);
+                if (!loaded)
+                    continue;
+                text.resize(size);
+                const auto layer = xr_layers::switchOff(text, layers);
+                if (layer.variable.empty() || GetEnvironmentVariableA(layer.variable.c_str(), nullptr, 0) ||
+                    !SetEnvironmentVariableA(layer.variable.c_str(), "1"))
+                    continue;
+                variables.push_back(layer.variable);
+                names += (names.empty() ? "" : ", ") + std::string(layer.name);
+            }
+            RegCloseKey(key);
+        }
+    }
+    ~LayerSwitches() {
+        for (const auto& variable : variables)
+            SetEnvironmentVariableA(variable.c_str(), nullptr);
+    }
+};
+DWORD WINAPI run(void*) {
+    bool nativeStarted = false, gpuStarted = false, raysStarted = false, swingStarted = false, websStarted = false,
+         bodyStarted = false;
+    uint64_t serial = 1, nativeDeadline{};
+    // lastPresentedMs: an image was on show. lastNewImageMs: the game delivered a newer one.
+    uint64_t firstImageDeadline{}, lastPresentedMs{}, lastNewImageMs{};
+    bool presented{}, wasGameplay{};
+    // The last frame's predicted display time; held images age against it.
+    int64_t displayTime{};
+    Presentation shownKind{};
+    uint32_t error{};
+    std::string failure;
+    // VR starts with the game, before there is a player; each loaded save,
+    // respawn or character switch brings a new one.
+    game_player::Watch players;
+    bool padInstalled{};
+    try {
+        auto queue = reinterpret_cast<ID3D12CommandQueue*>(config.queue);
+        ComPtr<ID3D12Device> device;
+        if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))))
+            throw std::runtime_error("Game graphics device unavailable");
+        XrRuntime runtime;
+        {
+            RuntimeSelection selected(config.runtime);
+            LayerSwitches layers;
+            if (!layers.names.empty()) {
+                const auto text = layers.names + " is switched off for the game: Spidy does not run with it. "
+                                                 "It stays on for your other games";
+                message(1, 0, text.c_str());
+            }
+            runtime.initialize(device.Get(), queue, config.eyeSize, config.renderScale);
+        }
+        D3D12Renderer overlay;
+        overlay.initialize(device.Get(), queue);
+        // The session report's copies of the left eye live in the overlay's
+        // readback buffer; withdraw the last one before the overlay goes.
+        struct WithdrawSnapshot {
+            ~WithdrawSnapshot() {
+                publishSnapshot({}, nullptr);
+            }
+        } withdrawSnapshot;
+        EyeSnapshotSchedule snapshots;
+        EyeSnapshot pendingSnapshot{};
+        uint64_t snapshotTicket{}, gapGeneration{};
+        message(2, 0, "Waiting for the headset");
+        players.start(config.base);
+        game_player::Player player{};
+        uint64_t playerChanges{}, playersFound{};
+        // Menus are played with a virtual Xbox controller (game_pad).
+        padInstalled = !game_pad::install();
+        uint64_t padRetryMs = GetTickCount64() + 1000;
+        // The VR settings are a tab of the game's own Settings (game_menu).
+        const uint32_t menuCode = game_menu::install(config.base);
+        if (menuCode) {
+            const auto text = "No SPIDY VR tab in the game's Settings (" + std::to_string(menuCode) +
+                              "); the launcher's settings apply";
+            message(3, 0, text.c_str());
+        }
+        // The game's request for a Steam ticket, on its way back to the main
+        // menu, closed every VR session that quit to it (game_steam). The
+        // guard goes in once the game holds its Steam interface.
+        bool steamGuarded{}, steamWarned{};
+        uint64_t steamRetryMs{};
+        // Slow motion slows the game's own time (game_time).
+        const uint32_t timeCode = game_time::install(config.base);
+        if (timeCode) {
+            const auto text =
+                "No slow motion: the game's time could not be hooked (" + std::to_string(timeCode) + ")";
+            message(3, 0, text.c_str());
+        }
+        {
+            std::lock_guard lock(telemetry);
+            InterlockedIncrement64(&SpidySlowMotionData.sequence);
+            SpidySlowMotionData.status = timeCode;
+            InterlockedIncrement64(&SpidySlowMotionData.sequence);
+        }
+        // The last frame showed the game screen; A held from there (Resume,
+        // Continue) is not a jump once gameplay is back.
+        bool wasScreen{}, jumpFromScreen{};
+        // A pressed in the air is not the game's web zip.
+        AirJumpFilter airJump;
+        // Where B, X and Y went down: on the game screen they are the game's
+        // own, in VR B dodges, Y interacts and X opens the game menu
+        // (game_pad::PressOrigins).
+        game_pad::PressOrigins origins;
+        // Y held walks the player up to what they look at: the game takes
+        // its Y only within about a metre of the thing.
+        game_pad::InteractStep interactStep;
+        uint32_t interactStepsBefore{};
+        // The game's own camera, turned to where the player looks: the game
+        // takes its Y for what that camera has in view.
+        game_pad::CameraLook cameraLook;
+        // The game's LB + RB (its web pull): both web buttons on a thing no
+        // web holds on, then a yank (WebPull); or the right thumbstick's
+        // click. aimed: what each hand's web button would do, markers or not.
+        WebPull webPull;
+        game_pad::PullPress pullPress;
+        game_swing::AimData aimed{};
+        uint64_t pullsBefore{};
+        // The right thumbstick pushed down is the game's D-pad down (heal),
+        // pushed up its LT + RT (the zip to a point, a vent).
+        game_pad::StickPush stickPush;
+        bool interacting{}, dodging{}, healing{}, zipping{};
+        uint32_t interacts{}, dodges{}, heals{}, zips{};
+        // The whole pad, latched by clicking both thumbsticks, for the
+        // controls VR play has no room for; and the interact button sending
+        // what the game is asking for (game_pad.hpp, game_prompts.hpp).
+        game_pad::PadLayer padLayer;
+        game_pad::ContextPress contextPress;
+        // The gadget wheel (X held; gadget_wheel.hpp): the player's gadgets
+        // as the shooter last listed them, whether the free hand's trigger
+        // fires the equipped one (off: the web shooter's ball, as before the
+        // wheel), and a tap of X let go of, the game menu, held this long.
+        GadgetWheel gadgetWheel;
+        game_shooter::Data listed{};
+        bool gadgetFire{};
+        float menuTap{};
+        // The game played on its screen (VIEW: GAME SCREEN): Back and the
+        // D-pad, which the VR controllers lack, besides the Xbox controller's.
+        game_pad::ScreenControls screenControls;
+        uint32_t padEntriesBefore{}, wallInteracts{};
+        // The headset has given a tracked head pose at least once.
+        bool headSeen{};
+        // The swing settings exactly as they were last sent, so the interact's
+        // hand-over can put the walls back the way the player set them, and
+        // never turn them on for a player who asked for them off.
+        game_swing::Settings sentSwingSettings;
+        bool swingSettingsSent{}, wallsHandedBack{}, toldHandoverRefused{};
+        game_pad::WallHandover wallHandover;
+        // The room around the player, read for the report only: it no longer
+        // decides anything about the walls.
+        Enclosure enclosure;
+        uint32_t indoorFrames{}, wallsToGame{};
+        // What the game's own crawl does with the stick Spidy sends it, which
+        // is the last unmeasured step between a wall and a vent that behaves
+        // like the ground.
+        CrawlStick crawlStick;
+        uint32_t crawlFrames{}, crawlStood{};
+        // The game's own crawl at rest and its wall run (XrData version 33).
+        uint32_t gameRunFrames{}, holdGraceFrames{};
+        // Version 34: frames of play the rig could not place and why; the
+        // game's crawl on a floor, how long it has gone on, and the head held
+        // at its height there; the body kneeling under a held head.
+        uint32_t trackingGapFrames{}, trackingGapReasons{}, floorCrawlFrames{}, crawlCapFrames{};
+        uint32_t kneelFrames{};
+        float floorCrawlSeconds{};
+        game_warp::Data warp{};
+        // The game's interactions on Spidy's wall (version 35): what the game
+        // gathered near the player, what each hand points at, and the
+        // interact's use of it.
+        game_offers::Data offers{};
+        std::array<std::optional<offer_pointing::Pointed>, 2> pointing{};
+        std::array<uint32_t, 2> pointedBefore{};
+        offer_pointing::Use offerUse;
+        uint32_t offerPointFrames{}, offerReachFrames{}, offersSeen{};
+        uint32_t offerAsksBefore{}, offerFailuresBefore{}, offerAimed{};
+        // The surface over the player's feet, as the last finished ray batch
+        // found it: the head stops short of it, so it never goes through the
+        // roof of a vent. Zero where nothing is over him.
+        float headroomSeen{}, headroomLeast{};
+        uint32_t headDroppedFrames{};
+        bool pulling_{};
+        bool padLayerWas{};
+        // The prompt calls are copied out only when one more has come: the
+        // lines are 3 kB and nothing changes between calls.
+        uint64_t promptCallsBefore = ~0ull;
+        uint32_t promptRefresh{}, vrButtonsPlayed{};
+        // A held on the ground charges a leap of the swing's own (the game's
+        // Charge Jump is a skill a save may lack), and a trigger pulled with
+        // its hand at the temple is the game's R3, its scan. leapOut: the
+        // leap let go of, for the swing's next commands.
+        game_pad::ChargeJump chargeJump;
+        game_pad::TemplePress templePress;
+        uint32_t chargesBefore{}, leapsBefore{}, scansBefore{};
+        float leapOut{};
+        // The game's camera follows the head's pitch too: it offers a thing
+        // at the player's feet or overhead only with that camera on it.
+        game_pad::CameraPitch cameraPitch;
+        // Thugs the web brought to the player's hand so far (an air yank's
+        // arrival among them): in the air, time slows as one arrives.
+        uint64_t catchesBefore{};
+        // A dodge the game itself slows time for is its perfect dodge: for a
+        // moment after B went down with the game's time at full speed.
+        float dodgeWatch{};
+        // The VR settings: the launch options, then the SPIDY VR tab in the
+        // game's Settings during play.
+        vr_settings::Values values;
+        values.aimMarkers = !(config.options & 128);
+        values.webGrab = !(config.options & 8);
+        values.body = !(config.options & 32);
+        values.punch = !(config.options & 64);
+        values.airWebs = !(config.options & 256);
+        values.webShooter = !(config.options & 512);
+        values.flips = config.options & 2048;
+        values.triggerWebs = config.options & 4096;
+        values.standOnWalls = !(config.options & 8192);
+        values.swingSpeed = config.swingSpeed;
+        values.snapTurn = static_cast<int>(config.snapTurn);
+        values.smoothTurn = static_cast<int>(config.smoothTurn);
+        values.haptics = static_cast<int>(config.haptics);
+        values.screenSize = static_cast<int>(config.screenSize);
+        values.weight = static_cast<int>(config.weight);
+        values.hud = static_cast<int>(config.hud);
+        values.flipSpeed = static_cast<int>(config.flipSpeed);
+        values.screenDepth = static_cast<int>(config.screenDepth);
+        values = vr_settings::sanitized(values);
+        game_menu::publish(values);
+        uint32_t settingChanges{};
+        // aims are each hand's latest preview.
+        uint64_t markersDrawn{};
+        game_swing::AimData aims{};
+        // Each hand's aim marker, steadied from eye image to eye image.
+        std::array<AimMarkerMotion, 2> aimMotion;
+        GameTrackingRig rig;
+        GameMotionFrame motion;
+        NativeEyeHistory history;
+        // Where the HUD panel faces in the room: it follows the head lazily
+        // (native_hud::Follow), and starts in front of it again with play,
+        // the immersive view and a recentred room.
+        native_hud::Follow hudFollow;
+        GameScreen gameScreen;
+        // Whether the game is playing a scene on the screen (its time runs),
+        // and whether that scene's stereo eyes have the HUD's panel.
+        SceneClock sceneClock;
+        ScenePanel scenePanel;
+        bool flatScreen{};
+        Pose screenPose{};
+        const auto dimensions = runtime.eyeDimensions();
+        // Aim markers are drawn so many pixels wide: above the headset's own
+        // resolution they keep the size they have at it.
+        const auto recommended = runtime.recommendedDimensions();
+        const float markerPixels =
+            recommended[0] ? std::max(1.f, static_cast<float>(dimensions[0]) / static_cast<float>(recommended[0])) : 1.f;
+        const auto moduleDuration = config.durationMs ? config.durationMs + 3000 : 0;
+        {
+            std::lock_guard lock(telemetry);
+            InterlockedIncrement64(&SpidyXrData.sequence);
+            SpidyXrData.eyeWidth = dimensions[0];
+            SpidyXrData.eyeHeight = dimensions[1];
+            InterlockedIncrement64(&SpidyXrData.sequence);
+        }
+        game_swing::Data swingState;
+        game_swing::Bends swingBends;
+        // What each hand's web holds, when it caught a thug instead of a wall.
+        game_grab::Data grabState;
+        uint32_t grabPhases[2]{};
+        // A grab's event pulse plays this long before the web's tension
+        // takes the hand's haptics again (predicted display time, ns).
+        int64_t pulseUntil[2]{};
+        WebTimeline webTimes;
+        bool attachedBefore[2]{};
+        // Which of the game's two ropes draws which hand's web (one web in
+        // both hands has one rope), and when a free hand last came onto the
+        // other hand's web (a tick says a press there takes hold of it).
+        WebRopes webRopes;
+        bool onStrandBefore[2]{};
+        int64_t strandTickAt[2]{};
+        uint64_t zipBefore{};
+        // Walls the swing took the player onto, and jumps off them, by the
+        // previous frame.
+        uint32_t wallsBefore{}, wallJumpsBefore{};
+        // Punches each hand had landed by the previous frame.
+        bool punchStarted{};
+        uint64_t punchesBefore[2]{};
+        // Fighting across the room (web_strike.hpp): the blows landed and the
+        // web strikes opened by the previous frame; the game's time around a
+        // blow; the bursts still showing where the latest blows landed, each
+        // since its display time; and the sounds, made once.
+        uint64_t blowsBefore{}, strikesBefore{};
+        HitStop hitStop;
+        // The called blow's arrow over the thug it is on (web_strike.hpp's
+        // Cues), since the display time it showed.
+        CueView cue{};
+        uint64_t cueTarget{};
+        uint32_t cueWay{};
+        bool cueLocked{};
+        int64_t cueSince{};
+        // The player's knockouts by the previous frame, and the lettering of
+        // the latest, each since its display time.
+        uint64_t knockoutsBefore{};
+        struct Knockout {
+            KnockoutView view;
+            int64_t since{};
+        };
+        std::array<Knockout, 2> knockoutMarks{};
+        size_t nextKnockout{};
+        struct Burst {
+            ImpactView view;
+            int64_t since{};
+        };
+        std::array<Burst, 6> bursts{};
+        size_t nextBurst{};
+        // (They outlive the session: one may still be playing as it ends.)
+        static const std::vector<uint8_t> sounds[5] = {
+            impactWave(ImpactSound::Light), impactWave(ImpactSound::Firm), impactWave(ImpactSound::Heavy),
+            impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush)};
+        // One at a time, the newest cutting the one before short: a strike's
+        // rush ends in its blow.
+        auto play = [&](ImpactSound sound) {
+            const auto& wave = sounds[static_cast<size_t>(sound)];
+            PlaySoundW(reinterpret_cast<LPCWSTR>(wave.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+        };
+        // Web-shooter shots each hand had fired by the previous frame.
+        bool shooterStarted{};
+        uint64_t shotsBefore[2]{};
+        uint64_t submittedFrames{};
+        uint64_t previousPresentedGeneration{};
+        // The player's standing eye height above the floor: it rises at once
+        // to a higher head and sinks a centimetre a second, so crouching
+        // does not shrink the body.
+        float standingEye{};
+        // Each hand's fingers (HandPoser): the web-shooting hand as its web
+        // button goes down and while the shot is on its way, else a fist,
+        // closed by the grip, by a web held or by a hand moving fast relative
+        // to the head (a punch); and where each grip was relative to the
+        // head. What the swing's frame says of each hand for it: a web ball
+        // left it, it holds the other hand's web (taken hold of, not shot),
+        // its own web holds (attachedBefore); and an enemy is marked or
+        // within a fist's reach.
+        HandPoser fingers[2];
+        Vec3 gripsBefore[2]{};
+        bool gripsSeen[2]{};
+        bool ballShot[2]{}, webTaken[2]{}, fightNear{};
+        // Stretches and frames of play the game held the player on a wall
+        // or a ceiling (the head stood off it).
+        uint32_t surfaceEntries{};
+        uint64_t surfaceFrames{};
+        bool wasOnSurface{};
+        // The surface the view last stood the player on, and for how long
+        // since no hold has been reported: kept a moment while the game turns
+        // the hero onto the wall or off it (`hold` below).
+        SurfaceHold lastHold{};
+        float holdGapSeconds{};
+        // The player's size for the body: their T-pose calibration (the
+        // launch's, or one made in this session), else the headset's running
+        // height and the hero's own arms. A session with the body and without
+        // a calibration asks for one at its first gameplay unless the player
+        // skipped it before; the SPIDY VR tab asks again (CALIBRATE BODY: ON
+        // RESUME).
+        float calibratedEye = static_cast<float>(config.eyeHeightMm) / 1000;
+        float calibratedArm = static_cast<float>(config.armLengthMm) / 1000;
+        bool calibrationPrompt = !(config.options & 1024);
+        // Reading the game's prompts and naming the VR control in them.
+        const bool promptHelp = !(config.options & 0x100000);
+        bool calibrationWanted = calibrationPrompt && !config.eyeHeightMm && values.body;
+        body_calibration::Calibration calibration;
+        body_calibration::Measurements lastCalibration{};
+        // The panel's place in the tracking space, ahead of where the player
+        // faced as it appeared; since when VR has shown play; when the result
+        // appeared.
+        Pose calibrationPanel{};
+        uint64_t immersiveSince{}, calibrationShownAt{};
+        // From the calibration's start until each is let go after it, the
+        // triggers, grips, A and B do nothing in the game (B skips it).
+        bool calibrationInput{}, skipHeld{};
+        uint32_t calibrations{}, calibrationSkips{};
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        // Slow motion: the left thumbstick's click (StickPress keeps it apart
+        // from clicking both), its focus and the game's eased time
+        // (SlowMotion). Each step sets the game's time, gives the controllers
+        // a pulse at a change and reports it; without headset frames for a
+        // while the loop below steps it to its end.
+        SlowMotion slowMotion;
+        // And the moments it slows by itself (a finisher, a called blow, a
+        // thug pulled in the air, a perfect dodge).
+        SlowMoments moments;
+        StickPress slowPress;
+        SlowMotionData slowCounts;
+        uint64_t slowSteppedMs = GetTickCount64();
+        auto stepSlowMotion = [&](float seconds, bool pressed, bool allowed) {
+            using Event = SlowMotion::Event;
+            const bool before = slowMotion.active();
+            const auto event = slowMotion.update(seconds, pressed, allowed);
+            // A landed blow stops the game's time for a moment, in slow motion too.
+            hitStop.update(seconds);
+            if (!allowed)
+                hitStop.reset();
+            moments.update(seconds, allowed);
+            game_time::slow(std::min({slowMotion.timeScale(), hitStop.timeScale(), moments.timeScale()}));
+            slowSteppedMs = GetTickCount64();
+            if (before && std::isfinite(seconds))
+                slowCounts.seconds += std::clamp(seconds, 0.f, .1f);
+            switch (event) {
+            case Event::started:
+                ++slowCounts.starts;
+                runtime.haptic(0, .55f);
+                runtime.haptic(1, .55f);
+                break;
+            case Event::stopped:
+                ++slowCounts.stops;
+                runtime.haptic(0, .3f);
+                runtime.haptic(1, .3f);
+                break;
+            case Event::emptied:
+                ++slowCounts.emptied;
+                runtime.haptic(0, .8f);
+                break;
+            case Event::refused:
+                ++slowCounts.refused;
+                runtime.haptic(0, .6f);
+                break;
+            case Event::interrupted:
+                ++slowCounts.interrupted;
+                break;
+            case Event::none:
+                break;
+            }
+            const auto time = game_time::telemetry();
+            std::lock_guard lock(telemetry);
+            auto& d = SpidySlowMotionData;
+            InterlockedIncrement64(&d.sequence);
+            d.starts = slowCounts.starts;
+            d.stops = slowCounts.stops;
+            d.refused = slowCounts.refused;
+            d.emptied = slowCounts.emptied;
+            d.interrupted = slowCounts.interrupted;
+            d.active = slowMotion.active();
+            d.seconds = slowCounts.seconds;
+            d.focus = slowMotion.focus();
+            d.blend = slowMotion.blend();
+            d.wanted = slowMotion.timeScale();
+            d.gameScale = time.own;
+            d.worldScale = time.world;
+            d.physicsStep = time.physicsStep;
+            d.physicsScaled = time.physicsScaled;
+            d.updates = time.updates;
+            d.slowedUpdates = time.slowed;
+            for (unsigned i = 0; i < std::size(d.moments); ++i)
+                d.moments[i] = moments.count(static_cast<Moment>(i));
+            d.momentActive = moments.active();
+            d.momentScale = moments.timeScale();
+            InterlockedIncrement64(&d.sequence);
+        };
+        // Puts the settings into effect: at once, or when the module they
+        // belong to starts (each start reads `values`).
+        auto applySettings = [&] {
+            runtime.hapticStrength(static_cast<float>(values.haptics) / 100);
+            rig.snapTurn(static_cast<float>(values.snapTurn) * 3.14159265f / 180);
+            rig.smoothTurn(static_cast<float>(values.smoothTurn) * 3.14159265f / 180);
+            rig.flips(values.flips);
+            rig.flipSpeed(static_cast<float>(values.flipSpeed) * 3.14159265f / 180);
+            rig.triggerWebs(values.triggerWebs);
+            rig.standOnWalls(values.standOnWalls);
+            native_hud::setSize(values.hud);
+            if (swingStarted && swingSettings) {
+                game_swing::Settings s;
+                s.grab = values.webGrab && sampleGrab;
+                s.maxSpeed = values.swingSpeed;
+                s.airWebs = values.airWebs;
+                s.gravity = vr_settings::gravity(values.weight);
+                s.walls = !(config.options & 16384);
+                sentSwingSettings = s;
+                swingSettingsSent = true;
+                // A hand-over owns the walls while it lasts; the player's own
+                // setting is kept above and goes back when it ends.
+                if (wallsHandedBack)
+                    s.walls = 0;
+                if (const auto code = swingSettings(&s)) {
+                    const auto text = "VR settings: the swing did not take them (" + std::to_string(code) + ")";
+                    message(3, 0, text.c_str());
+                }
+            }
+            if (swingStarted && startPunch && samplePunch) {
+                if (values.punch && !punchStarted) {
+                    game_punch::Config punch;
+                    punch.pid = config.pid;
+                    punch.base = config.base;
+                    punchStarted = !startPunch(&punch);
+                } else if (!values.punch && punchStarted && stopPunch) {
+                    stopPunch(nullptr);
+                    punchStarted = false;
+                }
+            }
+            if (swingStarted && startShooter && sampleShooter && stopShooter) {
+                if (values.webShooter && !shooterStarted) {
+                    game_shooter::Config shooter;
+                    shooter.pid = config.pid;
+                    shooter.base = config.base;
+                    shooterStarted = !startShooter(&shooter);
+                } else if (!values.webShooter && shooterStarted) {
+                    stopShooter(nullptr);
+                    shooterStarted = false;
+                }
+            }
+            // Turned off, the body blends back to the game's pose (Command
+            // flags); it is started only once.
+            if (nativeStarted && values.body && !bodyStarted)
+                bodyStarted = !native_body::start(config.base);
+        };
+        applySettings();
+        auto controls = [&](uint32_t keys) {
+            bridge::Control c;
+            c.modes = bridge::Mode::input;
+            c.serial = ++serial;
+            c.leaseMs = 250;
+            c.keys = keys;
+            check(submitInput(&c), "Controller input");
+        };
+        // The game replaced its player or has none: every module that acts on
+        // the player follows. A player gone again before this reaches the
+        // modules is reported by the watch once more.
+        auto attach = [&](const game_player::Player& next) {
+            const auto follow = [&](const game_player::Player& p) {
+                bridge::Config target;
+                target.pid = config.pid;
+                target.imageBase = config.base;
+                target.hero = p.hero;
+                target.actorRecord = p.record;
+                if (retargetBridge(&target))
+                    return false;
+                if (!swingStarted)
+                    return true;
+                game_swing::Config swing;
+                swing.pid = config.pid;
+                swing.base = config.base;
+                swing.record = p.record;
+                swing.mover = p.mover;
+                return !retargetSwing(&swing);
+            };
+            player = follow(next) ? next : game_player::Player{};
+            if (!player.hero)
+                follow({});
+            native_appearance::setPlayerRecord(player.record);
+            native_body::retarget(player.record);
+            if (websStarted)
+                native_webs::retarget(player.record);
+            playersFound += player.hero != 0;
+            // The tracking space aligns with the new body's camera again.
+            rig.reset();
+            history.clear();
+        };
+        while (!stopRequested && (!nativeDeadline || GetTickCount64() < nativeDeadline)) {
+            if (!config.durationMs && GetTickCount64() >= keepAliveDeadline)
+                break;
+            double copyMs{}, overlayMs{};
+            Presentation drawn{};
+            // This frame shows the game's presented frame on the screen, or
+            // (stereoScene) the scene's own two eye images once there are some.
+            bool showScreen{}, stereoScene{};
+            if (!steamGuarded && GetTickCount64() >= steamRetryMs) {
+                const uint32_t code = game_steam::install(config.base);
+                steamGuarded = !code;
+                steamRetryMs = GetTickCount64() + 2000;
+                if (code && code != 9801 && !steamWarned) {
+                    steamWarned = true;
+                    const auto text = "Quitting to the game's main menu may close the game: its Steam ticket "
+                                      "call could not be guarded (" + std::to_string(code) + ")";
+                    message(3, 0, text.c_str());
+                }
+            }
+            if (!padInstalled && GetTickCount64() >= padRetryMs) {
+                padInstalled = !game_pad::install();
+                padRetryMs = GetTickCount64() + 1000;
+            }
+            // VR play has eye images; the game played on its screen has the
+            // screen's, which these do not count.
+            const bool eyesWanted = motion.active && !flatScreen;
+            if (eyesWanted && firstImageDeadline && !lastNewImageMs && GetTickCount64() >= firstImageDeadline)
+                throw std::runtime_error("No native eye images reached OpenXR within 3 seconds");
+            if (eyesWanted && lastNewImageMs && GetTickCount64() - lastNewImageMs >= 3000)
+                throw std::runtime_error("Native eye presentation stalled for 3 seconds");
+            const bool active = runtime.frameStereo(
+                [&](const XrFrame& frame) {
+                    uint64_t changes{};
+                    if (const auto found = players.current(changes); changes != playerChanges) {
+                        playerChanges = changes;
+                        attach(found);
+                    }
+                    bridge::Data game{};
+                    check(sampleBridge(&game), "Gameplay sample");
+                    LARGE_INTEGER now{};
+                    QueryPerformanceCounter(&now);
+                    Mat4 body{}, camera{};
+                    std::memcpy(body.data(), game.player, 64);
+                    std::memcpy(camera.data(), game.before, 64);
+                    // Gameplay: the player's own follow or combat camera
+                    // committed within 100 ms (game_bridge.cpp).
+                    const bool bridgeRunning = game.state == 1;
+                    const bool committed = game.qpc && now.QuadPart >= static_cast<int64_t>(game.qpc) &&
+                                           static_cast<double>(now.QuadPart - game.qpc) / frequency.QuadPart < .1;
+                    const bool followsPlayer = native_view::validPose(body) && native_view::validPose(camera);
+                    const bool gameplay = player.hero && bridgeRunning && committed && followsPlayer;
+                    uint64_t moverTable{};
+                    read(game.mover, &moverTable, sizeof(moverTable));
+                    // The headset is worn, focused and tracked: an image can be shown.
+                    const bool viewing = frame.focused && frame.valid;
+                    displayTime = frame.predictedDisplayTime;
+                    // The game as it is, on its screen, instead of VR: the
+                    // SPIDY VR tab's VIEW (a click of both thumbsticks until
+                    // October 12). Its gameplay is the game screen's, in 3D
+                    // as scenes are there, the controllers an Xbox
+                    // controller's, and nothing of Spidy's on the hero.
+                    if (values.flatScreen != flatScreen && viewing) {
+                        flatScreen = values.flatScreen;
+                        rig.reset();
+                        history.clear();
+                        lastPresentedMs = lastNewImageMs = 0;
+                        presented = false;
+                        firstImageDeadline = GetTickCount64() + 3000;
+                        // Chosen in the pause menu, the game's screen is the
+                        // menu's own, where it stands.
+                        if (!wasScreen)
+                            screenPose = screenAhead(frame.head);
+                        std::lock_guard lock(telemetry);
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        ++SpidyXrData.toggles;
+                        SpidyXrData.flatScreen = flatScreen;
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                    }
+                    if (!frame.jump)
+                        jumpFromScreen = false;
+                    else if (wasScreen)
+                        jumpFromScreen = true;
+                    XrFrame controller = frame;
+                    // The T-pose calibration has A as it has the other buttons.
+                    controller.jump = frame.jump && !jumpFromScreen && !calibrationInput;
+                    // A trigger pulled with its hand at the temple is the game's
+                    // scan, and no web ball or reel meanwhile.
+                    {
+                        const Pose grips[2]{frame.hands[0].grip, frame.hands[1].grip};
+                        const bool tracked[2]{frame.hands[0].valid && validTrackedPose(frame.hands[0].grip),
+                                              frame.hands[1].valid && validTrackedPose(frame.hands[1].grip)};
+                        const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                        templePress.update(frame.seconds,
+                                           viewing && gameplay && !flatScreen && !calibrationInput &&
+                                               validTrackedPose(frame.head),
+                                           frame.head, grips, tracked, triggers);
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (templePress.hands() & (1u << i))
+                                controller.hands[i].trigger = 0;
+                        if (templePress.scans() != scansBefore) {
+                            scansBefore = templePress.scans();
+                            runtime.haptic(0, .3f);
+                            runtime.haptic(1, .3f);
+                        }
+                    }
+                    // The player's up (its actor's second row): a wall's normal
+                    // while the game holds it on one. Spidy's own flight is on none.
+                    const Vec3 heroUp{body[4], body[5], body[6]};
+                    // The wall that holds the player, as the latest swing sample
+                    // has it (no older than a tenth of a second): the swing's own
+                    // wall, its floor on the wall beside the body's centre, or
+                    // the game's own crawl, whose actor has the feet on the
+                    // surface itself.
+                    //
+                    // Both of them, since October 14. The crawl was held back
+                    // while how it takes the stick went unmeasured, and that
+                    // left the one state whose interacts work on a wall - the
+                    // only one the game calls supported there - looking nothing
+                    // like the wall walking the player asked to keep, so a vent
+                    // cost him the view. The rig's own crawl path was built and
+                    // tested the whole time; only this passed it nothing.
+                    const Vec3 feet{body[12], body[13], body[14]};
+                    SurfaceHold hold;
+                    const bool swingFresh =
+                        swingState.status && swingState.qpc &&
+                        static_cast<int64_t>(swingState.qpc) > now.QuadPart - frequency.QuadPart / 10;
+                    if (swingFresh && swingState.wall == static_cast<uint32_t>(game_swing::Surface::wall)) {
+                        // The wall's face under the feet, in the wall's own frame
+                        // (its distance is the body's centre's, a metre over the
+                        // feet): the same floor the game's crawl stands the hero
+                        // on, so going from the one hold to the other moves no one.
+                        hold.normal = swingState.wallNormal;
+                        hold.anchor = feet - hold.normal * (swingState.wallDistance - hold.normal.y);
+                        hold.speed = length(swingState.velocity);
+                    } else if (swingFresh && swingState.wall == static_cast<uint32_t>(game_swing::Surface::game)) {
+                        // The crawl's feet are on the surface, so they are the
+                        // floor under the player, and its normal comes from a
+                        // ray where the swing has one. The actor's own up is
+                        // that surface while it rocks on it (up to 14 degrees
+                        // off over a few frames, reports/wall-crawl.json) and
+                        // serves where the ray found nothing. In the game's own
+                        // wall run the feet are off the wall by the distance
+                        // the swing measured: the floor is the wall under them.
+                        hold.normal = finite(swingState.wallNormal) && length(swingState.wallNormal) > .5f
+                                          ? normalized(swingState.wallNormal)
+                                          : normalized(heroUp);
+                        hold.anchor = feet - hold.normal * (std::isfinite(swingState.wallDistance)
+                                                                ? std::clamp(swingState.wallDistance, 0.f, 1.5f)
+                                                                : 0.f);
+                        hold.speed = length(swingState.velocity);
+                        hold.crawl = true;
+                        ++crawlFrames;
+                    } else if (swingFresh && swingState.wall == static_cast<uint32_t>(game_swing::Surface::floor)) {
+                        // The game's crawl on a floor: a vent, a duct. The
+                        // floor is under the feet and level, whatever the
+                        // crawling actor rocks to: the view stands as it
+                        // stands, the body plants its feet on it (the game's
+                        // crawl laid the legs out in front of the player in
+                        // the first mission's duct, October 14 19:57), and
+                        // the head stays under its roof (below).
+                        hold.normal = {0, 1, 0};
+                        hold.anchor = feet;
+                        hold.speed = length(swingState.velocity);
+                        hold.crawl = true;
+                        ++floorCrawlFrames;
+                    }
+                    const bool crawlsFloor = hold.crawl && hold.normal.y > .99f;
+                    floorCrawlSeconds =
+                        crawlsFloor ? floorCrawlSeconds + (std::isfinite(frame.seconds)
+                                                               ? std::clamp(frame.seconds, 0.f, .1f)
+                                                               : 0.f)
+                                    : 0.f;
+                    // Between the swing's wall and the game's crawl (game_warp:
+                    // the game turning the hero onto the wall at rest, or off it
+                    // as he walks on) the swing reports neither for a moment.
+                    // The view keeps the surface it stood him on while the body
+                    // stays at its floor, slower along it than a walk: dropped,
+                    // the view turned back toward level and onto the wall again
+                    // (48 degrees in a tenth of a second, October 14 16:48). A
+                    // jump or a run off the wall leaves it at once.
+                    {
+                        constexpr float holdGrace = .4f, holdGraceSpeed = .8f;
+                        const float seconds =
+                            std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
+                        const Vec3 n = lastHold.normal;
+                        const Vec3 v = finite(swingState.velocity) ? swingState.velocity : Vec3{};
+                        const bool held = length(hold.normal) > .5f;
+                        holdGapSeconds = held ? 0.f : holdGapSeconds + seconds;
+                        if (held) {
+                            lastHold = hold;
+                        } else if (motion.standing && length(n) > .5f && holdGapSeconds < holdGrace &&
+                                   std::abs(dot(feet - lastHold.anchor, n)) < 1.5f &&
+                                   length(v - n * dot(v, n)) < holdGraceSpeed) {
+                            // On the plane it stood on, with the feet: kept
+                            // where it was while the game took a player over
+                            // a shaft's lip at 1.3 m/s, the view stayed on
+                            // the wall a third of a second after he had left
+                            // it and then jumped to him (October 14, 86 s).
+                            // Only for a player at rest: one on his way off
+                            // the surface is on his way off it.
+                            hold = lastHold;
+                            hold.anchor = feet - n * dot(feet - lastHold.anchor, n);
+                            ++holdGraceFrames;
+                        } else {
+                            lastHold = {};
+                        }
+                    }
+                    // A or the left stick in the air flips the player (FlipMotion),
+                    // in the air as the latest swing sample has it.
+                    // In the game's crawl on a floor the head goes no higher
+                    // than a crouch, whatever a ray finds over it: part of the
+                    // first mission's duct has a roof no ray hits, and the
+                    // head stood out through it at the player's own height.
+                    float over = headroomSeen;
+                    if (floorCrawlSeconds >= crawlSettleSeconds) {
+                        over = over > 0 ? std::min(over, crawlRoom) : crawlRoom;
+                        ++crawlCapFrames;
+                    }
+                    rig.headroom(over);
+                    if (headroomSeen > 0 && (headroomLeast == 0 || headroomSeen < headroomLeast))
+                        headroomLeast = headroomSeen;
+                    motion = rig.update(controller, feet, {camera[8], camera[9], camera[10]}, gameplay,
+                                        swingState.owned ? Vec3{0, 1, 0} : heroUp,
+                                        game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart), hold,
+                                        {camera[4], camera[5], camera[6]});
+                    if (motion.headDrop > .02f)
+                        ++headDroppedFrames;
+                    if (motion.active && motion.onSurface) {
+                        surfaceEntries += !wasOnSurface;
+                        ++surfaceFrames;
+                    }
+                    wasOnSurface = motion.active && motion.onSurface;
+                    // Without VR play (menus, hint cards, cutscenes, animated
+                    // cameras, loading, and the game played on its screen,
+                    // VIEW: GAME SCREEN) the game's own camera goes on the
+                    // screen.
+                    const bool vrPlay = motion.active && !flatScreen;
+                    bool screen{};
+                    if (viewing)
+                        screen = gameScreen.update(vrPlay, GetTickCount64());
+                    else
+                        gameScreen.reset();
+                    wasScreen = screen;
+                    // A scene the game plays there (a cutscene, a finisher, a
+                    // death) gets its own two eyes: the game renders its
+                    // camera once for each of the viewer's. Not a pause menu
+                    // or a hint card (the game's frames take no game time),
+                    // nor without a player (the title screen, a load), nor a
+                    // scene whose eyes get no HUD panel for its subtitles.
+                    const auto clock = game_time::telemetry();
+                    const bool timeRuns =
+                        sceneClock.running(clock.installed && clock.gameFrame > 0, GetTickCount64());
+                    const bool scene =
+                        scenePanel.wanted(screen && values.screenDepth > 0 && player.hero && bridgeRunning && timeRuns,
+                                          native_hud::onScreen(sceneHoldMs), GetTickCount64());
+                    // On the screen the controllers are the game's Xbox
+                    // controller; in VR it gets Start (menu), Back (X) and
+                    // the native walking, jumping, dodge and interact
+                    // (submitted below).
+                    // The pad layer is latched in the input block below, where the
+                    // swing's state is known, so this reads the last frame's: the
+                    // chord takes chordSeconds to latch, so a frame is nothing.
+                    // Nothing reaches the game until the headset has tracked
+                    // once: before that the player presses blind, and the title
+                    // screen's QUIT GAME is two moves from the top.
+                    headSeen = headSeen || validTrackedPose(frame.head);
+                    const auto mapping =
+                        game_pad::mappingFor(viewing, headSeen, screen, padLayer.latched());
+                    const bool inPlay =
+                        mapping == game_pad::Mapping::gameplay || mapping == game_pad::Mapping::pad;
+                    origins.update(frame.buttons, inPlay);
+                    // What the controllers themselves sent, beside what reached the
+                    // game: a button missing from both was never pressed.
+                    if (inPlay)
+                        vrButtonsPlayed |= frame.buttons;
+                    // The prompts are read wherever the game's UI builds one - it
+                    // looks their texts up while it owns the screen - and rewritten
+                    // only in VR play, where the game's own button names are wrong.
+                    // The reading stays OFF in a session, and October 13 is why:
+                    // with it on, pressing CONTINUE at the main menu killed the
+                    // game every time, in a player's two sessions and in two
+                    // reproductions of mine; with it off the same save loaded and
+                    // played. The process simply ends, no crash dump, so the
+                    // fault is not reached by the guards here. Loading a save is
+                    // when it happens, which is when the game resolves a flood of
+                    // its own UI, and what is left to read there is a call's
+                    // argument (readPromptText).
+                    //
+                    // Nothing a player uses needs it. The vent's hand-over
+                    // (game_pad::WallHandover) asks only whether the game is
+                    // offering an interact, and with the reading off it never is,
+                    // which is exactly the case the hand-over is for. What waits
+                    // on this is the prompt-driven press (ContextPress) and the
+                    // prompt wording, neither of which has run in a headset.
+                    //
+                    // `SpidyPromptsWatch` still turns it on for a probe, which is
+                    // where the rest of this gets found - in a game of mine, not
+                    // in a session of theirs.
+                    game_prompts::setReading(false);
+                    game_prompts::setRewriting(false);
+                    (void)promptHelp;
+                    // A change in the SPIDY VR tab takes effect at once.
+                    if (game_menu::take(values)) {
+                        ++settingChanges;
+                        applySettings();
+                    }
+                    game_menu::publish(values);
+                    const uint32_t gate =
+                        (player.hero ? 0 : gateNoPlayer) | (bridgeRunning ? 0 : gateBridge) |
+                        (committed ? 0 : gateNoCommit) | (followsPlayer ? 0 : gateOtherCamera) |
+                        (gameplay && !motion.active ? gateTracking : 0);
+                    if (gameplay && !motion.active) {
+                        ++trackingGapFrames;
+                        trackingGapReasons |= motion.inactive;
+                    }
+                    if ((gameScreen.entered() && !flatScreen) || ((flatScreen || screen) && frame.recentered))
+                        screenPose = screenAhead(frame.head, vr_settings::screenDistance);
+                    // An image keeps the tracking-space poses it was rendered
+                    // for, valid until the tracking space itself changes.
+                    if (!viewing || frame.recentered)
+                        history.clear();
+                    if (!viewing || frame.recentered || !motion.active || flatScreen)
+                        hudFollow.reset();
+                    if (!viewing) {
+                        lastPresentedMs = lastNewImageMs = firstImageDeadline = 0;
+                        presented = false;
+                    } else if (vrPlay && !wasGameplay) {
+                        // Gameplay counts its own images: the screen before it
+                        // may have had none for a while (loading).
+                        lastNewImageMs = 0;
+                        presented = false;
+                        firstImageDeadline = nativeStarted ? GetTickCount64() + 3000 : 0;
+                    }
+                    wasGameplay = vrPlay;
+                    const bool controlsVisible = recentPresentation(lastNewImageMs, GetTickCount64());
+                    // The T-pose calibration: at the first gameplay of a session
+                    // without one, or when the SPIDY VR tab asks for it, once VR
+                    // has shown play for a moment and no web flies the player. It
+                    // goes on only while VR shows play (a pause or the flat
+                    // screen holds it), and B skips it.
+                    using CalibrationPhase = body_calibration::Phase;
+                    const bool immersive = viewing && motion.active && !flatScreen && controlsVisible;
+                    const uint64_t nowMs = GetTickCount64();
+                    if (!immersive)
+                        immersiveSince = 0;
+                    else if (!immersiveSince)
+                        immersiveSince = nowMs;
+                    const bool skipPressed = (frame.buttons & buttonB) && !skipHeld;
+                    skipHeld = (frame.buttons & buttonB) != 0;
+                    if (calibration.phase() == CalibrationPhase::idle && (calibrationWanted || values.calibrate) &&
+                        immersive && nowMs - immersiveSince >= 1500 && !swingState.owned) {
+                        calibration.start();
+                        calibrationPanel = body_calibration::panelPose(frame.head);
+                        calibrationInput = true;
+                        values.calibrate = false; // the tab shows NO again
+                        runtime.haptic(0, .3f);
+                        runtime.haptic(1, .3f);
+                        message(3, 0, "Body calibration: stand in a T-pose and hold both triggers (B skips)");
+                    } else if (calibration.phase() == CalibrationPhase::done) {
+                        if (nowMs - calibrationShownAt >= 3500)
+                            calibration.stop();
+                    } else if (calibration.phase() != CalibrationPhase::idle && immersive && skipPressed) {
+                        calibration.stop();
+                        ++calibrationSkips;
+                        // Nor at the next sessions' first gameplay (the launcher keeps it).
+                        calibrationWanted = calibrationPrompt = false;
+                        runtime.haptic(1, .25f);
+                        message(3, 0, "Body calibration skipped - Settings > SPIDY VR > CALIBRATE BODY does it later");
+                    } else if (calibration.phase() != CalibrationPhase::idle && immersive) {
+                        body_calibration::Sample sample;
+                        sample.headTracked = validTrackedPose(frame.head);
+                        sample.head = frame.head;
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto& hand = frame.hands[i];
+                            sample.handTracked[i] = hand.valid && validTrackedPose(hand.grip);
+                            sample.grips[i] = hand.grip;
+                            sample.triggers[i] = hand.trigger;
+                        }
+                        sample.seconds = frame.seconds;
+                        // The hero's rig once the body has turned it, else Spider-Man's measured one.
+                        body_calibration::Proportions sizes;
+                        native_body::proportions(sizes);
+                        const auto before = calibration.phase();
+                        if (calibration.update(sample, sizes)) {
+                            lastCalibration = calibration.result();
+                            calibratedEye = std::clamp(lastCalibration.eyeHeight,
+                                                       body_calibration::minEyeHeightMm / 1000.f,
+                                                       body_calibration::maxEyeHeightMm / 1000.f);
+                            calibratedArm = std::clamp(lastCalibration.armLength,
+                                                       body_calibration::minArmLengthMm / 1000.f,
+                                                       body_calibration::maxArmLengthMm / 1000.f);
+                            ++calibrations;
+                            calibrationWanted = false;
+                            calibrationShownAt = nowMs;
+                            runtime.haptic(0, .7f);
+                            runtime.haptic(1, .7f);
+                            char text[160];
+                            sprintf_s(text, "Body calibrated: eye height %.2f m, arm length %.2f m (left %.2f, right %.2f)",
+                                      calibratedEye, calibratedArm, lastCalibration.reach[0], lastCalibration.reach[1]);
+                            message(3, 0, text);
+                        } else if (before == CalibrationPhase::waiting &&
+                                   calibration.phase() == CalibrationPhase::holding) {
+                            // The pose counts: a light tick in both hands.
+                            runtime.haptic(0, .15f);
+                            runtime.haptic(1, .15f);
+                        }
+                    }
+                    if (calibrationInput && calibration.phase() == CalibrationPhase::idle) {
+                        bool held = (frame.buttons & buttonB) || frame.jump;
+                        for (const auto& hand : frame.hands)
+                            held = held || hand.trigger > .2f || hand.squeeze > .2f;
+                        calibrationInput = held;
+                    }
+                    if (calibrationInput) {
+                        // The calibration has the controllers: no web, web ball or jump.
+                        motion.swing.jump = false;
+                        motion.nativeKeys &= ~swingJumpKey;
+                        for (auto& hand : motion.swing.hands)
+                            hand.trigger = hand.grip = 0;
+                    }
+                    if (padLayer.latched()) {
+                        // The pad layer has them too: the grips are the game's bumpers
+                        // there and the triggers its triggers, so neither shoots a web.
+                        // A is the game's own A straight from the controller, so the
+                        // swing's leap goes with them.
+                        motion.swing.jump = false;
+                        motion.nativeKeys &= ~swingJumpKey;
+                        for (auto& hand : motion.swing.hands)
+                            hand.trigger = hand.grip = 0;
+                    }
+                    // Slow motion: the left thumbstick's click, in VR play outside the calibration.
+                    const bool slowAllowed = immersive && calibration.phase() == CalibrationPhase::idle;
+                    stepSlowMotion(frame.seconds,
+                                   slowPress.update(frame.seconds, slowAllowed, frame.hands[0].stickClick,
+                                                    frame.hands[1].stickClick),
+                                   slowAllowed);
+                    if (motion.active && !raysStarted) {
+                        native_rays::Config rays;
+                        rays.pid = config.pid;
+                        rays.base = config.base;
+                        rays.durationMs = moduleDuration;
+                        check(startRays(&rays), "Start controller world rays");
+                        raysStarted = true;
+                    }
+                    if (raysStarted) {
+                        auto input = motion.swing;
+                        input.focused = motion.active && !flatScreen;
+                        auto aim = controllerAimRays(input, ++serial);
+                        // The room around the player, in the slots the hands
+                        // leave free: one up and four along the ground, cast
+                        // only as far as counts as closing him in (Enclosure).
+                        // From the HEAD, not the feet. On a wall the feet are
+                        // on the surface, so rays from there start inside the
+                        // building and come back at nothing: every way reads as
+                        // closed and the city looks like a vent (the player, on
+                        // the first build of this: "now i never stand on the
+                        // wall"). The head stands off the wall, in open air.
+                        if (motion.active && validTrackedPose(motion.headPose)) {
+                            const Vec3 at = motion.headPose.position;
+                            constexpr Vec3 ways[]{{0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {1, 0, 0}, {-1, 0, 0}};
+                            for (unsigned i = 0; i < 5 && aim.count < native_rays::capacity; ++i)
+                                aim.rays[aim.count++] = {at, Enclosure::nearby + 1.f, ways[i], 2u + i};
+                            // And the room over his feet, along the surface he
+                            // stands on: how far the head can go before it is
+                            // through the roof of a vent or a duct. From the
+                            // FEET, where the other five are from the head - a
+                            // head already through that roof would cast from
+                            // the far side of it and find nothing.
+                            //
+                            // Along the up the head is actually placed on: the
+                            // surface's normal while the view stands on it, the
+                            // world's up otherwise, because that is the axis the
+                            // rig caps. The actor's own up is neither while
+                            // Spidy holds him on a wall - the game has him
+                            // upright in its air state there - and casting along
+                            // it found the shaft's ceiling 0.16 m over his feet
+                            // and brought his head down to a crouch for 22
+                            // frames (reports/game-vr-20261014-124656.json).
+                            const Vec3 up = motion.standing && finite(hold.normal) && length(hold.normal) > .5f
+                                                ? normalized(hold.normal)
+                                                : Vec3{0, 1, 0};
+                            if (finite(up) && length(up) > .5f && aim.count < native_rays::capacity)
+                                aim.rays[aim.count++] = {feet + up * .1f, headroomReach, up, 7u};
+                            aim.leaseMs = 100;
+                        }
+                        check(submitRays(&aim), "Controller world rays");
+                        // What those rays found, from the batch the bridge last
+                        // finished. A reading a frame or two old is nothing
+                        // against the time the verdict takes to settle.
+                        if (rayResults) {
+                            Enclosure::Room room{};
+                            float* const sides[]{&room.up, &room.north, &room.south, &room.east, &room.west};
+                            for (auto* side : sides)
+                                *side = Enclosure::nearby + 1.f;
+                            for (unsigned i = 0; i < native_rays::capacity && i < rayResults->count; ++i) {
+                                const auto& hit = rayResults->hits[i];
+                                if (hit.ray.tag == 7) {
+                                    // The surface over the feet, from where the
+                                    // ray started a tenth of a metre up. A
+                                    // reading tighter than a crouch is not a
+                                    // roof - a step, a strut, a lip at his feet
+                                    // - and the head is left alone for it: the
+                                    // rule is for a space a player is inside,
+                                    // not for whatever his feet are against.
+                                    const float found = native_rays::fixedSurface(hit) && std::isfinite(hit.fraction)
+                                                            ? hit.fraction * hit.ray.distance + .1f
+                                                            : 0.f;
+                                    headroomSeen = found >= leastHeadroom + headClearance ? found : 0.f;
+                                    continue;
+                                }
+                                if (hit.ray.tag < 2 || hit.ray.tag > 6)
+                                    continue;
+                                const float reach = hit.ray.distance;
+                                // Only what the world is built of closes a
+                                // player in. A car, a crate or a passer-by is
+                                // on every street within four metres, and
+                                // counting those made the whole city indoors.
+                                const float found = native_rays::fixedSurface(hit) && std::isfinite(hit.fraction)
+                                                        ? hit.fraction * reach
+                                                        : reach;
+                                if (std::isfinite(found) && found >= 0)
+                                    *sides[hit.ray.tag - 2] = found;
+                            }
+                            if (enclosure.update(frame.seconds, room))
+                                ++indoorFrames;
+                        }
+                    }
+                    if (motion.active && !flatScreen && controlsVisible && !swingStarted) {
+                        game_swing::Config swing;
+                        swing.pid = config.pid;
+                        swing.base = config.base;
+                        swing.record = player.record;
+                        swing.mover = player.mover;
+                        swing.motionModule = config.motionModule;
+                        swing.durationMs = moduleDuration;
+                        swing.maxSpeed = values.swingSpeed;
+                        swing.gravity = vr_settings::gravity(values.weight);
+                        swing.grabKinds = !values.webGrab || !sampleGrab ? 0 : game_grab::movableKinds;
+                        check(startSwing(&swing), "Start native swinging");
+                        swingStarted = true;
+                        // Fists and the web shooter take the swing's input samples;
+                        // both are optional and, like the grab, can be switched on later.
+                        applySettings();
+                    }
+                    if (swingStarted) {
+                        game_swing::Command input;
+                        input.serial = ++serial;
+                        input.focused = motion.active && !flatScreen && controlsVisible;
+                        input.sampleTimeNs = frame.predictedDisplayTime > 0 ? frame.predictedDisplayTime : 1;
+                        input.sampleSeconds =
+                            std::isfinite(frame.seconds) && frame.seconds > 0 && frame.seconds <= .1f
+                                ? frame.seconds
+                                : 1.f / 90.f;
+                        input.jump = motion.swing.jump;
+                        input.move = motion.swing.move;
+                        input.trackingYaw = motion.swing.trackingYaw;
+                        input.tilt = motion.swing.tilt;
+                        input.leap = input.focused ? leapOut : 0.f;
+                        if (const Vec3 look = motion.headPose.orientation.rotate({0, 0, -1});
+                            input.focused && finite(look) && length(look) > .5f)
+                            input.look = normalized(look);
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto& hand = motion.swing.hands[i];
+                            input.hands[i] = {hand.aim, hand.gripRelativeToHead, hand.tracked, hand.trigger,
+                                              hand.grip};
+                        }
+                        check(submitSwing(&input), "Tracked swing input");
+                        check(sampleSwing(&swingState), "Native swing feedback");
+                        if (!sampleBends || sampleBends(&swingBends))
+                            swingBends = {};
+                        // Nothing here changes who holds the player on a wall
+                        // behind his back. Every way of doing it from the room
+                        // around him dropped him (October 14: switching the
+                        // walls off, refusing the next wall of a climb, and a
+                        // push into the wall with the walls off, each a fall of
+                        // up to 7.5 m), and the player put the reason plainly:
+                        // "the shaft shouldnt affect anything, the vent in the
+                        // top is the target, there are similiar events in the
+                        // game with vents outside". The room is still read, for
+                        // the report.
+                        check(swingState.error, "Native swinging");
+                        if (!sampleGrab || sampleGrab(&grabState))
+                            grabState = {};
+                        // What each free hand's web button would do: the aim markers.
+                        aims = aimed = {};
+                        if (sampleAim && input.focused) {
+                            game_swing::AimData sample;
+                            const game_swing::AimData expected;
+                            if (!sampleAim(&sample) && sample.magic == expected.magic &&
+                                sample.version == expected.version && sample.bytes == expected.bytes &&
+                                sample.status == 2)
+                                aimed = sample;
+                        }
+                        if (values.aimMarkers)
+                            aims = aimed;
+                        // A free hand come onto the other hand's web: a light
+                        // tick, a press here takes hold of that web.
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const bool on =
+                                aimed.hands[i].kind == static_cast<uint32_t>(game_swing::AimKind::strand);
+                            if (on && !onStrandBefore[i] &&
+                                frame.predictedDisplayTime - strandTickAt[i] > 400'000'000) {
+                                runtime.haptic(i, .2f);
+                                strandTickAt[i] = frame.predictedDisplayTime;
+                            }
+                            onStrandBefore[i] = on;
+                        }
+                        bool trails[2]{};
+                        Vec3 trailEnds[2]{};
+                        for (unsigned i = 0; i < 2; ++i) {
+                            // A web that caught a thug ends on him, wherever he goes.
+                            const auto& held = grabState.hands[i];
+                            const bool grabbing = input.focused && held.phase != 0;
+                            const bool wasGrabbing = grabPhases[i] != 0;
+                            const int64_t displayAt = frame.predictedDisplayTime;
+                            if (grabbing) {
+                                swingState.webs[i] = {1, 0, held.end, held.length, held.taut ? 1.f : 0.f};
+                                // Caught, yanked, at the hand: each its own pulse.
+                                const auto phase = static_cast<GrabPhase>(held.phase);
+                                if (held.phase != grabPhases[i]) {
+                                    runtime.haptic(i, phase == GrabPhase::Yanked ? 1.f
+                                                      : phase == GrabPhase::Held ? .4f
+                                                                                 : .55f);
+                                    pulseUntil[i] = displayAt + 30'000'000;
+                                } else if (held.tension > .05f && displayAt >= pulseUntil[i]) {
+                                    // Between pulses the hand feels the web pull: a
+                                    // hanging trash can faintly, one swung hard or too
+                                    // heavy to lift strongly.
+                                    runtime.haptic(i, std::min(.6f, .6f * held.tension));
+                                }
+                            } else if (wasGrabbing) {
+                                runtime.haptic(i, .6f); // thrown or let go
+                            }
+                            grabPhases[i] = grabbing ? held.phase : 0;
+                            // The web let go of trails what it held as it dissolves.
+                            trails[i] = input.focused && !grabbing && held.trailing;
+                            trailEnds[i] = held.end;
+                            const bool attached =
+                                input.focused && swingState.status && swingState.webs[i].attached;
+                            // A web taken hold of, not shot: the hand closes on it,
+                            // a softer pulse than a shot's.
+                            const bool taken = attached && !grabbing && (swingState.webs[i].attached & 4);
+                            if (attached != attachedBefore[i] && !grabbing && !wasGrabbing)
+                                runtime.haptic(i, !attached ? .2f : taken ? .4f : .65f);
+                            if (attached && swingState.zips > zipBefore && !grabbing)
+                                runtime.haptic(i, 1);
+                            attachedBefore[i] = attached;
+                            webTaken[i] = taken;
+                            webTimes.update(i, attached, swingState.webs[i].anchor,
+                                            webShooter(motion.grips[i], i).position,
+                                            frame.predictedDisplayTime);
+                        }
+                        zipBefore = swingState.zips;
+                        {
+                            // One web in both hands is one of the game's ropes,
+                            // from the hand that holds it nearer its end.
+                            const bool shared = attachedBefore[0] && attachedBefore[1] &&
+                                                (swingState.webs[0].attached & 2) &&
+                                                (swingState.webs[1].attached & 2) && !grabPhases[0] && !grabPhases[1];
+                            std::array<WebRopes::Hand, 2> held{};
+                            for (unsigned i = 0; i < 2; ++i)
+                                held[i] = {attachedBefore[i], webTaken[i], shared, swingState.webs[i].length,
+                                           webTimes[i].attachedAt};
+                            webRopes.update(held);
+                        }
+                        // A thug the web brought to a player in the air has
+                        // arrived within reach: time slows, to hit him there.
+                        // (Until the fifth build of October 12 it slowed as the
+                        // yank began, with the thug still far off.)
+                        if (grabState.catches > catchesBefore && input.focused &&
+                            game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart)) {
+                            moments.start(Moment::airPull);
+                            runtime.haptic(0, .45f);
+                            runtime.haptic(1, .45f);
+                        }
+                        catchesBefore = grabState.catches;
+                        // Onto a wall, and off it with a jump: both hands feel it.
+                        if (input.focused && swingState.status &&
+                            (swingState.walls > wallsBefore || swingState.wallJumps > wallJumpsBefore)) {
+                            const float pulse = swingState.wallJumps > wallJumpsBefore ? .6f : .45f;
+                            runtime.haptic(0, pulse);
+                            runtime.haptic(1, pulse);
+                        }
+                        wallsBefore = swingState.walls;
+                        wallJumpsBefore = swingState.wallJumps;
+                        // Every landed blow, a fist's or a web strike's: the hand
+                        // that threw it kicks, as hard and as long as the blow was
+                        // (a jab 60 ms, a blow that sends him flying 180 ms and the
+                        // other hand with it); the game's time stops for a moment;
+                        // a burst shows where it landed, with its count in the
+                        // flow; and it sounds. Until October 11 a landed punch was
+                        // one 25 ms pulse at half strength and nothing else.
+                        game_punch::Strikes strikes{};
+                        const game_punch::Strikes expectedStrikes;
+                        const bool fighting =
+                            punchStarted && sampleStrike && !sampleStrike(&strikes) &&
+                            strikes.magic == expectedStrikes.magic && strikes.version == expectedStrikes.version &&
+                            strikes.bytes == expectedStrikes.bytes;
+                        if (fighting) {
+                            // Punching switched off and on again counts from nothing.
+                            blowsBefore = std::min(blowsBefore, strikes.blows);
+                            strikesBefore = std::min(strikesBefore, strikes.opened);
+                            knockoutsBefore = std::min(knockoutsBefore, strikes.knockouts);
+                            if (strikes.opened > strikesBefore && input.focused) {
+                                // Off to him: a tick in both hands, and the rush.
+                                runtime.haptic(0, .35f, .05f);
+                                runtime.haptic(1, .35f, .05f);
+                                play(ImpactSound::Rush);
+                            }
+                            if (strikes.blows > blowsBefore && input.focused) {
+                                const auto kind = static_cast<BlowKind>(strikes.lastKind);
+                                const bool called = strikes.lastCalled != 0;
+                                const bool finisher = kind == BlowKind::Finisher,
+                                           heavy = kind != BlowKind::Hit || called;
+                                // Time slows for a moment at the blows worth a look.
+                                if (called)
+                                    moments.start(Moment::called);
+                                else if (finisher || kind == BlowKind::Launch || kind == BlowKind::Slam)
+                                    moments.start(Moment::blow);
+                                const unsigned hand = strikes.lastHand & 1;
+                                const float strength =
+                                    heavy ? 1.f
+                                          : std::isfinite(strikes.lastStrength)
+                                                ? std::clamp(strikes.lastStrength, 0.f, 1.f)
+                                                : 0.f;
+                                const float kick = finisher ? .32f : heavy ? .18f : .06f + .08f * strength;
+                                runtime.haptic(hand, heavy ? 1.f : .6f + .4f * strength, kick);
+                                if (heavy)
+                                    runtime.haptic(1 - hand, finisher ? 1.f : .5f, finisher ? kick : .1f);
+                                for (unsigned i = 0; i < 2; ++i)
+                                    if (i == hand || heavy)
+                                        pulseUntil[i] = frame.predictedDisplayTime +
+                                                        static_cast<int64_t>(kick * 1e9f) + 20'000'000;
+                                hitStop.hit(strength, finisher);
+                                if (finite(strikes.lastPoint)) {
+                                    auto& burst = bursts[nextBurst++ % bursts.size()];
+                                    burst.view = {strikes.lastPoint, strength, kind,
+                                                  static_cast<int>(std::min(strikes.lastCount, 999u)), 0, called};
+                                    burst.since = frame.predictedDisplayTime;
+                                }
+                                play(finisher ? ImpactSound::Finisher
+                                     : heavy ? ImpactSound::Heavy
+                                     : strength >= .35f ? ImpactSound::Firm
+                                                        : ImpactSound::Light);
+                            }
+                            // A knockout of the player's: time eases for an instant, both
+                            // hands feel it, and it is lettered where he stood. This one is
+                            // done.
+                            if (strikes.knockouts > knockoutsBefore && input.focused &&
+                                finite(strikes.knockoutPoint)) {
+                                moments.start(Moment::knockout);
+                                runtime.haptic(0, .8f, .09f);
+                                runtime.haptic(1, .8f, .09f);
+                                auto& mark = knockoutMarks[nextKnockout++ % knockoutMarks.size()];
+                                mark.view = {strikes.knockoutPoint, 0};
+                                mark.since = frame.predictedDisplayTime;
+                            }
+                            blowsBefore = strikes.blows;
+                            strikesBefore = strikes.opened;
+                            knockoutsBefore = strikes.knockouts;
+                        }
+                        // The mark over the thug the next punch would go to, with
+                        // the arrow of the blow the flow calls. A new call ticks
+                        // in both hands.
+                        if (fighting && input.focused && strikes.cueTarget && finite(strikes.cuePoint)) {
+                            const bool locked = strikes.cueLocked != 0;
+                            if (strikes.cueTarget != cueTarget || strikes.cueWay != cueWay || locked != cueLocked)
+                                cueSince = frame.predictedDisplayTime;
+                            cueLocked = locked;
+                            if (strikes.cueWay && strikes.cueWay != cueWay) {
+                                runtime.haptic(0, .12f);
+                                runtime.haptic(1, .12f);
+                            }
+                            cueTarget = strikes.cueTarget;
+                            cueWay = strikes.cueWay;
+                            cue = {strikes.cuePoint, static_cast<CueWay>(strikes.cueWay), strikes.cueFinisher != 0,
+                                   strikes.cueLeft, 0, locked};
+                        } else {
+                            cue = {};
+                            cueTarget = 0;
+                            cueWay = 0;
+                            cueLocked = false;
+                        }
+                        game_punch::Data punch{};
+                        if (punchStarted && !samplePunch(&punch))
+                            for (unsigned i = 0; i < 2; ++i) {
+                                // With an older ray module: a landed punch knocks back
+                                // into the hand, as hard as it was; the web's rumble
+                                // waits for it.
+                                if (!fighting && punch.hands[i].punches > punchesBefore[i] && input.focused) {
+                                    runtime.haptic(i, .5f + .5f * punch.hands[i].lastStrength);
+                                    pulseUntil[i] = frame.predictedDisplayTime + 40'000'000;
+                                }
+                                punchesBefore[i] = punch.hands[i].punches;
+                            }
+                        game_shooter::Data shots{};
+                        if (shooterStarted && !sampleShooter(&shots)) {
+                            listed = shots;
+                            for (unsigned i = 0; i < 2; ++i) {
+                                // A web ball leaving the wrist: a short, crisp tick.
+                                if (shots.hands[i].shots > shotsBefore[i] && input.focused) {
+                                    runtime.haptic(i, .35f);
+                                    pulseUntil[i] = frame.predictedDisplayTime + 25'000'000;
+                                    ballShot[i] = true;
+                                }
+                                shotsBefore[i] = shots.hands[i].shots;
+                            }
+                        }
+                        fightNear = input.focused && ((fighting && strikes.cueTarget != 0) || punch.bots != 0);
+                        if (websStarted && motion.active && !flatScreen) {
+                            // The game draws these webs from the tracked web shooters.
+                            native_webs::Request webs;
+                            native_webs::Bent bent[2]{};
+                            webs.feet = motion.anchor;
+                            for (unsigned i = 0; i < 2; ++i) {
+                                auto& hand = webs.hands[i];
+                                // Each rope draws the web WebRopes gave it, from the
+                                // web shooter of the hand that holds that web nearer
+                                // its end.
+                                const auto& rope = webRopes.rope(i);
+                                const auto from =
+                                    static_cast<unsigned>(rope.hands ? rope.from : rope.last >= 0 ? rope.last : i);
+                                // A web let go of a thrown prop goes with it as it dissolves.
+                                const bool trail = !rope.hands && rope.last >= 0 && !attachedBefore[from] && trails[from];
+                                hand.attached = rope.hands ? 1 : trail ? 2 : 0;
+                                hand.tracked = motion.swing.hands[from].tracked;
+                                hand.attachedAt = rope.key;
+                                hand.anchor = trail ? trailEnds[from] : swingState.webs[from].anchor;
+                                hand.wrist = webShooter(motion.grips[from], from).position;
+                                // A web round edges: to where it sticks, round each of them. The
+                                // swing's anchor is the nearest edge, and drawn to it the web's end
+                                // jumped to each new one. Where Spidy cannot lay the rope's points
+                                // (no hand points hook) it stays drawn to that edge, not straight
+                                // through the building to its end.
+                                if (const auto& edges = swingBends.hands[from];
+                                    hand.attached == 1 && !grabPhases[from] && edges.count &&
+                                    finite(edges.end) && native_webs::drawsHeld()) {
+                                    hand.anchor = edges.end;
+                                    bent[i].count =
+                                        std::min<uint32_t>(edges.count, native_webs::maxRopeBends);
+                                    for (uint32_t k = 0; k < bent[i].count; ++k)
+                                        bent[i].points[k] = edges.points[k];
+                                }
+                            }
+                            // One web in both hands: its rope comes to the upper
+                            // wrist from the lower one, in the game's own material.
+                            if (const int upper = webRopes.upper(); upper >= 0) {
+                                const auto lower = static_cast<unsigned>(1 - upper);
+                                const int slot = webRopes.slot(lower);
+                                if (slot >= 0 && motion.swing.hands[lower].tracked) {
+                                    const Vec3 wrist = webShooter(motion.grips[lower], lower).position;
+                                    webs.held.rope = static_cast<uint32_t>(slot) + 1;
+                                    webs.held.wrist = wrist;
+                                    webs.held.slack =
+                                        std::max(swingState.webs[lower].length - swingState.webs[upper].length -
+                                                     length(webs.hands[slot].wrist - wrist),
+                                                 0.f);
+                                }
+                            }
+                            native_webs::submit(webs, 200, bent);
+                        }
+                    }
+                    const bool steering = motion.active && !flatScreen && controlsVisible;
+                    motion.nativeKeys = airJump.update(
+                        motion.nativeKeys, game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart));
+                    // Going up onto a wall (game_swing::Data::mount), the game
+                    // gets the jump alone: the stick walked the player on into
+                    // the wall, and into the game's own crawl.
+                    const bool mounting =
+                        swingState.status && swingState.mount && swingState.qpc &&
+                        static_cast<int64_t>(swingState.qpc) > now.QuadPart - frequency.QuadPart / 10;
+                    auto keys = swingNativeKeys(
+                        steering, swingState.owned != 0 || mounting, motion.nativeKeys,
+                        static_cast<SwingTakeoff::Phase>(swingState.takeoffPhase), swingState.takeoff != 0);
+                    // A held on the ground charges a leap, the swing's own, let
+                    // go of with A. A tap is the jump as before, made as it is
+                    // let go. The swing's own jumps (a takeoff, a wall, the
+                    // leap's) are the game's A as they are.
+                    const bool standing = steering && padInstalled && swingState.status && swingState.grounded &&
+                                          !swingState.owned && !mounting && !swingState.takeoff &&
+                                          !swingState.takeoffPhase && !swingState.webs[0].attached &&
+                                          !swingState.webs[1].attached && !calibrationInput;
+                    const auto leap = chargeJump.update(
+                        frame.seconds, (keys & swingJumpKey) && !swingState.takeoff, standing);
+                    if (!swingState.takeoff)
+                        keys = (keys & ~swingJumpKey) | (leap.jump ? swingJumpKey : 0u);
+                    leapOut = leap.leap;
+                    if (chargeJump.charges() != chargesBefore) {
+                        chargesBefore = chargeJump.charges();
+                        runtime.haptic(1, .3f);
+                    } else if (chargeJump.charging()) {
+                        // It builds in both hands, and holds at full.
+                        const float charge = chargeJump.charge();
+                        runtime.haptic(0, .08f + .3f * charge);
+                        runtime.haptic(1, .1f + .4f * charge);
+                    }
+                    if (chargeJump.leaps() != leapsBefore) {
+                        leapsBefore = chargeJump.leaps();
+                        runtime.haptic(0, .8f, .12f);
+                        runtime.haptic(1, 1.f, .12f);
+                    }
+                    controls(keys);
+                    if (padInstalled) {
+                        // The same walking and jumping on the virtual Xbox
+                        // controller: after the VR menus, the game plays the
+                        // player with it and ignores the bridge's keys.
+                        game_pad::Walk walk;
+                        const bool playing = steering && !swingState.owned;
+                        // Reaching for a thing is not walking: a player standing on a
+                        // wall does it as much as one on the ground. The swing owns
+                        // him there (it has taken the walls since October 10), so
+                        // `playing` was false for the whole climb and the game's Y
+                        // never went out. The user, October 13, at a closed vent
+                        // reached by walking up the wall it is on: "its right in from
+                        // of me and its closed and i cant iteract with it". That
+                        // session's report has the swing owning the player in every
+                        // one of its 1106 samples on a wall, none of them grounded,
+                        // and the game's Y in 2 of 4230 samples.
+                        const bool onWall = swingState.wall != 0;
+                        const bool reaching =
+                            steering && (!swingState.owned || onWall) && !calibrationInput;
+                        // Clicking both thumbsticks latches the whole pad, for the
+                        // controls play has no room for (the game's X, its L3, each
+                        // bumper and trigger on its own, three ways of its D-pad).
+                        // Neither stick's own press is half of the chord (PullPress,
+                        // slow_motion's StickPress both drop one), so nothing else
+                        // answers it. A press of any kind keeps the layer open.
+                        const bool layerBusy =
+                            frame.buttons != 0 || frame.hands[0].squeeze > .6f ||
+                            frame.hands[1].squeeze > .6f || frame.hands[0].trigger > .6f ||
+                            frame.hands[1].trigger > .6f ||
+                            std::hypot(frame.hands[1].stickX, frame.hands[1].stickY) > .5f;
+                        const bool layerOn =
+                            padLayer.update(frame.seconds, playing && !calibrationInput,
+                                            frame.hands[0].stickClick, frame.hands[1].stickClick, layerBusy);
+                        if (padLayer.entries() != padEntriesBefore) {
+                            padEntriesBefore = padLayer.entries();
+                            runtime.haptic(0, .5f);
+                            runtime.haptic(1, .5f);
+                            message(3, 0, "Pad layer on - your grips are the game's LB and RB, your triggers its "
+                                          "LT and RT, X its X, the right stick its D-pad; click both sticks "
+                                          "again to leave it");
+                        } else if (padLayerWas && !layerOn) {
+                            runtime.haptic(0, .25f);
+                            runtime.haptic(1, .25f);
+                            message(3, 0, "Pad layer off - the webs are back on your grips and triggers");
+                        }
+                        padLayerWas = layerOn;
+                        if (playing) {
+                            walk.right = mounting ? 0 : motion.walkRight;
+                            walk.forward = mounting ? 0 : motion.walkForward;
+                            // On the game's own crawl, with the view turned
+                            // onto the wall, what the game makes of that stick
+                            // is the one thing no session has measured.
+                            if (hold.crawl && motion.standing) {
+                                ++crawlStood;
+                                crawlStick.update(hold.normal, motion.walkForwardAxis, walk.right, walk.forward,
+                                                  swingState.velocity);
+                            }
+                            // Y is the game's Y: interact, or web strike in a fight.
+                            // B is its B: the dodge, the way the stick points. Not
+                            // while a web carries the player, nor while B skips the
+                            // calibration.
+                            walk.dodge = (origins.play() & buttonB) && !calibrationInput;
+                        }
+                        // What each hand points at among the game's interactions near
+                        // the player, on Spidy's wall only: off it the game offers its
+                        // own, and its interact uses them. Read every frame all the
+                        // same: a use goes on once the game's crawl has him.
+                        const bool onOwnWall =
+                            swingState.status && swingState.wall == static_cast<uint32_t>(game_swing::Surface::wall);
+                        const bool offersRead = sampleOffers && !sampleOffers(&offers) && offers.status == 1;
+                        std::array<offer_pointing::Offer, game_offers::maxOffers> candidates{};
+                        unsigned candidateCount{};
+                        if (offersRead && onOwnWall)
+                            for (uint32_t k = 0; k < offers.offers && k < game_offers::maxOffers; ++k) {
+                                const auto& o = offers.nearby[k];
+                                candidates[candidateCount++] = offer_pointing::fromGame(
+                                    o.handle, o.position, o.reasons, o.enabled != 0, o.reachable != 0);
+                            }
+                        offersSeen = std::max(offersSeen, candidateCount);
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto& hand = motion.swing.hands[i];
+                            pointing[i] = std::nullopt;
+                            if (steering && !calibrationInput && candidateCount)
+                                pointing[i] = offer_pointing::pick(
+                                    {hand.tracked, hand.aim.position, hand.aim.orientation.rotate({0, 0, -1})},
+                                    candidates.data(), candidateCount);
+                            // A tick in the hand as it comes onto one it can use.
+                            const uint32_t usable = pointing[i] && pointing[i]->usable ? pointing[i]->handle : 0;
+                            if (usable && usable != pointedBefore[i])
+                                runtime.haptic(static_cast<int>(i), .25f);
+                            pointedBefore[i] = usable;
+                        }
+                        const auto pointed = offer_pointing::either(pointing[0], pointing[1]);
+                        // The game tries the wall round the one pointed at for a
+                        // spot within reach (game_offers::aim).
+                        if (uint32_t aim = pointed ? pointed->handle : 0; aimOffer && aim != offerAimed) {
+                            offerAimed = aim;
+                            aimOffer(&aim);
+                        }
+                        offerPointFrames += pointed && pointed->usable;
+                        offerReachFrames += pointed && !pointed->usable;
+                        // Y reaches for a thing wherever the player stands, a wall
+                        // included; the step up to it below stays on the ground. On
+                        // Spidy's wall at one of the game's interactions a hand points
+                        // at, it is that one's use: the game's crawl under the player
+                        // there, then the game's interact for him.
+                        walk.interact = offerUse.update(
+                            frame.seconds, reaching && (origins.play() & buttonY) != 0, onOwnWall, pointed,
+                            {offers.usesTaken, offers.usesDeclined, offers.best},
+                            [&](uint32_t handle) { return useOffer && !useOffer(&handle); });
+                        if (offerUse.asks() != offerAsksBefore) {
+                            offerAsksBefore = offerUse.asks();
+                            runtime.haptic(0, .4f);
+                            runtime.haptic(1, .4f);
+                        }
+                        if (offerUse.failures() != offerFailuresBefore) {
+                            offerFailuresBefore = offerUse.failures();
+                            message(3, 0, "The game would not take that from here - come closer to it and press "
+                                          "again");
+                        }
+                        // A press of Y turns the hero to where the player looks; held
+                        // on, he walks there, until the game takes the press. The
+                        // player's own stick goes first.
+                        const bool fight = moverTable == config.base + bridge::combatCamera;
+                        const float stepIn = interactStep.update(
+                            frame.seconds, walk.interact,
+                            playing && !mounting && swingState.grounded && !fight && !motion.standing,
+                            std::hypot(swingState.velocity.x, swingState.velocity.z));
+                        if (interactStep.steps() != interactStepsBefore) {
+                            interactStepsBefore = interactStep.steps();
+                            runtime.haptic(0, .2f);
+                        }
+                        // The game's Y: the player's, and after a tap the time the
+                        // hero takes to turn to what they look at.
+                        walk.interact = interactStep.pressed();
+                        // What the game is asking for, if it named a button: the
+                        // interact button sends that instead of the game's Y, so one
+                        // control answers every prompt in the game rather than a
+                        // gesture for each moment a player reports.
+                        // Not in the pad layer: there the player presses the game's
+                        // own buttons, and Y is its Y.
+                        const auto asked = layerOn ? prompt_buttons::Demand{} : game_prompts::demand();
+                        walk.demand = contextPress.update(walk.interact && !layerOn, asked);
+                        // The game takes its own interact away the moment the
+                        // player leaves the surface, and the swing's wall is
+                        // the player off it: hand him back for the press. Only
+                        // where the game is offering nothing, which is the one
+                        // case the press does nothing at all today.
+                        const bool handing = wallHandover.update(
+                            frame.seconds, walk.interact,
+                            swingState.wall == static_cast<uint32_t>(game_swing::Surface::wall),
+                            game_prompts::live().demand != 0);
+                        // The walls are NOT let go of yet, and October 13 is why:
+                        // they were, and the player fell. Leaving the wall takes
+                        // the swing's hold off a hero the game still has in its
+                        // air state, and the game's own crawl does not pick him
+                        // up where he stands - it takes him when a stick pushes
+                        // him into a wall, which is the half this does not do.
+                        // Until that half is built and measured, the rule only
+                        // counts: `wall_handovers` says how often a player asked
+                        // to interact on a wall of the swing's with the game
+                        // offering nothing, which is the size of the thing to
+                        // fix. At a vent today the answer is wall running off.
+                        wallsHandedBack = handing;
+                        (void)swingSettingsSent;
+                        (void)toldHandoverRefused;
+                        // Not on a wall the player stands on: the game's camera
+                        // there is not the follow camera's level turn.
+                        walk.look = cameraLook.update(motion.headPose.orientation.rotate({0, 0, -1}),
+                                                      {camera[8], camera[9], camera[10]},
+                                                      steering && !motion.onSurface);
+                        walk.lookUp = cameraPitch.update(motion.headPose.orientation.rotate({0, 0, -1}),
+                                                         {camera[8], camera[9], camera[10]},
+                                                         steering && !motion.onSurface);
+                        if (stepIn > 0 && std::hypot(walk.right, walk.forward) < .1f) {
+                            Vec3 look = motion.headPose.orientation.rotate({0, 0, -1});
+                            Vec3 ahead{camera[8], 0, camera[10]};
+                            look.y = 0;
+                            // Looking straight down or up says no way to go.
+                            if (length(look) > .3f && length(ahead) > .3f) {
+                                look = normalized(look);
+                                ahead = normalized(ahead);
+                                walk.forward = stepIn * dot(look, ahead);
+                                walk.right = stepIn * dot(look, cross(ahead, {0, 1, 0}));
+                            }
+                        }
+                        // While a use is under way the game's crawl is where the
+                        // offer was checked: the stick does not walk him off it.
+                        if (offerUse.busy())
+                            walk.right = walk.forward = 0;
+                        // The game's LB + RB, its web pull where it shows the two
+                        // (a door, a grate): both web buttons on the thing, which
+                        // no web holds on, and a yank; or the right stick's click.
+                        std::array<WebPullHand, 2> pulling{};
+                        bool free = swingStarted && swingState.grounded && !calibrationInput;
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto& hand = motion.swing.hands[i];
+                            const auto& aim = aimed.hands[i];
+                            free = free && !swingState.webs[i].attached && !grabPhases[i];
+                            pulling[i] = {hand.tracked && hand.grip > .5f,
+                                          aim.kind == static_cast<uint32_t>(game_swing::AimKind::blocked), aim.point,
+                                          hand.aim.position, hand.gripRelativeToHead};
+                        }
+                        const bool yanked =
+                            webPull.update(frame.seconds, playing && free, trackingTurn(motion.swing), pulling);
+                        if (webPull.pulls() != pullsBefore) {
+                            pullsBefore = webPull.pulls();
+                            runtime.haptic(0, 1);
+                            runtime.haptic(1, 1);
+                            message(3, 0, "Web pull - the game's LB + RB, for as long as you hold both web buttons");
+                        }
+                        const bool pulled =
+                            pullPress.update(frame.seconds, reaching, frame.hands[1].stickClick,
+                                             frame.hands[0].stickClick) ||
+                            (yanked && playing);
+                        // A yank at a thing the game is prompting for sends what it
+                        // asks (its LT + RT for a vent as readily as its LB + RB for a
+                        // door): the gesture is the player's first way in, the interact
+                        // button the fallback. With nothing named it is the pull it was.
+                        if (pulled && asked.any() && !walk.demand.any())
+                            walk.demand = asked;
+                        else
+                            walk.pull = pulled;
+                        if (walk.pull && !pulling_)
+                            game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
+                                                      : "the player's pull -> the game's LB + RB");
+                        pulling_ = walk.pull;
+                        // The right stick pushed down heals, in the air as on
+                        // the ground; pushed up it is the game's LT + RT, not
+                        // while a web carries the player. Left and right turn.
+                        const auto& turning = frame.hands[1];
+                        const auto push = stickPush.update(frame.seconds, steering && !calibrationInput && !layerOn,
+                                                           turning.valid ? turning.stickX : 0,
+                                                           turning.valid ? turning.stickY : 0);
+                        walk.heal = push == game_pad::StickPush::Way::down;
+                        walk.zip = reaching && push == game_pad::StickPush::Way::up;
+                        if ((walk.heal && !healing) || (walk.zip && !zipping))
+                            runtime.haptic(1, .2f);
+                        walk.jump = (keys & swingJumpKey) != 0;
+                        // A jump on the game's own crawl - the player's, a web's
+                        // takeoff, or the mount's that walks him on from it onto
+                        // Spidy's wall - goes out as its RT + A, the only one
+                        // that leaves the wall; A alone leaps along it. Only
+                        // while the crawl holds him: RT held on in the air is
+                        // the game's own web swing.
+                        //
+                        // From the moment a web holds, too, so the RT is down
+                        // before the takeoff's A: the same RT + A pressed at
+                        // once just after a web took hold was ignored the first
+                        // time, and only the takeoff's retry 0.6 s later left
+                        // the wall (October 14). RT alone on the crawl does
+                        // nothing, so holding it early costs nothing.
+                        //
+                        // No longer up the wall with the stick: that was the
+                        // game's own wall run (October 14), and since October 15
+                        // the walls are Spidy's alone - the stick on the game's
+                        // crawl walks the player on, onto them.
+                        {
+                            const bool onCrawl = swingState.status &&
+                                                 swingState.wall == static_cast<uint32_t>(game_swing::Surface::game);
+                            const bool webbed = swingState.webs[0].attached || swingState.webs[1].attached;
+                            walk.parkour = onCrawl && (walk.jump || webbed);
+                        }
+                        walk.scan = templePress.held() && steering;
+                        // A perfect dodge: the game slows its own time within a
+                        // moment of a B that went down with it at full speed.
+                        if (walk.dodge && !dodging)
+                            dodgeWatch = game_time::telemetry().own > .95f ? .7f : 0.f;
+                        if (dodgeWatch > 0) {
+                            dodgeWatch -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                            if (const auto time = game_time::telemetry(); time.installed && time.own < .9f) {
+                                dodgeWatch = 0;
+                                moments.start(Moment::dodge);
+                                runtime.haptic(0, .5f);
+                                runtime.haptic(1, .5f);
+                            }
+                        }
+                        auto buttons = origins.filtered(frame, mapping);
+                        // The gadget wheel: X held opens it in front of the hand
+                        // X is on (the left on Touch and Index, the right on the
+                        // Steam Frame); X tapped is the game menu as it is let go.
+                        // Chosen, a gadget is equipped in the game and the free
+                        // hand's trigger fires it; the web shooter at the top
+                        // has it fire web balls again.
+                        {
+                            const unsigned hand = runtime.controllers()[1] == ControllerKind::frame ? 1u : 0u;
+                            const uint32_t owned = std::min(listed.gadgetCount, 8u);
+                            uint8_t places = 1;
+                            for (uint32_t g = 0; g < owned; ++g)
+                                if (listed.gadgets[g].place < gadgetPlaces)
+                                    places |= static_cast<uint8_t>(1u << listed.gadgets[g].place);
+                            const bool offered = wheelShooter && shooterStarted && !listed.gadgetError && owned &&
+                                                 mapping == game_pad::Mapping::gameplay;
+                            const bool x = (buttons.buttons & buttonX) != 0;
+                            if (offered)
+                                buttons.buttons &= ~static_cast<uint32_t>(buttonX);
+                            const auto chosen =
+                                gadgetWheel.update(frame.seconds, x, offered && steering && !calibrationInput,
+                                                   frame.hands[hand].grip.position, frame.head.position, places);
+                            if (chosen.tap)
+                                menuTap = .1f;
+                            if (chosen.opened)
+                                runtime.haptic(hand, .3f);
+                            if (chosen.lit)
+                                runtime.haptic(hand, .12f);
+                            if (chosen.chosen >= 0) {
+                                runtime.haptic(hand, .5f);
+                                game_shooter::GadgetCommand command;
+                                for (uint32_t g = 0; g < owned; ++g)
+                                    if (listed.gadgets[g].place == chosen.chosen)
+                                        command.equip = listed.gadgets[g].weapon;
+                                gadgetFire = command.equip != 0;
+                                command.fire = gadgetFire ? 1u : 0u;
+                                wheelShooter(&command);
+                            }
+                        }
+                        auto pad = game_pad::fromControllers(buttons, mapping, walk);
+                        if (menuTap > 0) {
+                            pad.buttons |= game_pad::back;
+                            menuTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        screenControls.apply(frame.seconds,
+                                             flatScreen && motion.active && mapping == game_pad::Mapping::menus,
+                                             buttons, pad);
+                        game_pad::submit(pad, 200);
+                        if (walk.interact && !interacting) {
+                            ++interacts;
+                            wallInteracts += onWall;
+                            char line[96];
+                            sprintf_s(line, "the player's Y -> the game%s%s", onWall ? ", on a wall" : "",
+                                      walk.demand.any() ? ", carrying a prompt's demand" : "");
+                            game_prompts::note(line);
+                        }
+                        interacting = walk.interact;
+                        dodges += walk.dodge && !dodging;
+                        dodging = walk.dodge;
+                        heals += walk.heal && !healing;
+                        healing = walk.heal;
+                        zips += walk.zip && !zipping;
+                        zipping = walk.zip;
+                    }
+                    {
+                        std::lock_guard lock(telemetry);
+                        auto& d = SpidyXrData;
+                        InterlockedIncrement64(&d.sequence);
+                        ++d.frames;
+                        d.tracked += motion.active;
+                        d.leftHands += frame.hands[0].valid;
+                        d.rightHands += frame.hands[1].valid;
+                        d.nativeKeys = keys;
+                        d.gate = gate;
+                        d.cameraMover = moverTable > config.base && moverTable - config.base < 0x10000000
+                                            ? static_cast<uint32_t>(moverTable - config.base)
+                                            : 0;
+                        d.players = playersFound;
+                        d.playerRecord = player.record;
+                        const auto pad = game_pad::telemetry();
+                        d.padButtons = pad.buttons;
+                        d.padInstalled = pad.installed;
+                        d.padReads = pad.reads;
+                        d.cameraCommits = game.cameraCalls;
+                        d.playerCommits = game.matched;
+                        d.interacts = interacts;
+                        d.dodges = dodges;
+                        d.heals = heals;
+                        d.zips = zips;
+                        d.aimMarkers = values.aimMarkers;
+                        d.settings = (values.webGrab ? 1u : 0u) | (values.punch ? 2u : 0u) | (values.body ? 4u : 0u) |
+                                     (values.airWebs ? 8u : 0u) | (values.webShooter ? 16u : 0u) |
+                                     (values.flips ? 32u : 0u) | (values.triggerWebs ? 64u : 0u) |
+                                     (values.standOnWalls ? 128u : 0u);
+                        d.scans = templePress.scans();
+                        d.chargeJumps = chargeJump.charges();
+                        const auto prompts = game_prompts::live();
+                        d.promptInvokes = prompts.invokes;
+                        d.promptCalls = prompts.calls;
+                        d.promptsRaised = prompts.raised;
+                        d.promptsCleared = prompts.cleared;
+                        d.promptTexts = prompts.named;
+                        d.promptRewrites = prompts.rewritten;
+                        d.promptDemand = prompts.demand;
+                        d.promptLastDemand = prompts.lastDemand;
+                        d.promptBeyondPlay = prompts.beyondPlay;
+                        d.promptKeyboardTexts = prompts.keyboardTexts;
+                        d.contextPresses = contextPress.presses();
+                        d.padEntries = padLayer.entries();
+                        d.padLayerNow = padLayer.latched() ? 1u : 0u;
+                        d.wallInteracts = wallInteracts;
+                        d.wallHandovers = wallHandover.handovers();
+                        d.wallHandoversOffered = wallHandover.offered();
+                        d.indoorFrames = indoorFrames;
+                        d.wallsToGame = wallsToGame;
+                        d.crawlFrames = crawlFrames;
+                        d.crawlStood = crawlStood;
+                        d.crawlStickSamples = crawlStick.samples();
+                        d.crawlStickTurn = crawlStick.turn();
+                        d.crawlStickAgreement = crawlStick.agreement();
+                        d.crawlStickSpeed = crawlStick.speed();
+                        d.headDroppedFrames = headDroppedFrames;
+                        d.headroomLeast = headroomLeast;
+                        if (sampleWarp && !sampleWarp(&warp)) {
+                            d.crawlAsked = static_cast<uint32_t>(warp.asked);
+                            d.crawlApplied = static_cast<uint32_t>(warp.applied);
+                            d.crawlRefused = static_cast<uint32_t>(warp.refused);
+                            d.crawlFaulted = static_cast<uint32_t>(warp.faulted);
+                            d.crawlTaken = static_cast<uint32_t>(warp.taken);
+                            d.crawlDeclined = static_cast<uint32_t>(warp.declined);
+                            gameRunFrames += (warp.swing & 32u) != 0;
+                        }
+                        d.gameRunFrames = gameRunFrames;
+                        d.holdGraceFrames = holdGraceFrames;
+                        d.trackingGapFrames = trackingGapFrames;
+                        d.trackingGapReasons = trackingGapReasons;
+                        d.floorCrawlFrames = floorCrawlFrames;
+                        d.crawlCapFrames = crawlCapFrames;
+                        d.kneelFrames = kneelFrames;
+                        d.offerPointFrames = offerPointFrames;
+                        d.offerReachFrames = offerReachFrames;
+                        d.offerAsks = offerUse.asks();
+                        d.offerRefusals = offerUse.refusals();
+                        d.offerPresses = offerUse.presses();
+                        d.offerPicked = offerUse.picked();
+                        d.offerFailures = offerUse.failures();
+                        d.offersSeen = offersSeen;
+                        d.offersState = offers.status | offers.error << 8;
+                        d.offersMasked = static_cast<uint32_t>(offers.masked);
+                        d.offersPosed = static_cast<uint32_t>(offers.posed);
+                        d.offersGathered = offers.gathered;
+                        d.offersMostChecked = offers.mostChecked;
+                        d.offersSearches = offers.searches;
+                        d.offersSpots = offers.spotsFound;
+                        d.offersNear = offers.offers;
+                        d.offerRetries = offerUse.retries();
+                        for (unsigned i = 0; i < 3; ++i) {
+                            d.cameraForward[i] = camera[8 + i];
+                            d.cameraUp[i] = camera[4 + i];
+                        }
+
+                        d.vrButtons = frame.buttons;
+                        d.vrButtonsPlayed = vrButtonsPlayed;
+                        auto& p = SpidyPromptData;
+                        InterlockedIncrement64(&p.sequence);
+                        p.invokes = prompts.invokes;
+                        p.calls = prompts.calls;
+                        p.raised = prompts.raised;
+                        p.cleared = prompts.cleared;
+                        p.texts = prompts.named;
+                        p.rewrites = prompts.rewritten;
+                        p.demand = prompts.demand;
+                        p.lastDemand = prompts.lastDemand;
+                        p.beyondPlay = prompts.beyondPlay;
+                        p.keyboardTexts = prompts.keyboardTexts;
+                        // A name can join the census with no prompt call of its own, so
+                        // the lists are copied out every so often as well as on a call.
+                        if (prompts.calls != promptCallsBefore || ++promptRefresh % 64 == 0) {
+                            promptCallsBefore = prompts.calls;
+                            game_prompts::Calls seen;
+                            game_prompts::recentCalls(seen);
+                            p.lines = seen.count;
+                            std::memcpy(p.perName, seen.perName, sizeof(p.perName));
+                            std::memcpy(p.line, seen.line, sizeof(p.line));
+                            p.names = seen.names;
+                            std::memcpy(p.censusCalls, seen.calls, sizeof(p.censusCalls));
+                            std::memcpy(p.example, seen.example, sizeof(p.example));
+                        }
+                        InterlockedIncrement64(&p.sequence);
+                        const auto controllers = runtime.controllers();
+                        d.controllers[0] = static_cast<uint32_t>(controllers[0]);
+                        d.controllers[1] = static_cast<uint32_t>(controllers[1]);
+                        d.controllerLayouts = runtime.layoutsTaken();
+                        d.snapTurn = static_cast<uint32_t>(values.snapTurn);
+                        d.smoothTurn = static_cast<uint32_t>(values.smoothTurn);
+                        d.haptics = static_cast<uint32_t>(values.haptics);
+                        d.screenSize = static_cast<uint32_t>(values.screenSize);
+                        d.swingSpeed = values.swingSpeed;
+                        d.weight = static_cast<uint32_t>(values.weight);
+                        d.hud = static_cast<uint32_t>(values.hud);
+                        d.flipSpeed = static_cast<uint32_t>(values.flipSpeed);
+                        d.viewTilt = motion.active ? motion.viewTilt * 180 / 3.14159265f : 0.f;
+                        d.interactSteps = interactStep.steps();
+                        d.lookError = cameraLook.error();
+                        d.lookTurns = cameraLook.turns();
+                        d.screenDepth = static_cast<uint32_t>(values.screenDepth);
+                        d.settingChanges = settingChanges;
+                        const auto menu = game_menu::telemetry();
+                        d.menuTabs = menu.tabs;
+                        d.menuInstalled = menu.installed;
+                        d.menuStatus = menuCode ? menuCode : menu.status;
+                        d.surfaceEntries = surfaceEntries;
+                        d.surfaceFrames = surfaceFrames;
+                        std::memcpy(d.heroUp, body.data() + 4, 12);
+                        d.standOff = length(motion.standOff);
+                        if (motion.active && motion.onSurface) {
+                            d.surfaceHeight = motion.surfaceHeight;
+                            d.surfaceClearance = motion.surfaceClearance;
+                        }
+                        const bool calibrating = calibration.phase() != body_calibration::Phase::idle;
+                        d.calibrationPhase = static_cast<uint32_t>(calibration.phase());
+                        d.calibrationHint = calibrating ? static_cast<uint32_t>(calibration.hint()) : 0u;
+                        d.calibrationProgress = calibrating ? calibration.progress() : 0.f;
+                        d.eyeHeightMm = static_cast<uint32_t>(std::lround(calibratedEye * 1000));
+                        d.armLengthMm = static_cast<uint32_t>(std::lround(calibratedArm * 1000));
+                        d.calibrations = calibrations;
+                        d.calibrationSkips = calibrationSkips;
+                        d.calibrationFlags = calibrationPrompt ? 0u : 1u;
+                        d.calibrationReach[0] = lastCalibration.reach[0];
+                        d.calibrationReach[1] = lastCalibration.reach[1];
+                        std::memcpy(d.head, motion.head.data(), 64);
+                        const Mat4 basis = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1};
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto pose = native_view::relativePose(basis, motion.hands[i]);
+                            std::memcpy(d.hands[i], pose.data(), 64);
+                        }
+                        InterlockedIncrement64(&d.sequence);
+                    }
+                    // Copies of the game's presented frame, for the screen.
+                    if (gpuStarted)
+                        native_gpu::wantScreen(viewing && !vrPlay);
+                    showScreen = screen;
+                    if (!viewing)
+                        return false;
+                    if (!gpuStarted) {
+                        // From here the headset shows the game: its screen until
+                        // gameplay, then the eye views.
+                        native_gpu::Config gpu;
+                        gpu.pid = config.pid;
+                        gpu.base = config.base;
+                        gpu.queue = config.queue;
+                        gpu.durationMs = moduleDuration;
+                        gpu.copyToXr = 2;
+                        gpu.captureImages = config.options & 1;
+                        check(native_gpu::start(&gpu), "Start native GPU bridge");
+                        gpuStarted = true;
+                        nativeDeadline =
+                            config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
+                        message(3, 0, "Headset active");
+                        return false; // initialization can exceed one predicted display interval
+                    }
+                    // Without gameplay the screen shows the game's presented
+                    // frame; until it is up, the last image stays. The eye
+                    // views get no command and stop rendering meanwhile.
+                    if (!vrPlay && !scene)
+                        return screen || gameScreen.holding();
+                    if (!nativeStarted) {
+                        struct NativeConfig {
+                            uint32_t magic, version, bytes, pid;
+                            uint64_t base;
+                            uint32_t duration, flags, width, height;
+                        };
+                        // Flag 8: while immersive, the game's active view follows the
+                        // head, so work the game does only for that view fits the eyes.
+                        // Flag 16: each eye culls what its own previous frame hid, as the
+                        // game's views do; without it the render thread did 2-4 times the
+                        // work and held VR at 40-65 frames a second.
+                        // Flag 32: the game's own view, on the head for that work, is not
+                        // rendered as well; it cost as much as an eye and only the monitor
+                        // showed it, which gets the left eye instead.
+                        const uint32_t flags = ((config.options & 4) ? 5 : 13) | ((config.options & 16) ? 0 : 16) |
+                                               ((config.options & (4 | 0x10000)) ? 0 : 32);
+                        // The eyes' scene at `upscale` percent of their size, with a
+                        // jittered lens and the engine's temporal anti-aliasing (bits 1,
+                        // 2, 4): taken when the views are made.
+                        const bool antialiased = !(config.options & 0x8000);
+                        // Bit 8: no targets for screen-space reflections (options
+                        // 0x40000: the game has them off, or --no-eye-reflections).
+                        const uint32_t reflections = (config.options & 0x40000) ? 8u << 8 : 0;
+                        check(SpidyEyeTemporal(reinterpret_cast<void*>(static_cast<uintptr_t>(
+                                  (antialiased ? config.upscale | 7u << 8 : 100u) | reflections))),
+                              "Eye anti-aliasing");
+                        check(SpidyEyeShadows(reinterpret_cast<void*>(
+                                  static_cast<uintptr_t>((config.options & 0x20000) ? 0 : 1))),
+                              "Eye shadows");
+                        check(SpidyMonitorRate(reinterpret_cast<void*>(static_cast<uintptr_t>(config.monitorRate))),
+                              "Monitor rate");
+                        NativeConfig views{
+                            0x53534346, 1, 40, config.pid, config.base, moduleDuration, flags, dimensions[0],
+                            dimensions[1]};
+                        check(SpidyStart(&views), "Start native views");
+                        nativeStarted = true;
+                        // Game-drawn webs are optional: without them the overlay draws webs.
+                        websStarted = !(config.options & 2) && !native_webs::start(config.base, player.record);
+                        // The player's body is optional too: without it the hero stays
+                        // hidden and the overlay draws gloves, as before.
+                        bodyStarted = values.body && !native_body::start(config.base);
+                        firstImageDeadline = GetTickCount64() + 3000;
+                        message(3, 0, vrPlay ? "Gameplay found; waiting for the first eye images"
+                                             : "A scene found; waiting for its first eye images");
+                        // Initialization can exceed one predicted display
+                        // interval. A scene's screen keeps the game's frame.
+                        return !vrPlay;
+                    }
+                    if (!vrPlay) {
+                        // The scene's two eyes: the game's own camera, set apart
+                        // for this viewer and this screen (native_eyes::Stereo).
+                        native_eyes::Command eyes;
+                        eyes.enabled = 3;
+                        eyes.serial = ++serial;
+                        eyes.leaseMs = 250;
+                        native_eyes::setStereo(
+                            eyes, native_eyes::screenStereo(
+                                      eyeDistance(frame.eyes[0].pose.position, frame.eyes[1].pose.position),
+                                      vr_settings::screenWidth(values.screenSize), vr_settings::screenDistance,
+                                      vr_settings::screenDepth(values.screenDepth)));
+                        NativeEyeFrame saved;
+                        saved.serial = eyes.serial;
+                        // A held pair ages by the time it was asked for.
+                        saved.motion.predictedDisplayTime = frame.predictedDisplayTime;
+                        saved.flatScreen = saved.stereoScreen = true;
+                        saved.screenPose = screenPose;
+                        saved.screenAspect = SpidyFlatAspect();
+                        history.remember(saved);
+                        const auto code = SpidySetEyes(&eyes);
+                        if (code && code != 4003)
+                            check(code, "Scene eye command");
+                        stereoScene = !code;
+                        return true;
+                    }
+                    if (const float h = frame.head.position.y; std::isfinite(h) && h > .8f && h < 2.4f)
+                        standingEye = standingEye <= 0 ? h
+                                      : h > standingEye
+                                          ? standingEye + (h - standingEye) * std::min(1.f, frame.seconds * 4)
+                                          : standingEye - std::min(standingEye - h, frame.seconds * .01f);
+                    if (bodyStarted) {
+                        // The hero's body follows the headset and the controllers,
+                        // placed from the same feet as the eyes.
+                        native_body::Command pose;
+                        pose.serial = serial;
+                        // Under a roof that holds the head below the player's
+                        // own: the legs kneel rather than fold up in front of
+                        // his eyes.
+                        const bool kneels = (motion.standing || crawlsFloor) && motion.headDrop > .05f;
+                        kneelFrames += kneels;
+                        // Standing on a wall or a ceiling - Spidy's own or the
+                        // game's crawl - the body stands on it with the player,
+                        // never in the air the swing keeps the hero in there.
+                        pose.flags = (flatScreen || !values.body ? 0u : native_body::bodyOn) | native_body::hideHead |
+                                     native_body::handTurn |
+                                     (swingState.owned && !motion.standing ? native_body::airborne : 0u) |
+                                     (calibratedEye > 0 ? native_body::calibrated : 0u) |
+                                     (motion.standing || crawlsFloor ? native_body::standing : 0u) |
+                                     (kneels ? native_body::kneel : 0u);
+                        pose.standUp = motion.standUp;
+                        pose.floor = motion.floor;
+                        pose.eyes = Vec3{(motion.eyes[0][12] + motion.eyes[1][12]) / 2,
+                                         (motion.eyes[0][13] + motion.eyes[1][13]) / 2,
+                                         (motion.eyes[0][14] + motion.eyes[1][14]) / 2} -
+                                    motion.anchor;
+                        pose.facing = motion.headPose.orientation;
+                        for (unsigned i = 0; i < 2; ++i) {
+                            const auto& hand = frame.hands[i];
+                            const bool tracked = hand.valid && validTrackedPose(hand.grip);
+                            const Vec3 relative = hand.grip.position - frame.head.position;
+                            const float seconds =
+                                std::isfinite(frame.seconds) && frame.seconds > 0 ? frame.seconds : 1.f / 90;
+                            const float speed =
+                                tracked && gripsSeen[i] ? length(relative - gripsBefore[i]) / seconds : 0.f;
+                            gripsBefore[i] = relative;
+                            gripsSeen[i] = tracked;
+                            HandPoseInput doing;
+                            doing.tracked = tracked;
+                            doing.web = motion.swing.hands[i].grip;
+                            doing.squeeze = hand.squeeze;
+                            doing.speed = speed;
+                            doing.gripping = onStrandBefore[i] || webTaken[i];
+                            doing.holding = attachedBefore[i];
+                            doing.shot = ballShot[i];
+                            doing.fighting = fightNear;
+                            ballShot[i] = false;
+                            const auto fingered = fingers[i].update(seconds, doing);
+                            pose.hands[i] = {motion.grips[i].position - motion.anchor, motion.grips[i].orientation,
+                                             tracked ? 1u : 0u, fingered.fist};
+                            pose.shoot[i] = fingered.shoot;
+                        }
+                        pose.height = calibratedEye > 0 ? calibratedEye : standingEye;
+                        pose.armLength = calibratedArm;
+                        pose.trackingYaw = motion.swing.trackingYaw;
+                        // A flip's tilt in world axes: the body turns with the player.
+                        // Standing on a surface, the body already stands along it:
+                        // only a flip's own turns it further (none on a wall).
+                        if (const Quat tilt = motion.standing ? motion.flipTilt : motion.swing.tilt;
+                            tilt.x != 0 || tilt.y != 0 || tilt.z != 0) {
+                            const Quat yaw = Quat::yaw(motion.swing.trackingYaw);
+                            pose.tilt = yaw * tilt * yaw.conjugate();
+                        }
+                        native_body::submit(pose);
+                    }
+                    // Keep publishing tracking while the engine renders earlier
+                    // commands. The presentation loop no longer waits for this pose.
+                    native_eyes::Command eyes;
+                    eyes.enabled = flatScreen ? 2 : 1;
+                    eyes.serial = ++serial;
+                    eyes.leaseMs = 250;
+                    eyes.anchor = motion.anchor;
+                    eyes.anchored = 1;
+                    for (unsigned i = 0; i < 2; ++i) {
+                        eyes.eyes[i].world = motion.eyes[i];
+                        const auto& f = motion.fovs[i];
+                        eyes.eyes[i].fov[0] = f.left;
+                        eyes.eyes[i].fov[1] = f.right;
+                        eyes.eyes[i].fov[2] = f.down;
+                        eyes.eyes[i].fov[3] = f.up;
+                    }
+                    // The HUD panel for this command's frame, as the head sees it:
+                    // fixed in the room, so a reused image the headset turns to a
+                    // newer head shows it where it was.
+                    const Quat hudFacing = hudFollow.update(frame.head.orientation, frame.seconds);
+                    native_hud::follow(eyes.serial, frame.head.orientation.conjugate() * hudFacing);
+                    NativeEyeFrame saved;
+                    saved.serial = eyes.serial;
+                    saved.motion = motion;
+                    saved.trackingEyes = frame.eyes;
+                    saved.flatScreen = flatScreen;
+                    saved.screenPose = screenPose;
+                    saved.screenAspect = SpidyFlatAspect();
+                    saved.slow = moments.view(slowMotion.view());
+                    if (gadgetWheel.open()) {
+                        // The gadget wheel, from tracking space into this frame's
+                        // world, with the gadgets in their places.
+                        const Pose toWorld = compose(motion.headPose, inverse(frame.head));
+                        const auto& f = gadgetWheel.frame();
+                        auto& view = saved.gadgetWheel;
+                        view.open = true;
+                        view.age = gadgetWheel.age();
+                        view.lit = gadgetWheel.lit();
+                        view.frame = {compose(toWorld, Pose{f.centre, {}}).position, toWorld.orientation.rotate(f.right),
+                                      toWorld.orientation.rotate(f.up), toWorld.orientation.rotate(f.out)};
+                        view.places[0] = Gadget::webShooter;
+                        view.equipped = 0;
+                        for (uint32_t g = 0; g < std::min(listed.gadgetCount, 8u); ++g) {
+                            const auto& o = listed.gadgets[g];
+                            if (!o.kind || o.place >= gadgetPlaces)
+                                continue;
+                            view.places[o.place] = static_cast<Gadget>(o.kind);
+                            view.ammo[o.place] = o.ammo;
+                            view.most[o.place] = o.most;
+                            if (gadgetFire && o.weapon == listed.equipped)
+                                view.equipped = o.place;
+                        }
+                    }
+                    for (unsigned i = 0; i < 2; ++i) {
+                        saved.webs[i] = swingState.webs[i];
+                        saved.webTimes[i] = webTimes[i];
+                        saved.aims[i] = aims.hands[i];
+                        saved.offers[i] = pointing[i] ? *pointing[i] : offer_pointing::Pointed{};
+                    }
+                    saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
+                    saved.strandUpper = webRopes.upper();
+                    if (calibration.phase() != body_calibration::Phase::idle) {
+                        // The panel stays where it appeared in the room; the tracking
+                        // space is where this frame's head puts it in the world.
+                        auto& view = saved.calibration;
+                        view.phase = calibration.phase();
+                        view.hint = calibration.hint();
+                        view.progress = calibration.progress();
+                        view.ready = calibration.armsReady();
+                        view.result = calibration.result();
+                        view.result.eyeHeight = calibratedEye;
+                        view.result.armLength = calibratedArm;
+                        view.panel = compose(compose(motion.headPose, inverse(frame.head)), calibrationPanel);
+                        for (unsigned i = 0; i < 2; ++i) {
+                            view.handTracked[i] = frame.hands[i].valid && validTrackedPose(frame.hands[i].grip);
+                            view.grips[i] = motion.grips[i];
+                        }
+                    }
+                    history.remember(saved);
+                    const auto code = SpidySetEyes(&eyes);
+                    if (code && code != 4003)
+                        check(code, "Tracked eye command");
+                    return !code;
+                },
+                [&](std::array<XrRuntime::EyeTarget, 2>& targets) {
+                    const auto copyStart = std::chrono::steady_clock::now();
+                    if (showScreen && stereoScene && native_hud::onScreen(sceneHoldMs)) {
+                        // The scene's newest pair, once the game has rendered
+                        // one with the HUD's panel on its screen; until then
+                        // the game's own frame below.
+                        uint64_t pairSerial{}, pairGeneration{};
+                        const bool copied = native_gpu::copyLatest(targets[0].texture, targets[1].texture,
+                                                                   pairSerial, pairGeneration);
+                        check(native_gpu::error(), "GPU eye bridge");
+                        const auto* saved = copied ? history.find(pairSerial, displayTime) : nullptr;
+                        if (saved && saved->stereoScreen) {
+                            copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                               copyStart)
+                                         .count();
+                            runtime.presentation(true, screenPose, saved->screenAspect,
+                                                 vr_settings::screenWidth(values.screenSize), true);
+                            drawn = Presentation::stereoScreen;
+                            D3D12Renderer::Captured pixels;
+                            if (snapshotTicket && overlay.captured(snapshotTicket, pixels)) {
+                                publishSnapshot(pendingSnapshot, &pixels);
+                                snapshotTicket = 0;
+                            }
+                            if (!snapshotTicket && snapshots.due(GetTickCount64(), 0, false) &&
+                                (snapshotTicket = overlay.capture(targets[0].texture)) != 0) {
+                                pendingSnapshot = {};
+                                pendingSnapshot.flatScreen = 1;
+                                pendingSnapshot.generation = pairGeneration;
+                                pendingSnapshot.serial = pairSerial;
+                            }
+                            std::lock_guard lock(telemetry);
+                            InterlockedIncrement64(&SpidyXrData.sequence);
+                            SpidyXrData.serial = pairSerial;
+                            SpidyXrData.generation = pairGeneration;
+                            InterlockedIncrement64(&SpidyXrData.sequence);
+                            return true;
+                        }
+                    }
+                    native_gpu::Screen image;
+                    if (showScreen && native_gpu::latestScreen(image, imageHoldMs)) {
+                        // The game's presented frame, scaled into the image the screen shows.
+                        const auto& left = targets[0];
+                        overlay.blit(image.texture.Get(), image.view, image.linear,
+                                     {left.texture, left.format, left.width, left.height, {}});
+                        copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                           copyStart)
+                                     .count();
+                        runtime.presentation(true, screenPose,
+                                             static_cast<float>(image.width) / static_cast<float>(image.height),
+                                             vr_settings::screenWidth(values.screenSize));
+                        drawn = Presentation::gameScreen;
+                        D3D12Renderer::Captured pixels;
+                        if (snapshotTicket && overlay.captured(snapshotTicket, pixels)) {
+                            publishSnapshot(pendingSnapshot, &pixels);
+                            snapshotTicket = 0;
+                        }
+                        if (!snapshotTicket && snapshots.due(GetTickCount64(), 0, false) &&
+                            (snapshotTicket = overlay.capture(left.texture)) != 0) {
+                            pendingSnapshot = {};
+                            pendingSnapshot.flatScreen = 1;
+                        }
+                        std::lock_guard lock(telemetry);
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        SpidyXrData.serial = SpidyXrData.generation = 0;
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        return true;
+                    }
+                    uint64_t imageSerial{}, imageGeneration{};
+                    bool copied = native_gpu::copyLatest(targets[0].texture, targets[1].texture, imageSerial,
+                                                         imageGeneration);
+                    check(native_gpu::error(), "GPU eye bridge");
+                    const auto* saved = copied ? history.find(imageSerial, displayTime) : nullptr;
+                    copied = copied && saved;
+                    copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                       copyStart)
+                                 .count();
+                    if (copied) {
+                        // A scene's pair stays on its screen until play's first image.
+                        drawn = saved->stereoScreen ? Presentation::stereoScreen
+                                : saved->flatScreen ? Presentation::flat
+                                                    : Presentation::immersive;
+                        runtime.presentation(saved->flatScreen, saved->screenPose, saved->screenAspect,
+                                             vr_settings::screenWidth(values.screenSize), saved->stereoScreen);
+                        const auto& rendered = saved->motion;
+                        for (unsigned eye = 0; eye < 2; ++eye) {
+                            const auto& pose = saved->trackingEyes[eye].pose;
+                            const auto& f = saved->trackingEyes[eye].fov;
+                            targets[eye].view.pose = {{pose.orientation.x, pose.orientation.y,
+                                                       pose.orientation.z, pose.orientation.w},
+                                                      {pose.position.x, pose.position.y, pose.position.z}};
+                            targets[eye].view.fov = {f.left, f.right, f.up, f.down};
+                        }
+                        const auto overlayStart = std::chrono::steady_clock::now();
+                        // The native views moved this command's eyes with the
+                        // player to the rendered frame. Hands move with them, so
+                        // world-space web anchors line up with the rendered city.
+                        Vec3 travel{};
+                        native_eyes::renderOffset(imageGeneration, travel);
+                        const Vec3 viewer =
+                            Vec3{(rendered.eyes[0][12] + rendered.eyes[1][12]) / 2,
+                                 (rendered.eyes[0][13] + rendered.eyes[1][13]) / 2,
+                                 (rendered.eyes[0][14] + rendered.eyes[1][14]) / 2} +
+                            travel;
+                        const auto& lens = rendered.fovs[0];
+                        const float pixelAngle =
+                            (std::tan(lens.right) - std::tan(lens.left)) / static_cast<float>(targets[0].width);
+                        const auto shown = saved->motion.predictedDisplayTime;
+                        std::vector<Vertex> vertices;
+                        // Where the overlay puts each tracked web shooter, and
+                        // where the game's rope for this image's frame starts.
+                        Vec3 shooters[2]{}, ropeStarts[2]{};
+                        uint32_t shooterHands{}, ropeHands{};
+                        float webGap = -1;
+                        for (unsigned hand = 0; !saved->flatScreen && hand < 2; ++hand) {
+                            const auto& web = saved->webs[hand];
+                            const auto& timing = saved->webTimes[hand];
+                            // The game's rope is part of the scene image already: the
+                            // rope that draws this hand's web, which may be the other
+                            // side's (one web in both hands).
+                            const int slot = saved->webSlots[hand];
+                            const bool gameWeb = native_webs::drawing(slot >= 0 ? static_cast<unsigned>(slot) : hand);
+                            // One web in both hands: the strand comes to the other hand
+                            // first, and this hand's part runs from wrist to wrist, as
+                            // slack as the rope between the two holds is long.
+                            const int upper = saved->strandUpper;
+                            const bool lower = web.attached && upper >= 0 && upper != static_cast<int>(hand);
+                            WebLine line;
+                            const auto between = [&](Vec3 start) {
+                                auto other = rendered.grips[static_cast<size_t>(upper)];
+                                other.position += travel;
+                                line.start = start;
+                                line.end = webShooter(other, static_cast<unsigned>(upper)).position;
+                                line.slack = std::max(
+                                    web.length - saved->webs[static_cast<size_t>(upper)].length -
+                                        length(line.end - line.start),
+                                    0.f);
+                                line.extended = 1;
+                                line.splat = false;
+                            };
+                            // The timeline keeps the anchor through the release, so
+                            // the splat keeps its shape while the web snaps back.
+                            line.seed =
+                                static_cast<float>(hand) * 1.7f + timing.anchor.x * .37f + timing.anchor.z * .11f;
+                            if (!rendered.swing.hands[hand].tracked) {
+                                if (!gameWeb && WebAnimation::released((shown - timing.releasedAt) * 1e-9f,
+                                                                       timing.wrist + travel, timing.anchor, line))
+                                    appendWeb(vertices, line, viewer, pixelAngle);
+                                continue;
+                            }
+                            auto grip = rendered.grips[hand];
+                            grip.position += travel;
+                            const Vec3 shooter = webShooter(grip, hand).position;
+                            shooters[hand] = shooter;
+                            shooterHands |= 1u << hand;
+                            if (gameWeb) {
+                                // The game draws the piece between the hands
+                                // itself where it can (native_webs::Held).
+                                if (lower && !native_webs::drawsHeld()) {
+                                    between(shooter);
+                                    appendWeb(vertices, line, viewer, pixelAngle);
+                                } else if (web.attached && slot == static_cast<int>(hand) &&
+                                           native_eyes::renderWebStart(imageGeneration, hand, ropeStarts[hand])) {
+                                    ropeHands |= 1u << hand;
+                                    webGap = std::max(webGap, length(shooters[hand] - ropeStarts[hand]));
+                                }
+                                continue;
+                            } else if (lower) {
+                                between(shooter);
+                                appendWeb(vertices, line, viewer, pixelAngle);
+                            } else if (web.attached) {
+                                line.start = shooter;
+                                line.end = web.anchor;
+                                line.slack = web.tension > 0 ? 0.f
+                                                             : std::max(web.length - length(line.end - line.start), 0.f);
+                                line.extended = WebAnimation::extended((shown - timing.attachedAt) * 1e-9f);
+                                appendWeb(vertices, line, viewer, pixelAngle);
+                            } else if (WebAnimation::released((shown - timing.releasedAt) * 1e-9f, shooter,
+                                                              timing.anchor, line)) {
+                                appendWeb(vertices, line, viewer, pixelAngle);
+                            }
+                        }
+                        // Aim markers: where each free hand's web button would send its
+                        // web, on the line that hand points along in this image, that
+                        // line steadied from image to image. Translucent, the farthest
+                        // drawn first.
+                        std::vector<AimMarker> marks;
+                        for (unsigned hand = 0; hand < 2; ++hand) {
+                            auto& steady = aimMotion[hand];
+                            const auto& input = rendered.swing.hands[hand];
+                            if (saved->flatScreen) {
+                                steady.reset();
+                                continue;
+                            }
+                            steady.begin(shown);
+                            if (!input.tracked) {
+                                steady.markers(nullptr, {}, {}, marks);
+                                continue;
+                            }
+                            const auto& aim = saved->aims[hand];
+                            const auto kind = static_cast<game_swing::AimKind>(aim.kind);
+                            // The hand moved with the player to this image, as its glove does.
+                            const Vec3 origin = input.aim.position + travel;
+                            const Vec3 direction =
+                                steady.aim(normalized(input.aim.orientation.rotate({0, 0, -1})),
+                                           trackingTurn(rendered.swing));
+                            const float reach = length(aim.point - input.aim.position);
+                            AimMarker marker;
+                            marker.squeeze = input.grip;
+                            marker.hand = hand;
+                            // A hand pointed at one of the game's interactions on
+                            // Spidy's wall shows that instead: a turning ring round
+                            // one the interact would use, a faint one round one to
+                            // come closer to.
+                            if (const auto& offer = saved->offers[hand]; offer.handle) {
+                                marker.kind = offer.usable ? AimMark::target : AimMark::air;
+                                marker.point = offer.position;
+                                marker.radius = offer_pointing::markRadius;
+                                steady.markers(&marker, origin, direction, marks);
+                                ++markersDrawn;
+                                continue;
+                            }
+                            switch (kind) {
+                            case game_swing::AimKind::prop:
+                            case game_swing::AimKind::character:
+                                marker.kind = AimMark::target;
+                                marker.point = aim.point;
+                                marker.radius = aim.radius;
+                                break;
+                            case game_swing::AimKind::anchor:
+                                marker.point = onAimLine(aim.point, aim.normal, origin, direction);
+                                break;
+                            case game_swing::AimKind::air:
+                                marker.kind = AimMark::air;
+                                marker.point = origin + direction * reach;
+                                break;
+                            default:
+                                marker.kind = AimMark::blocked;
+                                marker.point = length(aim.normal) > .5f
+                                                   ? onAimLine(aim.point, aim.normal, origin, direction)
+                                                   : origin + direction * reach;
+                                break;
+                            }
+                            // Not on the floor a lowered hand points at, by the player's feet.
+                            const float away = length(marker.point - origin);
+                            const float nearest = marker.kind == AimMark::target    ? .5f
+                                                  : marker.kind == AimMark::blocked ? 3.f
+                                                                                    : 2.f;
+                            const bool wanted = kind != game_swing::AimKind::none &&
+                                                kind <= game_swing::AimKind::character &&
+                                                !saved->webs[hand].attached && away >= nearest;
+                            steady.markers(wanted ? &marker : nullptr, origin, direction, marks);
+                            markersDrawn += wanted;
+                        }
+                        std::sort(marks.begin(), marks.end(), [&](const AimMarker& a, const AimMarker& b) {
+                            return length(a.point - viewer) > length(b.point - viewer);
+                        });
+                        std::vector<Vertex> translucent;
+                        for (const auto& mark : marks)
+                            appendAimMarker(translucent, mark, viewer, pixelAngle * markerPixels);
+                        // Slow motion's focus meter over the back of the left wrist, moved
+                        // with the player to this image as the glove is.
+                        if (!saved->flatScreen && saved->slow.meter > 0 && rendered.swing.hands[0].tracked) {
+                            auto wrist = rendered.hands[0];
+                            wrist.position += travel;
+                            const double clock = std::fmod(static_cast<double>(shown) * 1e-9, 3600.);
+                            appendSlowMotionMeter(translucent, saved->slow, wrist, viewer, pixelAngle,
+                                                  static_cast<float>(clock));
+                        }
+                        // The bursts where the latest blows landed: fixed in the world.
+                        if (!saved->flatScreen)
+                            for (const auto& burst : bursts) {
+                                if (!burst.since)
+                                    continue;
+                                auto view = burst.view;
+                                view.age = static_cast<float>(static_cast<double>(shown - burst.since) * 1e-9);
+                                appendImpact(translucent, view, viewer, pixelAngle);
+                            }
+                        // The called blow's arrow, over its thug.
+                        if (!saved->flatScreen && cue.left > 0) {
+                            auto view = cue;
+                            view.age = static_cast<float>(static_cast<double>(shown - cueSince) * 1e-9);
+                            if (view.age >= 0)
+                                appendCue(translucent, view, viewer, pixelAngle);
+                        }
+                        // A knockout's lettering, where he stood.
+                        if (!saved->flatScreen)
+                            for (const auto& mark : knockoutMarks) {
+                                if (!mark.since)
+                                    continue;
+                                auto view = mark.view;
+                                view.age = static_cast<float>(static_cast<double>(shown - mark.since) * 1e-9);
+                                appendKnockout(translucent, view, viewer, pixelAngle);
+                            }
+                        // The T-pose calibration's panel and controller rings, moved with
+                        // the player to this image as the hands are.
+                        if (!saved->flatScreen && saved->calibration.phase != body_calibration::Phase::idle) {
+                            auto view = saved->calibration;
+                            view.panel.position += travel;
+                            for (auto& grip : view.grips)
+                                grip.position += travel;
+                            body_calibration::appendView(vertices, view, viewer);
+                        }
+                        // The gadget wheel in front of its hand, moved with the
+                        // player to this image as the hands are.
+                        if (!saved->flatScreen && saved->gadgetWheel.open) {
+                            auto view = saved->gadgetWheel;
+                            view.frame.centre += travel;
+                            appendGadgetWheel(vertices, view);
+                        }
+                        std::array<D3D12Renderer::ViewTarget, 2> overlayViews;
+                        // Slow motion recolours the image under the overlay, about each eye's lens.
+                        D3D12Renderer::Grade grade;
+                        grade.amount = saved->slow.blend;
+                        grade.ripple = saved->slow.ripple;
+                        grade.rippleStrength = saved->slow.entering ? 1.f : .7f;
+                        grade.entering = saved->slow.entering;
+                        for (unsigned eye = 0; eye < 2; ++eye) {
+                            const auto& f = rendered.fovs[eye];
+                            grade.tangents[eye] = {std::tan(f.left), std::tan(f.right), std::tan(f.up),
+                                                   std::tan(f.down)};
+                        }
+                        for (unsigned eye = 0; eye < 2; ++eye) {
+                            const auto& target = targets[eye];
+                            const auto& f = rendered.fovs[eye];
+                            auto pose = rendered.eyes[eye];
+                            pose[12] += travel.x;
+                            pose[13] += travel.y;
+                            pose[14] += travel.z;
+                            const auto vp = multiply(projection(f.left, f.right, f.down, f.up, .03f, 200.f),
+                                                     native_view::view(pose));
+                            overlayViews[eye] = {target.texture, target.format, target.width, target.height,
+                                                 vp};
+                        }
+                        if (!saved->flatScreen)
+                            overlay.renderViews(overlayViews, vertices, true, false, translucent, &grade);
+                        overlayMs = std::chrono::duration<double, std::milli>(
+                                        std::chrono::steady_clock::now() - overlayStart)
+                                        .count();
+                        // The game's window mirrors the left eye as it is now, the
+                        // drawings above on it; copied only when the window took the last.
+                        native_gpu::keepShownEye(targets[0].texture);
+                        if (webGap >= 0 && imageGeneration != gapGeneration) {
+                            native_eyes::reportWebGap(webGap);
+                            gapGeneration = imageGeneration;
+                        }
+                        // Session report: publish a finished copy of the left
+                        // eye, then queue the next when one is due.
+                        D3D12Renderer::Captured pixels;
+                        if (snapshotTicket && overlay.captured(snapshotTicket, pixels)) {
+                            publishSnapshot(pendingSnapshot, &pixels);
+                            snapshotTicket = 0;
+                        }
+                        const float speed = swingState.status ? length(swingState.velocity) : 0;
+                        if (!snapshotTicket && snapshots.due(GetTickCount64(), speed, ropeHands != 0) &&
+                            (snapshotTicket = overlay.capture(targets[0].texture)) != 0) {
+                            pendingSnapshot = {};
+                            pendingSnapshot.flags = ropeHands;
+                            pendingSnapshot.generation = imageGeneration;
+                            pendingSnapshot.serial = imageSerial;
+                            pendingSnapshot.flatScreen = saved->flatScreen;
+                            pendingSnapshot.speed = speed;
+                            pendingSnapshot.webGap = webGap;
+                            const auto& eye = overlayViews[0];
+                            for (unsigned hand = 0; hand < 2; ++hand) {
+                                if (shooterHands & (1u << hand))
+                                    eyePixel(eye.viewProjection, shooters[hand], eye.width, eye.height,
+                                             pendingSnapshot.wrist[hand][0], pendingSnapshot.wrist[hand][1]);
+                                if (ropeHands & (1u << hand))
+                                    eyePixel(eye.viewProjection, ropeStarts[hand], eye.width, eye.height,
+                                             pendingSnapshot.ropeStart[hand][0],
+                                             pendingSnapshot.ropeStart[hand][1]);
+                            }
+                        }
+                    }
+                    std::lock_guard lock(telemetry);
+                    auto& d = SpidyXrData;
+                    InterlockedIncrement64(&d.sequence);
+                    d.dropped += !copied;
+                    d.serial = imageSerial;
+                    d.generation = imageGeneration;
+                    d.markers = markersDrawn;
+                    InterlockedIncrement64(&d.sequence);
+                    return copied;
+                });
+            // No headset frame for a while: slow motion ends on its own, in real time.
+            if (const auto now = GetTickCount64(); now - slowSteppedMs >= 200)
+                stepSlowMotion(static_cast<float>(now - slowSteppedMs) / 1000, false, false);
+            const auto& timing = runtime.lastFrameTiming();
+            if (submittedFrames >= 30 && timing.period > 0) {
+                const double stages[] = {timing.total,   timing.wait,  timing.tracking, timing.prepare,
+                                         timing.acquire, copyMs,       overlayMs,       timing.release,
+                                         timing.end,     timing.period};
+                std::lock_guard lock(telemetry);
+                InterlockedIncrement64(&SpidyXrTimingData.sequence);
+                for (unsigned i = 0; i < 10; ++i)
+                    SpidyXrTimingData.stages[i].add(stages[i]);
+                InterlockedIncrement64(&SpidyXrTimingData.sequence);
+            }
+            // Count only a successful xrEndFrame containing a projection layer.
+            // A GPU copy alone does not confirm that OpenXR accepted the frame.
+            const bool submitted = runtime.lastFrameSubmitted();
+            if (submitted) {
+                ++submittedFrames;
+                lastPresentedMs = GetTickCount64();
+                if (!presented || drawn != shownKind) {
+                    presented = true;
+                    shownKind = drawn;
+                    // The game played on its screen shows it there, flat or in 3D.
+                    const bool screenPlay =
+                        flatScreen && (drawn == Presentation::gameScreen || drawn == Presentation::stereoScreen);
+                    message(3, 0,
+                            screenPlay
+                                ? "The game on its screen: the controllers work as an Xbox controller; hold the "
+                                  "menu button for its Back (the map), hold the left stick's click and push the "
+                                  "right stick for its D-pad - pause, SWITCH TO VR goes back to VR"
+                            : drawn == Presentation::gameScreen
+                                ? "Game screen (menus, loading, cutscenes): the controllers work as an Xbox "
+                                  "controller, VR settings are in Settings > SPIDY VR - VR resumes with gameplay"
+                            : drawn == Presentation::stereoScreen
+                                ? "Game screen in 3D (a cutscene or another scene the game plays): the "
+                                  "controllers work as an Xbox controller - Settings > SPIDY VR > GAME SCREEN 3D "
+                                  "sets its depth"
+                            : drawn == Presentation::flat
+                                ? "Flat screen - pause, SWITCH TO VR goes back to VR"
+                                : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts (hold: step "
+                                  "up to it), X opens the game menu (hold: the gadget wheel), the menu button "
+                                  "pauses, the left stick's click slows time; a trigger pulled at your temple "
+                                  "scans; right stick: click is the game's LB + RB, down heals, up is its LT + RT "
+                                  "(vents)");
+                }
+            }
+            {
+                std::lock_guard lock(telemetry);
+                auto& d = SpidyXrData;
+                InterlockedIncrement64(&d.sequence);
+                d.presentation = static_cast<uint32_t>(submitted ? drawn : Presentation::none);
+                if (submitted) {
+                    ++d.submitted;
+                    // Game-screen frames are not eye images: neither new nor reused ones.
+                    if (drawn == Presentation::gameScreen || drawn == Presentation::stereoScreen) {
+                        ++d.screenSubmitted;
+                        d.stereoSubmitted += drawn == Presentation::stereoScreen;
+                    } else if (d.generation != previousPresentedGeneration) {
+                        ++d.uniqueSubmitted;
+                        lastNewImageMs = lastPresentedMs;
+                        previousPresentedGeneration = d.generation;
+                    } else {
+                        ++d.reusedSubmitted;
+                    }
+                }
+                InterlockedIncrement64(&d.sequence);
+            }
+            if (!active)
+                break;
+        }
+        message(6, 0, "Stopping VR and restoring game hooks");
+    } catch (const std::exception& e) {
+        error = 1;
+        failure = e.what();
+    }
+    players.stop();
+    if (padInstalled)
+        game_pad::uninstall();
+    game_menu::uninstall();
+    // The game's own time back, and no blow still sounding. The ticket's
+    // guard stays for as long as the game runs: it is what keeps a quit to
+    // the main menu after VR from closing the game.
+    game_time::uninstall();
+    PlaySoundW(nullptr, nullptr, 0);
+    bridge::Control release;
+    release.serial = ++serial;
+    release.leaseMs = 0;
+    if (submitInput)
+        submitInput(&release);
+    if (swingStarted) {
+        const auto code = stopSwing(nullptr);
+        if (code) {
+            error = code;
+            failure = "Native swinging did not stop cleanly";
+        }
+    }
+    if (websStarted) {
+        const auto code = native_webs::stop();
+        if (code) {
+            error = code;
+            failure = "Game web lines did not stop cleanly";
+        }
+    }
+    if (bodyStarted) {
+        const auto code = native_body::stop();
+        if (code) {
+            error = code;
+            failure = "The player's body did not stop cleanly";
+        }
+    }
+    if (nativeStarted) {
+        const auto code = SpidyStop(nullptr);
+        if (code) {
+            error = code;
+            failure = "Native views did not retire cleanly";
+        }
+    }
+    if (gpuStarted) {
+        const auto code = native_gpu::stop();
+        if (code) {
+            error = code;
+            failure = "Native GPU bridge did not stop cleanly";
+        }
+    }
+    if (raysStarted) {
+        const auto code = stopRays(nullptr);
+        if (code) {
+            error = code;
+            failure = "Controller world rays did not stop cleanly";
+        }
+    }
+    if (stopBridge) {
+        const auto code = stopBridge(nullptr);
+        if (code) {
+            error = code;
+            failure = "Input bridge did not stop cleanly";
+        }
+    }
+    message(error ? 5 : 4, error, error ? failure.c_str() : "VR session finished");
+    return error;
+}
+} // namespace
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
+    std::lock_guard life(lifecycle);
+    if (worker)
+        return 1000; // one bounded XR session per process during validation
+    if (!read(reinterpret_cast<uintptr_t>(input), &config, sizeof(config)) || config.magic != 0x53585243 ||
+        config.version != 23 || config.bytes != sizeof(config) || config.pid != GetCurrentProcessId() ||
+        config.runtime[std::size(config.runtime) - 1] ||
+        config.base != reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) ||
+        !GetModuleHandleW(L"Spider-Man.exe") || !config.queue || !config.bridgeModule || !config.rayModule ||
+        !config.motionModule || config.options > 0x1fffff || config.snapTurn > 90 || config.haptics > 100 ||
+        !validEyeUpscale(config.upscale) || !validMonitorRate(config.monitorRate) ||
+        config.screenSize > 2 || config.screenDepth > 3 || config.spare || config.smoothTurn > 360 ||
+        config.hud > 3 || config.flipSpeed < 90 ||
+        config.flipSpeed > 480 || !std::isfinite(config.swingSpeed) || config.swingSpeed < 1 ||
+        config.swingSpeed > 65 || (config.durationMs && config.durationMs < 2000) || config.durationMs > 25000 ||
+        (config.eyeSize && !validEyeSize(config.eyeSize)) || !validRenderScale(config.renderScale) ||
+        (config.eyeSize && config.renderScale != 100) || config.weight < 40 || config.weight > 300)
+        return 1001;
+    // A calibration is both measurements or neither.
+    if ((config.eyeHeightMm == 0) != (config.armLengthMm == 0) ||
+        (config.eyeHeightMm &&
+         (config.eyeHeightMm < body_calibration::minEyeHeightMm || config.eyeHeightMm > body_calibration::maxEyeHeightMm ||
+          config.armLengthMm < body_calibration::minArmLengthMm || config.armLengthMm > body_calibration::maxArmLengthMm)))
+        return 1001;
+    auto module = reinterpret_cast<HMODULE>(config.bridgeModule);
+    submitInput = reinterpret_cast<BridgeCall>(GetProcAddress(module, "SpidySubmit"));
+    sampleBridge = reinterpret_cast<BridgeCall>(GetProcAddress(module, "SpidyBridgeSample"));
+    stopBridge = reinterpret_cast<BridgeCall>(GetProcAddress(module, "SpidyStop"));
+    retargetBridge = reinterpret_cast<BridgeCall>(GetProcAddress(module, "SpidyRetarget"));
+    auto rays = reinterpret_cast<HMODULE>(config.rayModule);
+    startRays = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyRayStart"));
+    submitRays = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyRaySubmit"));
+    stopRays = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyRayStop"));
+    startSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingStart"));
+    submitSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSubmit"));
+    sampleSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSample"));
+    sampleBends = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingBends"));
+    rayResults = reinterpret_cast<const native_rays::Data*>(GetProcAddress(rays, "SpidyRayData"));
+    stopSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingStop"));
+    retargetSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingRetarget"));
+    // Optional: an older ray module has no web grab, nor punching, nor aim previews.
+    sampleGrab = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyGrabSample"));
+    sampleAim = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyAimSample"));
+    startPunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchStart"));
+    samplePunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchSample"));
+    // Optional too: without them the VR settings' grab, speed and punch
+    // switches take effect only at the next session.
+    stopPunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchStop"));
+    // Optional: an older ray module has no web strike, and a punch only its short pulse.
+    sampleStrike = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyStrikeSample"));
+    swingSettings = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSettings"));
+    // Optional: an older ray module has no web shooter.
+    startShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterStart"));
+    sampleShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterSample"));
+    sampleWarp = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyWarpSample"));
+    sampleOffers = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyOffersSample"));
+    useOffer = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyOffersUse"));
+    aimOffer = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyOffersAim"));
+    stopShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterStop"));
+    wheelShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterGadgets"));
+    if (!submitInput || !sampleBridge || !stopBridge || !retargetBridge || !startRays || !submitRays ||
+        !stopRays || !startSwing || !submitSwing || !sampleSwing || !stopSwing || !retargetSwing)
+        return 1002;
+    stopRequested = false;
+    // The worker attaches each player it finds; none yet.
+    native_appearance::setPlayerRecord(0);
+    keepAliveDeadline = GetTickCount64() + 10000;
+    message(1, 0, "Starting OpenXR");
+    worker = CreateThread(nullptr, 0, run, nullptr, 0, nullptr);
+    return worker ? 0 : 1003;
+}
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrKeepAlive(void*) {
+    if (stopRequested)
+        return 1102;
+    keepAliveDeadline = GetTickCount64() + 5000;
+    return 0;
+}
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStop(void*) {
+    std::lock_guard life(lifecycle);
+    stopRequested = true;
+    if (!worker)
+        return 0;
+    const auto status = WaitForSingleObject(worker, 15000);
+    return status == WAIT_OBJECT_0 ? 0 : 1101;
+}

@@ -1,0 +1,752 @@
+#pragma once
+// Text handling for the Spidy launcher: Steam's VDF files, JSON, constants read
+// from the Python tools, command lines, and log lines. No Windows calls, so the
+// checks in tests/launcher_tests.cpp run anywhere.
+#include "body_calibration.hpp"
+#include "eye_resolution.hpp"
+#include "monitor_rate.hpp"
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+namespace spidy::launcher {
+
+// A Valve KeyValues (VDF/ACF) text's quoted strings (escapes \\ \" \n \t decoded) and
+// braces, each with the offset just past it; // comments are skipped.
+struct VdfToken {
+    std::string text;
+    bool quoted{};
+    size_t end{};
+};
+
+inline std::vector<VdfToken> vdfTokens(std::string_view text) {
+    std::vector<VdfToken> tokens;
+    for (size_t i = 0; i < text.size();) {
+        const char c = text[i];
+        if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            while (i < text.size() && text[i] != '\n')
+                ++i;
+        } else if (c == '"') {
+            std::string token;
+            for (++i; i < text.size() && text[i] != '"'; ++i) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    const char next = text[++i];
+                    token += next == 'n' ? '\n' : next == 't' ? '\t' : next;
+                } else {
+                    token += text[i];
+                }
+            }
+            ++i;
+            tokens.push_back({std::move(token), true, std::min(i, text.size())});
+        } else if (c == '{' || c == '}') {
+            tokens.push_back({std::string(1, c), false, ++i});
+        } else {
+            ++i;
+        }
+    }
+    return tokens;
+}
+
+// Keys match without regard to case, as Steam's do.
+inline bool vdfSameKey(std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) ==
+                      std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// Every value that follows `key` in a VDF/ACF text, in order, at any depth.
+inline std::vector<std::string> vdfValues(std::string_view text, std::string_view key) {
+    const auto tokens = vdfTokens(text);
+    std::vector<std::string> values;
+    for (size_t i = 0; i + 1 < tokens.size(); ++i)
+        if (tokens[i].quoted && tokens[i + 1].quoted && vdfSameKey(tokens[i].text, key)) {
+            values.push_back(tokens[i + 1].text);
+            ++i;
+        }
+    return values;
+}
+
+// The text inside the first block named `name` ("UserConfig" { ... }), blocks inside it
+// included; empty when there is none.
+inline std::string_view vdfBlock(std::string_view text, std::string_view name) {
+    const auto tokens = vdfTokens(text);
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+        if (!tokens[i].quoted || tokens[i + 1].quoted || tokens[i + 1].text != "{" ||
+            !vdfSameKey(tokens[i].text, name))
+            continue;
+        const size_t start = tokens[i + 1].end;
+        int depth = 0;
+        for (size_t j = i + 1; j < tokens.size(); ++j) {
+            if (tokens[j].quoted)
+                continue;
+            depth += tokens[j].text == "{" ? 1 : -1;
+            if (depth == 0)
+                return text.substr(start, tokens[j].end - 1 - start);
+        }
+        return text.substr(start);
+    }
+    return {};
+}
+
+// What Steam's app manifest (steamapps\appmanifest_1817070.acf) says about the game it installed.
+struct SteamApp {
+    bool found{};
+    // The beta chosen in the game's Properties > Betas; empty for none.
+    std::string beta;
+    // An update Steam has for the game, not yet installed (waiting, downloading or paused).
+    bool updateWaiting{};
+};
+
+inline SteamApp steamApp(std::string_view manifest) {
+    SteamApp app;
+    app.found = !vdfValues(manifest, "appid").empty();
+    // UserConfig holds the player's choice; MountedConfig, the installed files' until the
+    // update that choice needs is in.
+    for (const auto& beta : vdfValues(vdfBlock(manifest, "UserConfig"), "BetaKey"))
+        if (!beta.empty() && beta != "public")
+            app.beta = beta;
+    const auto number = [&](std::string_view key) {
+        const auto values = vdfValues(manifest, key);
+        uint64_t value{};
+        if (!values.empty())
+            std::from_chars(values[0].data(), values[0].data() + values[0].size(), value);
+        return value;
+    };
+    // StateFlags 2: update required.
+    const uint64_t target = number("TargetBuildID");
+    app.updateWaiting = (number("StateFlags") & 2) || (target && target != number("buildid"));
+    return app;
+}
+
+// The value of a module-level Python constant (`NAME = "text"` or `NAME = 123`).
+// The launcher reads the supported build's hash and version from the tools
+// themselves, so each fact keeps one source.
+inline std::optional<std::string> pythonConstant(std::string_view source, std::string_view name) {
+    size_t at = 0;
+    while ((at = source.find(name, at)) != std::string_view::npos) {
+        const bool lineStart = at == 0 || source[at - 1] == '\n';
+        size_t i = at + name.size();
+        at = i;
+        if (!lineStart)
+            continue;
+        while (i < source.size() && source[i] == ' ')
+            ++i;
+        if (i >= source.size() || source[i] != '=')
+            continue;
+        ++i;
+        while (i < source.size() && source[i] == ' ')
+            ++i;
+        if (i < source.size() && (source[i] == '"' || source[i] == '\'')) {
+            const char quote = source[i];
+            const size_t end = source.find(quote, i + 1);
+            if (end == std::string_view::npos)
+                return std::nullopt;
+            return std::string(source.substr(i + 1, end - i - 1));
+        }
+        size_t end = i;
+        while (end < source.size() && (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_' ||
+                                       source[end] == '.'))
+            ++end;
+        if (end > i)
+            return std::string(source.substr(i, end - i));
+    }
+    return std::nullopt;
+}
+
+// A JSON value: enough of JSON to read GitHub's answers and OpenVR's path file.
+struct Json {
+    enum class Type { null, boolean, number, string, array, object };
+    Type type = Type::null;
+    bool boolean{};
+    double number{};
+    std::string string;
+    std::vector<Json> items;
+    std::vector<std::pair<std::string, Json>> members;
+
+    // An object's member named `key`; nullptr when there is none.
+    const Json* get(std::string_view key) const {
+        for (const auto& [name, value] : members)
+            if (name == key)
+                return &value;
+        return nullptr;
+    }
+    // A string member's text; empty for anything else.
+    std::string text(std::string_view key) const {
+        const Json* value = get(key);
+        return value && value->type == Type::string ? value->string : std::string();
+    }
+};
+
+namespace detail {
+class JsonReader {
+public:
+    explicit JsonReader(std::string_view text) : s_(text) {}
+
+    std::optional<Json> read() {
+        Json value;
+        if (!this->value(value, 0))
+            return std::nullopt;
+        space();
+        return i_ == s_.size() ? std::optional<Json>(std::move(value)) : std::nullopt;
+    }
+
+private:
+    void space() {
+        while (i_ < s_.size() && (s_[i_] == ' ' || s_[i_] == '\t' || s_[i_] == '\n' || s_[i_] == '\r'))
+            ++i_;
+    }
+
+    bool word(std::string_view text) {
+        if (s_.substr(i_, text.size()) != text)
+            return false;
+        i_ += text.size();
+        return true;
+    }
+
+    bool hex4(size_t at, unsigned& code) const {
+        if (at + 4 > s_.size())
+            return false;
+        const auto [end, error] = std::from_chars(s_.data() + at, s_.data() + at + 4, code, 16);
+        return error == std::errc() && end == s_.data() + at + 4;
+    }
+
+    static void utf8(std::string& out, unsigned code) {
+        if (code < 0x80) {
+            out += static_cast<char>(code);
+        } else if (code < 0x800) {
+            out += static_cast<char>(0xC0 | code >> 6);
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out += static_cast<char>(0xE0 | code >> 12);
+            out += static_cast<char>(0x80 | (code >> 6 & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | code >> 18);
+            out += static_cast<char>(0x80 | (code >> 12 & 0x3F));
+            out += static_cast<char>(0x80 | (code >> 6 & 0x3F));
+            out += static_cast<char>(0x80 | (code & 0x3F));
+        }
+    }
+
+    bool string(std::string& out) {
+        if (!word("\""))
+            return false;
+        while (i_ < s_.size()) {
+            const char c = s_[i_++];
+            if (c == '"')
+                return true;
+            if (static_cast<unsigned char>(c) < 0x20)
+                return false;
+            if (c != '\\') {
+                out += c;
+                continue;
+            }
+            if (i_ >= s_.size())
+                return false;
+            switch (const char escape = s_[i_++]) {
+            case '"':
+            case '\\':
+            case '/': out += escape; break;
+            case 'b': out += '\b'; break;
+            case 'f': out += '\f'; break;
+            case 'n': out += '\n'; break;
+            case 'r': out += '\r'; break;
+            case 't': out += '\t'; break;
+            case 'u': {
+                unsigned code{};
+                if (!hex4(i_, code))
+                    return false;
+                i_ += 4;
+                // A character beyond the first 64K is two escapes, a surrogate pair; half of one is U+FFFD.
+                if (code >= 0xD800 && code < 0xDC00) {
+                    unsigned low{};
+                    if (s_.substr(i_, 2) == "\\u" && hex4(i_ + 2, low) && low >= 0xDC00 && low < 0xE000) {
+                        code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        i_ += 6;
+                    } else {
+                        code = 0xFFFD;
+                    }
+                } else if (code >= 0xDC00 && code < 0xE000) {
+                    code = 0xFFFD;
+                }
+                utf8(out, code);
+                break;
+            }
+            default: return false;
+            }
+        }
+        return false;
+    }
+
+    bool value(Json& out, int depth) {
+        // GitHub nests a few levels; a deeper text is not an answer of theirs.
+        if (depth > 64)
+            return false;
+        space();
+        if (i_ >= s_.size())
+            return false;
+        const char c = s_[i_];
+        if (c == '{') {
+            ++i_;
+            out.type = Json::Type::object;
+            space();
+            if (word("}"))
+                return true;
+            for (;;) {
+                space();
+                std::string name;
+                if (!string(name))
+                    return false;
+                space();
+                if (!word(":"))
+                    return false;
+                Json member;
+                if (!value(member, depth + 1))
+                    return false;
+                out.members.emplace_back(std::move(name), std::move(member));
+                space();
+                if (word("}"))
+                    return true;
+                if (!word(","))
+                    return false;
+            }
+        }
+        if (c == '[') {
+            ++i_;
+            out.type = Json::Type::array;
+            space();
+            if (word("]"))
+                return true;
+            for (;;) {
+                Json item;
+                if (!value(item, depth + 1))
+                    return false;
+                out.items.push_back(std::move(item));
+                space();
+                if (word("]"))
+                    return true;
+                if (!word(","))
+                    return false;
+            }
+        }
+        if (c == '"') {
+            out.type = Json::Type::string;
+            return string(out.string);
+        }
+        if (word("true")) {
+            out.type = Json::Type::boolean;
+            out.boolean = true;
+            return true;
+        }
+        if (word("false")) {
+            out.type = Json::Type::boolean;
+            return true;
+        }
+        if (word("null"))
+            return true;
+        size_t end = i_;
+        while (end < s_.size() && std::string_view("+-0123456789.eE").find(s_[end]) != std::string_view::npos)
+            ++end;
+        const char* first = s_.data() + i_;
+        const auto [stop, error] = std::from_chars(first, s_.data() + end, out.number);
+        if (end == i_ || error != std::errc() || stop != s_.data() + end)
+            return false;
+        out.type = Json::Type::number;
+        i_ = end;
+        return true;
+    }
+
+    std::string_view s_;
+    size_t i_ = 0;
+};
+} // namespace detail
+
+inline std::optional<Json> parseJson(std::string_view text) { return detail::JsonReader(text).read(); }
+
+// A friendly name for an OpenXR runtime manifest path, as tools/xr_runtime.py names it.
+inline std::string runtimeLabel(std::string_view manifest) {
+    std::string lowered(manifest);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    static constexpr std::array<std::pair<std::string_view, std::string_view>, 8> known{{
+        {"virtualdesktop", "Virtual Desktop"},
+        {"steamxr", "SteamVR"},
+        {"oculus", "Meta Quest Link"},
+        {"mixedreality", "Windows Mixed Reality"},
+        {"pimax", "Pimax"},
+        {"varjo", "Varjo"},
+        {"wivrn", "WiVRn"},
+        {"vive", "VIVE"},
+    }};
+    for (const auto& [piece, label] : known)
+        if (lowered.find(piece) != std::string::npos)
+            return std::string(label);
+    return {};
+}
+
+// The folders an OpenVR path file (%LOCALAPPDATA%\openvr\openvrpaths.vrpath, JSON) lists as its
+// "runtime": where SteamVR is installed, as tools/xr_runtime.py's steamvr reads it.
+inline std::vector<std::string> openVrRuntimes(std::string_view paths) {
+    if (paths.substr(0, 3) == "\xEF\xBB\xBF")
+        paths.remove_prefix(3);
+    std::vector<std::string> folders;
+    const auto root = parseJson(paths);
+    if (const Json* runtime = root ? root->get("runtime") : nullptr)
+        for (const Json& folder : runtime->items)
+            if (folder.type == Json::Type::string)
+                folders.push_back(folder.string);
+    return folders;
+}
+
+// The headset check's line, from spidy_headset_probe.exe's output or from
+// tools/xr_runtime.py --detect's, which names the runtime it found the headset
+// in and the runtimes it asked first. `found`: the program said so (exit 0).
+inline std::string headsetSummary(std::string_view output, bool found) {
+    const auto starts = [](std::string_view line, std::string_view prefix) {
+        return line.substr(0, prefix.size()) == prefix;
+    };
+    std::string runtime, headset, eye, last;
+    while (!output.empty()) {
+        const size_t end = output.find('\n');
+        std::string_view line = output.substr(0, end);
+        output = end == std::string_view::npos ? std::string_view() : output.substr(end + 1);
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back())))
+            line.remove_suffix(1);
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front())))
+            line.remove_prefix(1);
+        if (line.empty() || starts(line, "Looking for the headset in ") || starts(line, "Waiting for "))
+            continue;
+        if (starts(line, "VR runtime: "))
+            runtime = std::string(line.substr(12, line.find(" (") - 12));
+        else if (starts(line, "Headset available: "))
+            headset = std::string(line.substr(19, line.find(';') - 19));
+        else if (starts(line, "Recommended eye 0: "))
+            eye = std::string(line.substr(19));
+        else
+            last = std::string(line);
+    }
+    if (!found)
+        return "Not found. Put the headset on and connect it" + (last.empty() ? std::string(".") : " (" + last + ").");
+    std::string summary = headset.empty() ? "Headset available" : "Connected: " + headset;
+    if (!runtime.empty())
+        summary += " via " + runtime;
+    return eye.empty() ? summary + "." : summary + " - " + eye + " per eye";
+}
+
+// The eye size the headset check's runtime recommends ("Recommended eye 0: 3072x3264").
+inline std::optional<std::array<uint32_t, 2>> recommendedEye(std::string_view output) {
+    constexpr std::string_view prefix = "Recommended eye 0: ";
+    const size_t at = output.find(prefix);
+    if (at == std::string_view::npos || (at && output[at - 1] != '\n'))
+        return std::nullopt;
+    const char* p = output.data() + at + prefix.size();
+    const char* end = output.data() + output.size();
+    std::array<uint32_t, 2> eye{};
+    auto [x, first] = std::from_chars(p, end, eye[0]);
+    if (first != std::errc() || x == end || *x != 'x')
+        return std::nullopt;
+    if (std::from_chars(x + 1, end, eye[1]).ec != std::errc() || !validEyeSize(eye[0]) || !validEyeSize(eye[1]))
+        return std::nullopt;
+    return eye;
+}
+
+// Quotes one argument so CommandLineToArgvW (and Python) read it back unchanged.
+inline std::wstring quoteArgument(std::wstring_view argument) {
+    if (!argument.empty() && argument.find_first_of(L" \t\n\v\"") == std::wstring_view::npos)
+        return std::wstring(argument);
+    std::wstring quoted = L"\"";
+    for (size_t i = 0;; ++i) {
+        size_t slashes = 0;
+        while (i < argument.size() && argument[i] == L'\\') {
+            ++slashes;
+            ++i;
+        }
+        if (i == argument.size()) {
+            quoted.append(slashes * 2, L'\\');
+            break;
+        }
+        if (argument[i] == L'"') {
+            quoted.append(slashes * 2 + 1, L'\\');
+        } else {
+            quoted.append(slashes, L'\\');
+        }
+        quoted += argument[i];
+    }
+    return quoted + L'"';
+}
+
+// Webs catching props and thugs, the web shooter, your own body and punching
+// are always on, and the game draws the webs: the launcher has not offered
+// them since October 8 (run_game_vr.py's switches still turn them off).
+struct SessionOptions {
+    bool smallWindow = true;
+    bool stockMonitorView = false;
+    int renderScale = 100; // eye resolution in percent of the headset's recommendation, per side
+    int swingSpeed = 32;
+    bool aimMarkers = true; // markers where each hand's web would land
+    bool airWebs = true;    // a web that meets nothing within reach holds in open air there
+    int snapTurn = 30;  // degrees per flick of the right stick; 0: no snap turning
+    int haptics = 100;  // controller vibration, percent
+    int screenSize = 1; // the game screen in the headset: 0 small, 1 medium, 2 large
+    int screenDepth = 2; // the depth cutscenes have on that screen: 0 off (flat), 1 low, 2 medium, 3 high
+    int smoothTurn = 0; // degrees a second the right stick turns you while held over; 0: it snap turns
+    int weight = 100;   // how heavy you are while webs fly you, percent of real gravity
+    bool flips = false; // experimental: in the air the left stick turns you over, and a tap of A flips you
+    int flipSpeed = 180; // degrees a second a flip turns you at full tilt of the left stick
+    // The trigger shoots and holds webs, and the grip reels them in and shoots web balls; off, the other way round.
+    bool triggerWebs = false;
+    int hud = 2; // the game's HUD in the headset: 0 off, 1 small, 2 medium, 3 large
+    // Walking a wall or stopped on it, your view turns so that the wall is your floor; off, you stay upright.
+    bool standOnWalls = true;
+    // The swing takes you onto a wall and runs it; off, the game's own wall crawl takes you there instead, as
+    // before October 10. Off is slower and stiffer, and it is how to tell whether something on a wall is the
+    // swing's doing: the game refuses its own interactions while the swing owns the hero (October 13, a closed
+    // vent reached by walking up the wall it is on).
+    bool wallRun = true;
+    // The game's own Depth of Field and Sharpness settings stay as they are in VR; off (the default), a
+    // session turns the first off and the second to its lowest, and puts both back when the game closes.
+    bool gameDepthOfField = false, gameSharpening = false;
+    // Your T-pose calibration in the headset (body_calibration.hpp): the eye height and arm length Spider-Man's
+    // body is sized to, millimetres. Both 0: none yet, and VR asks for one at the first gameplay unless
+    // calibrationPrompt is off (you skipped it).
+    int eyeHeightMm = 0, armLengthMm = 0;
+    bool calibrationPrompt = true;
+    // Upscaling: percent of the eye's size, per side, the eyes' scene is rendered at (eye_resolution.hpp);
+    // the game's temporal anti-aliasing brings it to the eye's size. 100 only anti-aliases.
+    int upscale = static_cast<int>(defaultEyeUpscale);
+    // How often the game window gets your left eye in immersive VR: pictures a second, 0 for every frame
+    // (monitor_rate.hpp). Each one costs the graphics card time the headset could have.
+    int monitorRate = static_cast<int>(defaultMonitorRate);
+    bool operator==(const SessionOptions&) const = default;
+};
+
+// Whether `options` hold a T-pose calibration a session takes: both measurements, each within its range.
+inline bool calibrated(const SessionOptions& options) {
+    const auto within = [](int value, unsigned low, unsigned high) {
+        return value >= static_cast<int>(low) && value <= static_cast<int>(high);
+    };
+    return within(options.eyeHeightMm, body_calibration::minEyeHeightMm, body_calibration::maxEyeHeightMm) &&
+           within(options.armLengthMm, body_calibration::minArmLengthMm, body_calibration::maxArmLengthMm);
+}
+
+// Arguments after the script for tools/run_game_vr.py, for an untimed session
+// that starts the game itself (or uses the one already running).
+inline std::vector<std::wstring> sessionArguments(const SessionOptions& options, std::wstring_view report,
+                                                  std::wstring_view runtime, std::wstring_view stopEvent) {
+    std::vector<std::wstring> args{L"--auto-launch", L"--seconds", L"0", L"--swing-speed",
+                                   std::to_wstring(std::clamp(options.swingSpeed, 1, 65)), L"--output",
+                                   std::wstring(report)};
+    if (!options.smallWindow)
+        args.emplace_back(L"--full-desktop-view");
+    if (options.stockMonitorView)
+        args.emplace_back(L"--stock-monitor-view");
+    if (!options.aimMarkers)
+        args.emplace_back(L"--no-aim-markers");
+    if (!options.airWebs)
+        args.emplace_back(L"--no-air-webs");
+    if (options.flips)
+        args.emplace_back(L"--flips");
+    if (options.triggerWebs)
+        args.emplace_back(L"--trigger-webs");
+    if (!options.wallRun)
+        args.emplace_back(L"--no-wall-run");
+    if (options.gameDepthOfField)
+        args.emplace_back(L"--game-depth-of-field");
+    if (options.gameSharpening)
+        args.emplace_back(L"--game-sharpening");
+    if (calibrated(options)) {
+        args.emplace_back(L"--eye-height");
+        args.emplace_back(std::to_wstring(options.eyeHeightMm));
+        args.emplace_back(L"--arm-length");
+        args.emplace_back(std::to_wstring(options.armLengthMm));
+    } else if (!options.calibrationPrompt) {
+        args.emplace_back(L"--no-calibration-prompt");
+    }
+    // The game's Settings offer these too (SPIDY VR), all but the render scale, the upscaling and the
+    // monitor's rate; the defaults go unsaid.
+    const std::pair<int, std::pair<const wchar_t*, int>> settings[] = {
+        {std::clamp(options.renderScale, static_cast<int>(minimumRenderScale), static_cast<int>(maximumRenderScale)),
+         {L"--render-scale", 100}},
+        {std::clamp(options.upscale, static_cast<int>(minimumEyeUpscale), static_cast<int>(maximumEyeUpscale)),
+         {L"--upscale", static_cast<int>(defaultEyeUpscale)}},
+        {std::clamp(options.snapTurn, 0, 90), {L"--snap-turn", 30}},
+        {std::clamp(options.smoothTurn, 0, 360), {L"--smooth-turn", 0}},
+        {std::clamp(options.haptics, 0, 100), {L"--haptics", 100}},
+        {std::clamp(options.screenSize, 0, 2), {L"--screen-size", 1}},
+        {std::clamp(options.screenDepth, 0, 3), {L"--screen-depth", 2}},
+        {std::clamp(options.weight, 40, 300), {L"--weight", 100}},
+        {std::clamp(options.hud, 0, 3), {L"--hud", 2}},
+        {std::clamp(options.flipSpeed, 90, 480), {L"--flip-speed", 180}},
+        {std::clamp(options.monitorRate, 0, static_cast<int>(maximumMonitorRate)),
+         {L"--monitor-rate", static_cast<int>(defaultMonitorRate)}}};
+    for (const auto& [value, flag] : settings)
+        if (value != flag.second) {
+            args.emplace_back(flag.first);
+            args.emplace_back(std::to_wstring(value));
+        }
+    if (!runtime.empty()) {
+        args.emplace_back(L"--xr-runtime");
+        args.emplace_back(runtime);
+    }
+    if (!stopEvent.empty()) {
+        args.emplace_back(L"--stop-event");
+        args.emplace_back(stopEvent);
+    }
+    return args;
+}
+
+// The line tools/run_game_vr.py prints when a session ends with other VR
+// settings than it began with (the SPIDY VR tab in the game's Settings, a
+// T-pose calibration made or skipped):
+//   VR settings from the headset: aim_markers=1 web_grab=1 air_webs=0 ...
+// Applies the ones the launcher offers to `options` for the next session
+// (web_grab, web_shooter, punch and body it ignores); false when the line is
+// another one, or changes nothing.
+inline bool headsetSettings(std::string_view line, SessionOptions& options) {
+    constexpr std::string_view prefix = "VR settings from the headset: ";
+    if (line.substr(0, prefix.size()) != prefix)
+        return false;
+    line.remove_prefix(prefix.size());
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
+        line.remove_suffix(1);
+    SessionOptions next = options;
+    while (!line.empty()) {
+        const size_t space = line.find(' ');
+        const std::string_view pair = line.substr(0, space);
+        line = space == std::string_view::npos ? std::string_view() : line.substr(space + 1);
+        const size_t equals = pair.find('=');
+        if (equals == std::string_view::npos)
+            continue;
+        const std::string_view key = pair.substr(0, equals), value = pair.substr(equals + 1);
+        int number{};
+        const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+        if (error != std::errc() || end != value.data() + value.size())
+            continue;
+        if (key == "aim_markers")
+            next.aimMarkers = number != 0;
+        else if (key == "air_webs")
+            next.airWebs = number != 0;
+        else if (key == "flips")
+            next.flips = number != 0;
+        else if (key == "trigger_webs")
+            next.triggerWebs = number != 0;
+        else if (key == "wall_run")
+            next.wallRun = number != 0;
+        else if (key == "swing_speed")
+            next.swingSpeed = std::clamp(number, 10, 65);
+        else if (key == "snap_turn")
+            next.snapTurn = std::clamp(number, 0, 90);
+        else if (key == "smooth_turn")
+            next.smoothTurn = std::clamp(number, 0, 360);
+        else if (key == "haptics")
+            next.haptics = std::clamp(number, 0, 100);
+        else if (key == "screen_size")
+            next.screenSize = std::clamp(number, 0, 2);
+        else if (key == "screen_depth")
+            next.screenDepth = std::clamp(number, 0, 3);
+        else if (key == "weight")
+            next.weight = std::clamp(number, 40, 300);
+        else if (key == "hud")
+            next.hud = std::clamp(number, 0, 3);
+        else if (key == "flip_speed")
+            next.flipSpeed = std::clamp(number, 90, 480);
+        else if (key == "eye_height_mm")
+            next.eyeHeightMm = number;
+        else if (key == "arm_length_mm")
+            next.armLengthMm = number;
+        else if (key == "calibration_prompt")
+            next.calibrationPrompt = number != 0;
+    }
+    // A calibration is both measurements within their ranges, or none at all; anything else keeps the old one.
+    if (!calibrated(next) && (next.eyeHeightMm || next.armLengthMm)) {
+        next.eyeHeightMm = options.eyeHeightMm;
+        next.armLengthMm = options.armLengthMm;
+    }
+    const bool changed = !(next == options);
+    options = next;
+    return changed;
+}
+
+enum class LineKind { normal, good, warning, error };
+
+// How the launcher colours a line the session printed.
+inline LineKind classifyLine(std::string_view line) {
+    const auto starts = [&](std::string_view prefix) { return line.substr(0, prefix.size()) == prefix; };
+    if (starts("WARNING") || starts("Click the game window"))
+        return LineKind::warning;
+    if (starts("Spidy VR unavailable") || starts("Traceback") || starts("RuntimeError") || starts("OSError") ||
+        line.find("Error:") != std::string_view::npos)
+        return LineKind::error;
+    if (starts("Headset available") || starts("Player found") || starts("Rendering ") || starts("Render memory: 512"))
+        return LineKind::good;
+    return LineKind::normal;
+}
+
+// The exit code of a session that Windows keeps out of the game because the game runs as administrator and
+// the session does not (NEEDS_ADMINISTRATOR_EXIT in tools/vr_launcher.py): the launcher offers to start
+// again as administrator.
+inline constexpr unsigned long kNeedsAdministratorExit = 5;
+
+// "14.44.35211.0" style versions, compared field by field.
+inline std::array<int, 4> parseVersion(std::string_view text) {
+    std::array<int, 4> fields{};
+    size_t field = 0;
+    for (char c : text) {
+        if (c >= '0' && c <= '9') {
+            fields[field] = fields[field] * 10 + (c - '0');
+        } else if (c == '.') {
+            if (++field == fields.size())
+                break;
+        } else if (c != 'v' && c != 'V') {
+            break;
+        }
+    }
+    return fields;
+}
+
+// Why the game's Spider-Man.exe is not the file Spidy supports, and what to do about it. `version`:
+// the file's own (its version resource; empty without one); `expected`: the supported file's
+// (tools/inspect_game.py's EXPECTED_VERSION); `steam`: Steam's app manifest for the game's folder.
+inline std::string unsupportedGame(std::string_view version, std::string_view expected,
+                                   const SteamApp& steam) {
+    const std::string have(version), want(expected);
+    const bool known = !have.empty() && !want.empty();
+    const bool newer = known && parseVersion(have) > parseVersion(want);
+    std::string text;
+    if (!known)
+        text = "A different game version than the one Spidy supports" +
+               (want.empty() ? "" : " (" + want + ")") + ".";
+    else if (newer)
+        text = "Version " + have + ", newer than the " + want +
+               " Spidy supports. Spidy reads the game's code at fixed places, so a game update needs a "
+               "Spidy update.";
+    else if (parseVersion(have) < parseVersion(want))
+        text = "Version " + have + ", older than the " + want + " Spidy supports.";
+    else
+        text = "Version " + have +
+               ", the one Spidy supports, but a mod, a patch or a damaged download changed Spider-Man.exe.";
+    if (!steam.beta.empty())
+        return text + " Steam is set to the beta \"" + steam.beta +
+               "\": in Steam, right-click the game > Properties > Betas, choose None and let it update. "
+               "Then press Re-check.";
+    if (newer)
+        return text;
+    if (steam.updateWaiting)
+        return text + " Steam has an update for it waiting: let Steam install it, then press Re-check.";
+    if (steam.found)
+        return text + " In Steam, right-click the game > Properties > Installed Files > Verify integrity of "
+                      "game files, then press Re-check.";
+    return text + " Spidy works with Steam's copy of the game: choose the Spider-Man.exe in your Steam "
+                  "library with Change...";
+}
+
+} // namespace spidy::launcher
