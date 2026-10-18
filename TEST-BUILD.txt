@@ -1,5 +1,11 @@
-MilesVR 0.1.13 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.14 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.13: LEFT HAND VENOM STARTS VR
+--------------------------------------------------
+0.1.13 with Venom punch hand set to Left hand stopped with "Game XR start:
+1001": the VR module refused the new setting's switch as out of range.
+Fixed. Everything else is as in 0.1.13 below.
 
 What changed since 0.1.12: VENOM PUNCH HAND IN THE LAUNCHER
 --------------------------------------------------
