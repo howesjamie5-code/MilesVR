@@ -100,6 +100,17 @@ constexpr float venomDamage = 3, venomLeast = 28, venomSpeed = 18, venomLift = 5
 constexpr uint32_t venomType = 31;
 constexpr int32_t venomStatus = 31;
 constexpr float venomStatusAmount = 100, venomStatusSeconds = 3;
+// A charged right fist thrown at the marked enemy this near (from the
+// player's chest to his middle) lands the venom punch there and then: in
+// Miles Morales a fist seldom meets a thug by itself (0.1.6 to 0.1.8: 3
+// punches landed in ten minutes of fighting, against 33 web strikes), and in
+// 0.1.8 the charge ran out on the user's punches. Farther, the web strike
+// flies him in and its blow is the venom punch.
+constexpr float venomReach = 2;
+bool venomArmed() {
+    const uint32_t charge = venomCharge.load();
+    return charge && charge != venomUsed;
+}
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)
@@ -277,7 +288,7 @@ void land(PunchEvent e, bool byStrike) {
     // The right fist charged with venom: this blow is the venom punch, and
     // the charge is spent.
     const uint32_t charge = venomCharge.load();
-    const bool venom = e.hand == 1 && charge && charge != venomUsed;
+    const bool venom = e.hand == 1 && venomArmed();
     if (venom) {
         venomUsed = charge;
         Vec3 along{e.direction.x, 0, e.direction.z};
@@ -489,6 +500,36 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         // The swing that landed a punch opens no strike behind it.
         strike.spent(e.hand);
         land(e, false);
+    }
+    // The venom punch: the right fist, charged, thrown out at the marked
+    // enemy within venomReach, as a strike's fist is thrown (fast enough,
+    // out from the neck, his way). The blow lands on him.
+    if (venomArmed() && hands[1].tracked && !hands[1].busy && strike.phase() == WebStrike::Phase::Idle) {
+        const auto& sc = strike.config();
+        const Vec3 velocity = punches.velocity(1);
+        const float speed = length(velocity);
+        for (const auto& target : enemies) {
+            if (target.id != lock.target() || speed < sc.minSpeed)
+                continue;
+            const Vec3 moving = velocity / speed;
+            const Vec3 neck = head - Vec3{0, sc.neck, 0};
+            const Vec3 out = normalized(hands[1].fist - neck);
+            const Vec3 toward = normalized(target.middle() - hands[1].fist);
+            if (length(target.middle() - chest) > venomReach || dot(moving, out) < sc.outward ||
+                dot(moving, toward) < sc.markedAim)
+                continue;
+            Vec3 way = normalized(target.middle() - chest);
+            if (length(way) < .5f)
+                way = moving;
+            auto e = punches.blow(way, speed);
+            e.hand = 1;
+            e.target = target.id;
+            e.point = target.middle() - way * target.radius;
+            punches.spend(1);
+            strike.spent(1);
+            land(e, false);
+            break;
+        }
     }
     std::array<FightFist, 2> fists{};
     for (int i = 0; i < 2; ++i)

@@ -1,5 +1,26 @@
-MilesVR 0.1.8 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.9 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.8: THE VENOM PUNCH LANDS, NO MORE THROWS
+--------------------------------------------------
+Your 0.1.8 test: the venom charged, but the punch never landed, and the right
+stick's click sometimes threw objects at the enemies. Both are fixed:
+- The venom punch no longer needs your fist to touch the enemy (in Miles
+  Morales the mod's fists almost never register a touch: 3 in four sessions,
+  against 33 web strikes). Charged, throw a right punch toward the MARKED
+  enemy (the one with the target ring): within 2 m it lands on him at once;
+  farther, the web strike flies you to him and lands it on arrival.
+- In a fight (an enemy within reach now or in the last 3 seconds) the right
+  stick's click never sends LB + RB, so no more throwing objects. Outside a
+  fight it still pulls doors and grates.
+
+What to try:
+1. Fill the venom meter, hold the right stick's click until the rumble.
+2. Look at an enemy (the ring marks him) and punch toward him with your right
+   fist, up close and from across the room.
+3. Does he fly off stunned, and does the meter on screen empty?
+4. Click the right stick in a fight with the meter not full: nothing should
+   be thrown.
 
 What changed since 0.1.7: THE VENOM PUNCH
 --------------------------------------------------

@@ -727,6 +727,12 @@ DWORD WINAPI run(void*) {
         uint64_t venomBlowsBefore{}, venomSpentBefore{};
         float venomGlow{};
         bool venomFullBefore{};
+        // Seconds since an enemy was last within a strike's reach: in a fight
+        // the right stick's click is no LB + RB, which the game takes there
+        // as its web throw of the nearest object at them (the user, 0.1.8: "it
+        // would sometimes try to throw objects at enemys when pressing the
+        // thumbstick").
+        float calmSeconds = 1e9f;
         struct VenomBurst {
             VenomBurstView view;
             int64_t since{};
@@ -1981,6 +1987,9 @@ DWORD WINAPI run(void*) {
                             }
                         }
                         fightNear = input.focused && ((fighting && strikes.cueTarget != 0) || punch.bots != 0);
+                        calmSeconds = fighting && (strikes.enemies != 0 || strikes.cueTarget != 0)
+                                          ? 0.f
+                                          : calmSeconds + static_cast<float>(frame.seconds);
                         if (websStarted && motion.active && !flatScreen) {
                             // The game draws these webs from the tracked web shooters.
                             native_webs::Request webs;
@@ -2289,9 +2298,11 @@ DWORD WINAPI run(void*) {
                         // click held charges the right fist, and is no LB + RB
                         // (venom_punch.hpp); the punch module lands the charged blow.
                         const bool venomFull = venom_punch::full(venomMeter.value);
-                        const auto venom =
+                        auto venom =
                             venomCharge.update(frame.seconds, steering && !layerOn && !calibrationInput, venomFull,
                                                frame.hands[1].stickClick, frame.hands[0].stickClick);
+                        if (calmSeconds < venom_punch::fightCalmSeconds)
+                            venom.pull = false;
                         if (venomFull && !venomFullBefore && steering) {
                             runtime.haptic(1, .4f, .08f);
                             message(3, 0, "Venom full - hold the right stick's click to charge your right fist");

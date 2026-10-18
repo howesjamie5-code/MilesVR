@@ -18,6 +18,9 @@ namespace spidy::venom_punch {
 // 41.75 at the next heal (reports\venom-probe-20261018-234812.csv).
 constexpr uintptr_t meleeManagerVtable = 0x3e122a8, meterOffset = 0x28c;
 constexpr float fullMeter = 100;
+// Within this long of an enemy near, the player is in a fight: the click is
+// no LB + RB there (the game's web throw), full meter or not.
+constexpr float fightCalmSeconds = 3;
 inline bool full(float meter) {
     return std::isfinite(meter) && meter >= fullMeter - .01f;
 }
