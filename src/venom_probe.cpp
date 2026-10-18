@@ -11,8 +11,9 @@ namespace {
 constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
 // Hero::HeroVenomModeManager's vtable (its RTTI, MilesMorales.exe).
 constexpr uintptr_t venomManagerVtable = 0x3e15b48;
-constexpr size_t snapshotBytes = 0x300;
-constexpr ULONGLONG sampleMs = 100, scanMs = 3000;
+// Every component of the player is watched; a line lists the 4-byte words that changed.
+constexpr size_t snapshotBytes = 0x400, maxWords = 96;
+constexpr ULONGLONG sampleMs = 250, scanMs = 3000;
 
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
@@ -37,12 +38,6 @@ std::string className(uintptr_t base, uintptr_t vtable) {
         return {};
     name[sizeof(name) - 1] = 0;
     return name;
-}
-bool interesting(const std::string& n) {
-    for (const char* word : {"Venom", "Focus", "Ability", "Energy", "Power", "Meter", "Camo"})
-        if (n.find(word) != std::string::npos)
-            return true;
-    return false;
 }
 struct Watched {
     uintptr_t address{}, vtable{};
@@ -108,7 +103,7 @@ void scan(uintptr_t base, uintptr_t record) {
                          static_cast<unsigned long long>(e.address), n.c_str(),
                          static_cast<unsigned long long>(h.record));
         }
-        if ((manager || interesting(n)) && !watched.count(e.address))
+        if ((manager || !n.empty()) && !watched.count(e.address))
             watched[e.address] = {e.address, h.vtable, n, {}};
     }
     std::fflush(out);
@@ -142,14 +137,33 @@ void spidy::venom_probe::sample(uintptr_t base, uintptr_t record) {
         size_t got = 0;
         while (got < snapshotBytes && read(w.address + got, bytes.data() + got, 16))
             got += 16;
-        if (got && (w.last.size() != got || std::memcmp(w.last.data(), bytes.data(), got))) {
+        if (got && w.last.size() == got) {
+            // Only the words that changed: offset=value pairs.
+            std::string line;
+            size_t words = 0;
+            for (size_t k = 0; k + 4 <= got && words < maxWords; k += 4)
+                if (std::memcmp(w.last.data() + k, bytes.data() + k, 4)) {
+                    uint32_t v{};
+                    std::memcpy(&v, bytes.data() + k, 4);
+                    char item[32];
+                    sprintf_s(item, "%zx=%08x;", k, v);
+                    line += item;
+                    ++words;
+                }
+            if (!line.empty())
+                std::fprintf(out, "%llu,diff,%llx,%s,,%s
+", now - started,
+                             static_cast<unsigned long long>(w.address), w.name.c_str(), line.c_str());
+        } else if (got) {
             std::fprintf(out, "%llu,snapshot,%llx,%s,,", now - started, static_cast<unsigned long long>(w.address),
                          w.name.c_str());
             for (size_t k = 0; k < got; ++k)
                 std::fprintf(out, "%02x", bytes[k]);
-            std::fputc('\n', out);
-            w.last.assign(bytes.begin(), bytes.begin() + got);
+            std::fputc('
+', out);
         }
+        if (got)
+            w.last.assign(bytes.begin(), bytes.begin() + got);
         ++it;
     }
     std::fflush(out);
