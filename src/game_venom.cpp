@@ -5,7 +5,8 @@
 #include <cstring>
 
 namespace {
-// The component registry (game_targets.cpp): 16-byte entries of an address and a generation.
+// The component registry (game_targets.cpp): 16-byte entries of an address and a generation; a
+// component's handle (+0x14) is its generation << 20 | its entry's index.
 constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
 constexpr ULONGLONG scanMs = 1000;
 
@@ -19,34 +20,50 @@ bool read(uintptr_t p, void* out, size_t n) {
         return false;
     }
 }
-// A component's head: its vtable and its actor record.
+struct Entry {
+    uintptr_t address;
+    uint32_t generation, pad;
+};
+// A component's head: its vtable, its actor record and its registry handle.
 struct Head {
     uintptr_t vtable, record;
+    uint32_t pad, handle;
 };
+// The player's HeroMeleeManager, the registry entry it was found in, and its actor record.
 uintptr_t component{}, owner{};
+uint32_t entryIndex{}, entryGeneration{};
 ULONGLONG lastScan{};
 
-bool mine(uintptr_t base, uintptr_t address, uintptr_t record) {
+bool mine(uintptr_t base, uintptr_t address, uintptr_t record, uint32_t index, uint32_t generation) {
     Head h{};
     return read(address, &h, sizeof(h)) && h.vtable == base + spidy::venom_punch::meleeManagerVtable &&
-           h.record == record;
+           h.record == record && h.handle == (generation << 20 | index);
 }
-uintptr_t find(uintptr_t base, uintptr_t record) {
+// Still the registry's: a challenge restarted, or a load, makes a new component and may leave the old
+// one in memory as it was (0.1.10: the meter read as spent while the game's showed full).
+bool registered(uintptr_t base) {
+    uintptr_t table{};
+    Entry e{};
+    return read(base + registryTable, &table, 8) && table && read(table + entryIndex * 16ull, &e, sizeof(e)) &&
+           e.address == component && e.generation == entryGeneration;
+}
+bool find(uintptr_t base, uintptr_t record) {
     uintptr_t table{};
     int32_t count{};
     if (!read(base + registryTable, &table, 8) || !table || !read(base + registryCount, &count, 4) || count <= 0 ||
         count > 0x100000)
-        return 0;
+        return false;
     for (uint32_t i = 0; i < static_cast<uint32_t>(count); ++i) {
-        struct Entry {
-            uintptr_t address;
-            uint32_t generation, pad;
-        } e{};
+        Entry e{};
         if (read(table + i * 16ull, &e, sizeof(e)) && e.address >= 0x10000 && !(e.address % 8) && e.generation &&
-            mine(base, e.address, record))
-            return e.address;
+            e.generation <= 0xfff && mine(base, e.address, record, i, e.generation)) {
+            component = e.address;
+            entryIndex = i;
+            entryGeneration = e.generation;
+            return true;
+        }
     }
-    return 0;
+    return false;
 }
 } // namespace
 
@@ -56,14 +73,15 @@ spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t rec
         component = owner = 0;
         return out;
     }
-    if (record != owner || (component && !mine(base, component, record))) {
+    if (record != owner ||
+        (component && (!registered(base) || !mine(base, component, record, entryIndex, entryGeneration)))) {
         component = 0;
         owner = record;
     }
     const ULONGLONG now = GetTickCount64();
     if (!component && now - lastScan >= scanMs) {
         lastScan = now;
-        component = find(base, record);
+        find(base, record);
     }
     float value{};
     if (component && read(component + venom_punch::meterOffset, &value, 4) && std::isfinite(value) &&

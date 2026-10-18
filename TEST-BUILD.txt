@@ -1,5 +1,24 @@
-MilesVR 0.1.11 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.12 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.11: THE VENOM PUNCH AFTER A RESTART
+--------------------------------------------------
+Your 0.1.10 test: the venom punch worked and the meter emptied; then you
+restarted the challenge, the meter was full again, and the right grip only
+shot webs. A restart makes the game build Miles's melee data anew, and the
+mod kept reading the old copy (still empty from your punch). It now checks
+every frame that it reads the game's current one, and finds the new one
+within a second.
+
+Same controls as 0.1.10, and the session report records the venom meter
+(0.1.11).
+
+What to try:
+1. Fill the meter, hold the right grip until the rumble, punch toward the
+   marked enemy.
+2. Restart the challenge (or keep fighting) until the meter is full again,
+   and do it again - a few times.
+3. Tell Claude how it went, and keep the reports folder.
 
 What changed since 0.1.10: THE VENOM METER IN THE SESSION REPORT
 --------------------------------------------------
