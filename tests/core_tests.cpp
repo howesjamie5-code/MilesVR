@@ -571,6 +571,16 @@ int main() {
     test("venom punch charges from the right grip only on a full meter", [] {
         using namespace spidy::venom_punch;
         check(full(100) && !full(99.75f) && !full(-1), "full is the whole meter");
+        float meter = 0;
+        for (int i = 0; i < 9; ++i)
+            meter = filled(meter, gain(false, false));
+        check(!full(meter), "nine plain hits do not fill it");
+        meter = filled(meter, gain(false, false));
+        check(full(meter), "the tenth does");
+        check(filled(95, gain(false, true)) == fullMeter, "never past full");
+        check(gain(true, false) > gain(false, false) && gain(false, true) > gain(true, false),
+              "a hard blow gives more, a finisher most");
+        check(filled(-1, 10) == 10, "an unread meter counts from empty");
         Charge c;
         auto o = c.update(.1f, true, false, 1);
         check(!o.armed && o.glow == 0, "below full the grip charges nothing");

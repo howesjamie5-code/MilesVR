@@ -23,6 +23,22 @@ constexpr float fightCalmSeconds = 3;
 inline bool full(float meter) {
     return std::isfinite(meter) && meter >= fullMeter - .01f;
 }
+// What a blow of the player's adds to the meter: the game fills it 6.5 a hit
+// of its own melee and nothing for Spidy's blows (0.1.14: the meter rose only
+// with the game's hits). The user, October 19: a hit should charge it "a
+// reasonable amount not to quick but not too slow" - ten plain hits fill it,
+// a hard blow (heavy, launch, juggle, slam) gives half again, the flow's
+// finisher twice. The venom punch itself gives nothing.
+constexpr float hitGain = 10, hardGain = 15, finisherGain = 20;
+inline float gain(bool hard, bool finisher) {
+    return finisher ? finisherGain : hard ? hardGain : hitGain;
+}
+// The meter after `amount` more, never past full.
+inline float filled(float meter, float amount) {
+    if (!std::isfinite(meter) || meter < 0)
+        meter = 0;
+    return std::min(fullMeter, meter + std::max(0.f, amount));
+}
 
 // The web button pressed past `on` and let go below `off`.
 constexpr float gripOn = .6f, gripOff = .35f;

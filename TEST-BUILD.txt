@@ -1,5 +1,20 @@
-MilesVR 0.1.14 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.15 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.14: YOUR HITS CHARGE THE VENOM METER
+--------------------------------------------------
+Until now only the game's own hits filled the venom meter (6.5 each); the
+mod's punches and web strikes added nothing, so it refilled slowly. Now every
+blow you land adds to it:
+- a plain hit: 10 (about ten hits from empty to full)
+- a hard blow (one that sends him flying, an uppercut, a juggle, a slam): 15
+- the combo's finisher: 20
+The venom punch itself adds nothing. The game's own fill still adds on top.
+
+What to try:
+1. Land a venom punch (the meter empties), then keep fighting.
+2. Does the meter refill at a good pace? Too fast, too slow? Tell Claude
+   roughly how many hits it took.
 
 What changed since 0.1.13: LEFT HAND VENOM STARTS VR
 --------------------------------------------------

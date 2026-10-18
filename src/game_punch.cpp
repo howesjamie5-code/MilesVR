@@ -121,18 +121,27 @@ bool read(uintptr_t p, void* out, size_t n) {
         return false;
     }
 }
-// The meter emptied, if `meter` is still in the player's HeroMeleeManager.
-bool emptyMeter(uint64_t meter) {
+// The meter set to `value`, if `meter` is still in the player's HeroMeleeManager.
+bool writeMeter(uint64_t meter, float value) {
     uintptr_t vtable{};
     if (!meter || !read(meter - venom_punch::meterOffset, &vtable, 8) ||
         vtable != base + venom_punch::meleeManagerVtable)
         return false;
     __try {
-        *reinterpret_cast<float*>(meter) = 0;
+        *reinterpret_cast<float*>(meter) = value;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+bool emptyMeter(uint64_t meter) {
+    return writeMeter(meter, 0);
+}
+// A blow of the player's charges the meter (venom_punch::gain).
+void chargeMeter(uint64_t meter, float amount) {
+    float now{};
+    if (meter && read(meter, &now, 4) && std::isfinite(now))
+        writeMeter(meter, venom_punch::filled(now, amount));
 }
 template <class F> void publish(F change) {
     AcquireSRWLockExclusive(&output);
@@ -324,6 +333,9 @@ void land(PunchEvent e, bool byStrike) {
         request.knockbackAmount = 2 + 6 * e.strength;
     }
     native_bodies::damage(request);
+    if (!venom)
+        chargeMeter(venomMeter.load(), venom_punch::gain(d.kind != BlowKind::Hit && d.kind != BlowKind::Finisher,
+                                                         d.kind == BlowKind::Finisher));
     if (venom) {
         const bool emptied = emptyMeter(venomMeter.load());
         AcquireSRWLockExclusive(&output);
