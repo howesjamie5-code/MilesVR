@@ -131,7 +131,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 36, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 37, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -339,8 +339,16 @@ struct XrData {
     uint32_t offersMasked{}, offersPosed{}, offersGathered{}, offersMostChecked{};
     // And the presses made again because the game still held the offer.
     uint32_t offersSearches{}, offersSpots{}, offersNear{}, offerRetries{};
+    // Version 37, Miles's venom punch (venom_punch.hpp): the meter now (-1:
+    // not found), the right web button as the venom's, the fist's glow; bits:
+    // 1 the meter full, 2 the right hand's webs off for it, 4 the fist
+    // charged, 8 a web held as it filled still on; and the times the meter
+    // filled, the charges made, the venom blows landed and the meters they
+    // emptied.
+    float venomMeter = -1, venomGrip{}, venomGlow{};
+    uint32_t venomFlags{}, venomFills{}, venomCharges{}, venomBlows{}, venomSpent{};
 };
-static_assert(sizeof(XrData) == 1152);
+static_assert(sizeof(XrData) == 1184);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -731,7 +739,8 @@ DWORD WINAPI run(void*) {
         // 0 otherwise), and whether a web the right hand held as the meter
         // filled still goes on until it is let go.
         float venomGrip{};
-        bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{};
+        bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
+        uint32_t venomFills{};
         // Seconds since an enemy was last within a strike's reach: in a fight
         // the right stick's click is no LB + RB, which the game takes there
         // as its web throw of the nearest object at them (the user, 0.1.8: "it
@@ -2330,7 +2339,9 @@ DWORD WINAPI run(void*) {
                             message(3, 0, "Venom full - the right hand's webs are off: hold its grip to charge "
                                           "your fist");
                         }
+                        venomFills += venomFull && !venomFullBefore;
                         venomFullBefore = venomFull;
+                        venomArmed = venom.armed;
                         if (venom.charged) {
                             venomCharges = venomCharges + 1 ? venomCharges + 1 : 1;
                             runtime.haptic(1, 1.f, .15f);
@@ -2617,6 +2628,15 @@ DWORD WINAPI run(void*) {
                         d.offersSpots = offers.spotsFound;
                         d.offersNear = offers.offers;
                         d.offerRetries = offerUse.retries();
+                        d.venomMeter = venomMeter.value;
+                        d.venomGrip = venomGrip;
+                        d.venomGlow = venomGlow;
+                        d.venomFlags = (venom_punch::full(venomMeter.value) ? 1u : 0u) | (venomHandOn ? 2u : 0u) |
+                                       (venomArmed ? 4u : 0u) | (venomKeepWeb ? 8u : 0u);
+                        d.venomFills = venomFills;
+                        d.venomCharges = venomCharges;
+                        d.venomBlows = static_cast<uint32_t>(venomBlowsBefore);
+                        d.venomSpent = static_cast<uint32_t>(venomSpentBefore);
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];

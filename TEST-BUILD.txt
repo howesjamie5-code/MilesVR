@@ -1,5 +1,22 @@
-MilesVR 0.1.10 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.11 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.10: THE VENOM METER IN THE SESSION REPORT
+--------------------------------------------------
+Same controls as 0.1.10 (venom punch on the right grip). Your 0.1.10 test:
+one venom punch landed (84 damage, at 23 s), then the right grip shot webs.
+The mod only switches the right webs off while the meter is completely
+FULL, and after that punch only five more of your blows landed in the next
+2.5 minutes, so the meter most likely never filled again. This build writes
+the meter, the grip and every charge and venom punch into the session report,
+so the next test shows exactly what happened.
+
+What to try:
+1. Fill the meter, hold the right grip until the rumble, punch toward the
+   marked enemy.
+2. Then keep fighting until the meter on screen is FULL again, and try again.
+3. Tell Claude: after the venom punch, did the meter on screen empty? And
+   when the grip shot webs, did the meter on screen look full?
 
 What changed since 0.1.9: THE VENOM PUNCH IS ON THE RIGHT GRIP
 --------------------------------------------------
