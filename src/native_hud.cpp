@@ -218,7 +218,8 @@ void render(void* payload, uint32_t count) {
 // gameplay's on-screen checks, which call the same functions.
 bool hudCaller(uintptr_t returnAddress) {
     const auto rva = returnAddress - base;
-    return (rva >= 0x72a000 && rva < 0x7c0000) || (rva >= 0x1f00000 && rva < 0x1f10980);
+    // MilesMorales.exe: Spider-Man.exe's 0x72a000-0x7c0000 and 0x1f00000-0x1f10980, through their paired functions.
+    return (rva >= 0x89ca30 && rva < 0x934980) || (rva >= 0x240e630 && rva < 0x241efc0);
 }
 // While immersive, the second movie's markers are placed for the panel in
 // front of the head, not for the game's view: where the line from the head to

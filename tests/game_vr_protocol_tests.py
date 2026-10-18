@@ -338,7 +338,7 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             slow_motion_snapshot(Reader(wrong, struct.pack('<q', 6)), 0)
         # The session checks the time system's update is unpatched before and restored after.
-        self.assertIn(0x19bb430, GAME_HOOKS)
+        self.assertIn(0x1ec6bd0, GAME_HOOKS)
 
     def test_hud_decodes_the_panel_its_texture_and_the_second_movie_and_rejects_torn_reads(self):
         raw = bytearray(192)
@@ -371,7 +371,7 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             hud_snapshot(Reader(wrong, struct.pack('<q', 6)), 0)
         # The session checks the HUD's hooked entries are unpatched before and restored after.
-        for rva in (0x73ab80, 0x2104400, 0x1d2b6c0, 0x1f10ad0, 0x1f10b60):
+        for rva in (0x8ac280, 0x2610e40, 0x223a280, 0x241f110, 0x241f1a0):
             self.assertIn(rva, GAME_HOOKS)
 
     def test_shooter_feedback_decodes_each_hand_and_the_latest_shot(self):
@@ -703,17 +703,17 @@ class ProtocolTests(unittest.TestCase):
     def test_the_game_queue_is_the_one_the_game_submits_on_itself(self):
         from probe_stereo_gpu import game_queue
         sample = lambda queue, count, *stack: dict(kind=2, object=hex(queue), count=count, stack=list(stack))
-        game = ('Spider-Man.exe+0x1c00', 'Spider-Man.exe+0x2000')
+        game = ('MilesMorales.exe+0x1c00', 'MilesMorales.exe+0x2000')
         # Alone, as on every tested PC.
         self.assertEqual(game_queue([sample(0xA, 900, *game), sample(0xA, 40, 'sl.interposer.dll+0x10', *game)]), 0xA)
         # An overlay or frame generation submitting on its own queue from inside the game's Present.
         overlay = sample(0xB, 120, 'gameoverlayrenderer64.dll+0x500', 'dxgi.dll+0x40', 'sl.interposer.dll+0x9',
-                         'Spider-Man.exe+0x3000')
+                         'MilesMorales.exe+0x3000')
         self.assertEqual(game_queue([overlay, sample(0xA, 900, *game)]), 0xA)
         # Two queues the game submits on itself: the one with four times the work, else none.
         self.assertEqual(game_queue([sample(0xA, 900, *game), sample(0xC, 200, *game)]), 0xA)
         with self.assertRaisesRegex(RuntimeError, r'2 direct queues and none clearly the game.s: 0xa with 900 '
-                                                  r'submissions, 0 calls below the game, called from Spider-Man\.exe'):
+                                                  r'submissions, 0 calls below the game, called from MilesMorales\.exe'):
             game_queue([sample(0xA, 900, *game), sample(0xC, 400, *game)])
         with self.assertRaisesRegex(RuntimeError, 'no graphics work'):
             game_queue([dict(kind=1, object='0x9', count=5, stack=list(game))])
@@ -750,11 +750,11 @@ class ProtocolTests(unittest.TestCase):
             with patch('run_game_vr.documents_folder', return_value=pathlib.Path(folder)/'none'), \
                  patch('run_game_vr.keep_game_log', side_effect=lambda r: keep_game_log(r, log)):
                 startup.ended(RuntimeError('No game graphics queue within 180 seconds: 2 direct queues.'),
-                              lambda pid: [dict(name='Spider-Man.exe'), dict(name='RTSSHooks64.dll')])
+                              lambda pid: [dict(name='MilesMorales.exe'), dict(name='RTSSHooks64.dll')])
             written = json.loads(report.read_text())
             self.assertEqual((written['stage'], written['vr_started'], written['xr_runtime']['name']),
                              ("looking for the game's graphics queue", False, 'SteamVR'))
-            self.assertEqual(written['game_modules'], ['RTSSHooks64.dll', 'Spider-Man.exe'])
+            self.assertEqual(written['game_modules'], ['MilesMorales.exe', 'RTSSHooks64.dll'])
             self.assertIn('Distribution platform', report.with_name('game-vr-1-game.log').read_text())
             startup.ended(RuntimeError('later'))  # written once
             self.assertEqual(json.loads(report.read_text())['error'], written['error'])
@@ -764,8 +764,8 @@ class ProtocolTests(unittest.TestCase):
         import run_game_vr
         from run_game_vr import had_vr, Startup
         # STOP VR, or VR that ended, leaves the game running with Spidy's XR module in it.
-        self.assertTrue(had_vr(7, lambda pid: [dict(name='Spider-Man.exe'), dict(name='SPIDY_STEREO_PROBE.dll')]))
-        self.assertFalse(had_vr(7, lambda pid: [dict(name='Spider-Man.exe'), dict(name='spidy_bridge.dll')]))
+        self.assertTrue(had_vr(7, lambda pid: [dict(name='MilesMorales.exe'), dict(name='SPIDY_STEREO_PROBE.dll')]))
+        self.assertFalse(had_vr(7, lambda pid: [dict(name='MilesMorales.exe'), dict(name='spidy_bridge.dll')]))
         # A game closing or still being set up lists no modules: the XR start decides (1000 says the same).
         self.assertFalse(had_vr(7, Mock(side_effect=OSError('snapshot failed'))))
         with tempfile.TemporaryDirectory() as folder:
@@ -785,7 +785,7 @@ class ProtocolTests(unittest.TestCase):
         import run_game_vr
         from run_game_vr import Startup
         # The game's own folder, as Steam installs it: nothing of it stands in for a Windows library.
-        own = ('Spider-Man.exe', 'steam_api64.dll', 'd3dcompiler_47.dll', 'XAudio2_7.dll', 'amd_ags_x64.dll',
+        own = ('MilesMorales.exe', 'steam_api64.dll', 'd3dcompiler_47.dll', 'XAudio2_7.dll', 'amd_ags_x64.dll',
                'sl.interposer.dll', 'nvngx_dlss.dll', 'bink2w64.dll', 'cache.pso')
         with tempfile.TemporaryDirectory() as folder:
             game = pathlib.Path(folder)/"Marvel's Spider-Man Remastered"
@@ -810,7 +810,7 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn(said, refusal)
             # The session ends there, before anything of Spidy's is in the game, and its report names the files.
             startup = Startup(pathlib.Path(folder)/'game-vr-4.json')
-            running = Mock(pid=11, path=game/'Spider-Man.exe')
+            running = Mock(pid=11, path=game/'MilesMorales.exe')
             with patch.object(run_game_vr, 'game_running', return_value=False), \
                  patch.object(run_game_vr, 'preflight', return_value=('runtime.json', dict(name='SteamVR'))), \
                  patch.object(run_game_vr, 'network_links', return_value={}), \
@@ -961,8 +961,8 @@ class ProtocolTests(unittest.TestCase):
         header = bytearray(24)
         struct.pack_into('<Q', header, 0, game.base+LIVE_VTABLES['hero_local'])
         struct.pack_into('<I', header, 20, header_generation << 20 | 1)
-        memory = {(game.base+0x7a44320, 8): struct.pack('<Q', table),
-                  (game.base+0x7a44340, 4): struct.pack('<i', 2),
+        memory = {(game.base+0x83f9fa0, 8): struct.pack('<Q', table),
+                  (game.base+0x83f9fc0, 4): struct.pack('<i', 2),
                   (table, 32): slots, (hero, 24): header,
                   (table+16, 12): struct.pack('<QI', hero, slot_generation+int(changed))}
         game.read = lambda address, size: memory.get((address, size), b'')
@@ -1013,7 +1013,7 @@ class ProtocolTests(unittest.TestCase):
         struct.pack_into('<4IQ', raw, 0, 0x53585244, 36, 1152, 3, 4)
         # A played scene whose camera the gate does not accept, the third player of the session,
         # and the menu button held on the virtual controller the game has read 900 times.
-        struct.pack_into('<2I2Q2IQ', raw, 592, 8, 0x3872860, 3, 0x2aefe723280, 0x10, 1, 900)
+        struct.pack_into('<2I2Q2IQ', raw, 592, 8, 0x3dc8f80, 3, 0x2aefe723280, 0x10, 1, 900)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual((result['gate'], result['camera_mover']), (['other_camera'], 'exterior'))
         self.assertEqual((result['players'], result['player_record']), (3, '0x2aefe723280'))

@@ -39,7 +39,7 @@ def snapshot(game, address):
     return None
 
 
-def game_queue(samples, image='spider-man.exe'):
+def game_queue(samples, image='milesmorales.exe'):
     """The game's own direct queue among those the render probe saw in a second.
 
     The probe keeps submissions with the game's image anywhere in their stack. The game submits on its

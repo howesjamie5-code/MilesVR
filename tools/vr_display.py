@@ -23,8 +23,8 @@ import sys
 import winreg
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-KEY = r"Software\Insomniac Games\Marvel's Spider-Man Remastered\Graphics"
-INPUT_KEY = r"Software\Insomniac Games\Marvel's Spider-Man Remastered\Input"
+KEY = r"Software\Insomniac Games\Marvel's Spider-Man Miles Morales\Graphics"
+INPUT_KEY = r"Software\Insomniac Games\Marvel's Spider-Man Miles Morales\Input"
 BACKUP = ROOT/'reports'/'desktop-view-before-vr.json'
 NAMES = ('Fullscreen', 'ExclusiveFullscreen', 'WindowMaximized', 'WindowLeft', 'WindowTop',
          'WindowWidth', 'WindowHeight', 'UserWindowWidth', 'UserWindowHeight')

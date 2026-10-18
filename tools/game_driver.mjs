@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const gameExe = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Marvel's Spider-Man Remastered\\Spider-Man.exe";
+const gameExe = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Marvel's Spider-Man Miles Morales\\MilesMorales.exe";
 
 export class GameDriver {
     constructor(sky) {

@@ -6,9 +6,9 @@ import pathlib
 import struct
 import sys
 
-EXPECTED_SHA256 = "e297d4d94f1ffe4febf289745e79e7b6fa233a788e7a00f480fc77c55db81ad1"
-# That file's own version (its version resource; the game logs "Build: v4.630.0.0"), Steam build 23986256 of
-# July 8, 2026. The launcher names it when a copy differs.
+EXPECTED_SHA256 = "0cfe5e529369bd3eac642b56ce9ad068b47bb1a294ac1ea1ef7ef4dcf22d3256"
+# That file's own version (its version resource; the game logs "Build: v4.630.0.0"), Steam build 23986141 of
+# Marvel's Spider-Man: Miles Morales (MilesMorales.exe; ported from Spider-Man.exe 4.630.0.0). The launcher names it when a copy differs.
 EXPECTED_VERSION = "4.630.0.0"
 
 

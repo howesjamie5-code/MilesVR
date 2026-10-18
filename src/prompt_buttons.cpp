@@ -111,7 +111,7 @@ constexpr Named stickIds[] = {
 //   ShowText(7, 'When wall running horizontally, <span class='emphasis'>hold
 //   </span> [BTN_B] to whip around a corner.', 1, 1, 1, 0)
 // - not an icon id and not spelled letters. The whole vocabulary is in the
-// supported Spider-Man.exe, and the exe also lays its QTE handles out in one
+// supported MilesMorales.exe, and the exe also lays its QTE handles out in one
 // table (image 0x3dcfce0 and up, "CineQTEShotController - Button Prompt
 // Location Handles"): UNKNOWN, [BTN_A], [BTN_B], [BTN_R2], [BTN_R3],
 // [BTN_L1], [BTN_L2], [BTN_L3], the four [DPAD_*], and [MKB_CUSTOM00] to

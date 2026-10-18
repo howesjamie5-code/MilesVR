@@ -138,7 +138,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* parameter) {
         if(worker && WaitForSingleObject(worker,0)==WAIT_TIMEOUT) { result=1002;break; }
         if(worker) { CloseHandle(worker);worker=nullptr; }
         WatchConfig next{};
-        if(!GetModuleHandleW(L"Spider-Man.exe") ||
+        if(!GetModuleHandleW(L"MilesMorales.exe") ||
            !read(reinterpret_cast<uintptr_t>(parameter),&next,sizeof(next)) ||
            next.magic!=0x53574346 || next.version!=1 || next.bytes!=sizeof(next) ||
            next.pid!=GetCurrentProcessId() || next.imageBase!=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) ||

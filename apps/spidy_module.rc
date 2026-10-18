@@ -39,7 +39,7 @@ BEGIN
             VALUE "InternalName", SPIDY_MODULE_FILE
             VALUE "LegalCopyright", "Copyright 2026 Ilya Mezerowsky"
             VALUE "OriginalFilename", SPIDY_MODULE_FILE
-            VALUE "ProductName", "Spidy - VR for Marvel's Spider-Man Remastered"
+            VALUE "ProductName", "MilesVR - VR for Marvel's Spider-Man: Miles Morales (based on Spidy)"
             VALUE "ProductVersion", SPIDY_VERSION
         END
     END

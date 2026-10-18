@@ -22,13 +22,13 @@ RENDER_RING_MB=512
 # The module's hooks: the ring's creation and its end-of-frame rollover. They are in place from the
 # game's start, so they are no sign of another session's leftovers.
 RENDER_MEMORY_HOOKS=(0x1d7e010,0x1d7de10)
-STEAM_APP_ID='1817070'
+STEAM_APP_ID='1817190'
 # Seconds a new game process may refuse to be opened before the refusal counts as final.
 REFUSAL_PATIENCE=5
 # The session's exit code for NeedsAdministrator: the launcher's window then offers to start again as
 # administrator (kNeedsAdministratorExit in include/spidy/launcher_text.hpp).
 NEEDS_ADMINISTRATOR_EXIT=5
-RUN_AS_ADMINISTRATOR='start Spidy as administrator too (right-click Spidy Launcher > Run as administrator)'
+RUN_AS_ADMINISTRATOR='start Spidy as administrator too (right-click MilesVR Launcher > Run as administrator)'
 STEAM_AS_ADMINISTRATOR=('Steam runs as administrator on this PC, so the game it starts does too, and Windows keeps '
                         f'Spidy out of such a game. Either {RUN_AS_ADMINISTRATOR}, or have Steam start without '
                         'administrator rights; then press START VR.')

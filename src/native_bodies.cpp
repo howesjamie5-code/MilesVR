@@ -26,7 +26,7 @@ using StateType = void* (*)();
 constexpr uintptr_t preCollideRva = 0x337b4b0, setFreebodyRva = 0x1d1ad90, setModeRva = 0x1d40310,
                     rebuildRva = 0x1d3b4c0, rebuildAssetRva = 0x1d3f700, modelOverrideRva = 0x1c80e30,
                     setVelocityRva = 0x336fd30, setSpinRva = 0x336f9e0, setMatrixRva = 0x1e278c0,
-                    requestStateRva = 0x25f1b90, flungParamsRva = 0x556040, flungTypeRva = 0x300440;
+                    requestStateRva = 0x25f1b90, flungParamsRva = 0x63ecc0, flungTypeRva = 0x365fd0;
 constexpr uintptr_t worldGlobal = 0x8247e68, physicsGlobal = 0x6aa15c0, recordTable = 0x1ea98,
                     physicsComponent = 0x44006d8, actorTable = 0x83f9368, actorCount = 0x83f9384,
                     registryTable = 0x83f9fa0, registryCount = 0x83f9fc0, stateMachine = 0x57ead40,
@@ -46,7 +46,7 @@ using AddStatus = void (*)(void*, float, int32_t, float, float);
 // +0x58. BotAttackResponseManager's type, and the name its type holds at
 // +0x60.
 constexpr uintptr_t findInTableRva = 0x1b844b0, findInListRva = 0x1b85650, attackResponses = 0x76a8320,
-                    attackResponsesName = 0x3836df0;
+                    attackResponsesName = 0x3d797c8;
 using FindComponent = uintptr_t (*)(void*, const void*);
 constexpr uint16_t debris = 3; // the mode the game's own throws use
 constexpr int activate = 0;    // hknpActivationMode::ACTIVATE
@@ -341,7 +341,7 @@ uintptr_t keyframeRecord(const Body& primary) {
     const auto index = static_cast<int16_t>(primary.user >> 32);
     const auto entries = pointer(records() + 0x28);
     const auto kf = index >= 0 && entries ? value<int16_t>(entries + index * 0x130ull + 0x5e) : int16_t{-1};
-    const auto pool = pointer(pointer(base + physicsGlobal) + 0x23468);
+    const auto pool = pointer(pointer(base + physicsGlobal) + 0x23458);
     return kf >= 0 && pool ? pool + kf * 0xa0ull : 0;
 }
 Body rootBody(uintptr_t world, uintptr_t actor, const Body& primary) {
@@ -660,7 +660,7 @@ uint32_t native_bodies::start(uintptr_t gameBase) {
                                      0x8b, 0xf0, 0x48, 0x8b}) ||
             !entry(flungParamsRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48,
                                     0x83, 0xec, 0x20, 0x48}) ||
-            !entry(flungTypeRva, {0x48, 0x83, 0xec, 0x28, 0x8b, 0x0d, 0x56, 0xad, 0xb1, 0x07, 0x65, 0x48,
+            !entry(flungTypeRva, {0x48, 0x83, 0xec, 0x28, 0x8b, 0x0d, 0xf6, 0xbd, 0x46, 0x08, 0x65, 0x48,
                                   0x8b, 0x04, 0x25, 0x58}) ||
             !entry(directDamageRva, {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89,
                                      0x74, 0x24, 0x18, 0x48}) ||

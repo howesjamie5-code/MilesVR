@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / 'third_party/python'))
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from inspect_game import PE, EXPECTED_SHA256
 
-GAME = pathlib.Path(r"C:\Program Files (x86)\Steam\steamapps\common\Marvel's Spider-Man Remastered\Spider-Man.exe")
+GAME = pathlib.Path(r"C:\Program Files (x86)\Steam\steamapps\common\Marvel's Spider-Man Miles Morales\MilesMorales.exe")
 
 
 class Research:

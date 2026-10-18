@@ -48,7 +48,7 @@ void sample(uint32_t kind, uintptr_t object, uintptr_t device, uint32_t width=0,
     bool game=false;
     for(unsigned i=0;i<size;++i) {
         const auto p=reinterpret_cast<uintptr_t>(stack[i]);
-        game |= p>=base && p<base+140496896;
+        game |= p>=base && p<base+151085056;
     }
     if(!game) { ReleaseSRWLockExclusive(&output); return; }
     auto& d=SpidyRenderData;
@@ -142,7 +142,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void*) {
     do {
         if(enabled) break;
         base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-        if(!GetModuleHandleW(L"Spider-Man.exe")) { result=1001;break; }
+        if(!GetModuleHandleW(L"MilesMorales.exe")) { result=1001;break; }
         if(!created) result=createHooks();
         if(result) break;
         enabled=true;

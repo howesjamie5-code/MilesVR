@@ -216,7 +216,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
     if(enabled || hooked)return 1000;
     if(!readable(reinterpret_cast<uintptr_t>(input),&config,sizeof(config)) || config.magic!=0x53454346 ||
        config.version!=1 || config.bytes!=sizeof(config) || config.pid!=GetCurrentProcessId() ||
-       config.base!=reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) || !GetModuleHandleW(L"Spider-Man.exe"))return 1001;
+       config.base!=reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) || !GetModuleHandleW(L"MilesMorales.exe"))return 1001;
     DWORD result=create();
     if(!result) {
         enabled=true;
@@ -231,7 +231,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyCapture(void*) {
     std::lock_guard life(lifecycle);
     if(!enabled || captureAttempted)return 2001;
     for(auto view:config.views) {
-        uint32_t flags{};if(!readable(view+0x14e7c,&flags,4) || !(flags&1) || (flags&6))return 2002;
+        uint32_t flags{};if(!readable(view+0x1503c,&flags,4) || !(flags&1) || (flags&6))return 2002;
         bool owned=false;for(unsigned i=0;i<8;++i) {
             uint64_t slot{};readable(config.base+0x83ea940+i*8,&slot,8);owned|=slot==view;
         }

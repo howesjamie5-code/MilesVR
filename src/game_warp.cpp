@@ -1,5 +1,5 @@
 // The game's own wall crawl under the player (game_warp.hpp). Addresses are
-// image offsets in the supported Spider-Man.exe.
+// image offsets in the supported MilesMorales.exe.
 #include "spidy/game_warp.hpp"
 #include <atomic>
 #include <cmath>

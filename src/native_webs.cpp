@@ -127,7 +127,7 @@ void publishParts(uintptr_t manager) {
     size_t next{};
     for (unsigned slot = 0; slot < 16; ++slot) {
         uint8_t active{};
-        const auto rope = manager + 0x50 + slot * 0x7c8;
+        const auto rope = manager + 0x50 + slot * 0x7d8; // 0x7c8 in Spider-Man.exe: Miles Morales adds 16 bytes at the end of a rope
         if (!read(rope + 0x70c, &active, 1) || !(active & 1))
             continue;
         uint32_t handles[3]{};

@@ -70,9 +70,9 @@ def web_command(feet, wrist, end, bends=(), held=None, slack=0., attached_at=1):
 def rope(game, manager, end):
     """The hero's swing rope aimed at `end`: its flags, the points the game built and their count."""
     for slot in range(16):
-        base = manager+0x50+slot*0x7c8
-        raw = game.read(base, 0x7c8)
-        if len(raw) != 0x7c8 or not raw[0x70c] & 1 or struct.unpack_from('<I', raw, 0x700)[0] != 2:
+        base = manager+0x50+slot*0x7d8
+        raw = game.read(base, 0x7d8)
+        if len(raw) != 0x7d8 or not raw[0x70c] & 1 or struct.unpack_from('<I', raw, 0x700)[0] != 2:
             continue
         target = struct.unpack_from('<3f', raw, 0x67c)
         if norm(sub(target, end)) > .5:

@@ -129,7 +129,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRenderMemoryStart(void* megab
         const unsigned char rolloverCall[] = {0x48, 0x8d, 0x0d, 0x36, 0x32, 0x56,
                                               0x06, 0xe8, 0x81, 0x43, 0xff, 0xff};
         Fields f{};
-        if (!GetModuleHandleW(L"Spider-Man.exe") || wanted > 1024 || (wanted && wanted < 128) ||
+        if (!GetModuleHandleW(L"MilesMorales.exe") || wanted > 1024 || (wanted && wanted < 128) ||
             !entry(createRva, createBytes, sizeof(createBytes)) ||
             !entry(0x1d95605, createCall, sizeof(createCall)) ||
             !entry(rolloverRva, rolloverBytes, sizeof(rolloverBytes)) ||

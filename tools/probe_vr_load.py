@@ -99,7 +99,7 @@ class Threads:
         start = c.c_uint64()
         if ntdll.NtQueryInformationThread(handle, 9, c.byref(start), 8, None) == 0 and start.value:
             offset = start.value-self.base
-            return f'Spider-Man.exe+{offset:x}' if 0 <= offset < 0x10000000 else f'{start.value:#x}'
+            return f'MilesMorales.exe+{offset:x}' if 0 <= offset < 0x10000000 else f'{start.value:#x}'
         return f'thread {tid}'
 
     def sample(self):
@@ -232,8 +232,8 @@ class Profiler:
                 by_module[name] = by_module.get(name, 0)+1
                 key = f'{name}+{offset & ~0x3f:x}' if name != '?' else '?'
                 by_code[key] = by_code.get(key, 0)+1
-                if name.lower() != 'spider-man.exe' and callers:
-                    caller = f'{name} from Spider-Man.exe+{callers[0]:x}'
+                if name.lower() != 'milesmorales.exe' and callers:
+                    caller = f'{name} from MilesMorales.exe+{callers[0]:x}'
                     by_caller[caller] = by_caller.get(caller, 0)+1
 
             def share(counts):

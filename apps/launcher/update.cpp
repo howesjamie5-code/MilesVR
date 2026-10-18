@@ -14,12 +14,14 @@ namespace text = spidy::launcher;
 namespace launcher {
 namespace {
 
-constexpr wchar_t kLatestUrl[] = L"https://api.github.com/repos/IlyaMez/SpidyVR/releases/latest";
+// Spidy's own releases are for Spider-Man Remastered; this port has no release feed yet, so it
+// checks none (an empty URL) rather than offer the Remastered build as an update.
+constexpr wchar_t kLatestUrl[] = L"";
 // Where an update works in Spidy's folder: the download, the new files, and the old files they replaced
 // (the running launcher among them). The next start clears it.
 constexpr wchar_t kWorkFolder[] = L".spidy-update";
 // What a release's zip must hold before its files may replace the folder's.
-constexpr const wchar_t* kRequired[] = {L"Spidy Launcher.exe", L"tools/run_game_vr.py", L"python/python.exe",
+constexpr const wchar_t* kRequired[] = {L"MilesVR Launcher.exe", L"tools/run_game_vr.py", L"python/python.exe",
                                         L"build/windows-ninja/spidy_stereo_probe.dll"};
 
 struct Internet {
@@ -144,7 +146,7 @@ std::string holder(const std::wstring& folder) {
                 found = narrow(entry.szExeFile);
             CloseHandle(process);
         }
-        if (!found.empty() || _wcsicmp(entry.szExeFile, L"Spider-Man.exe") != 0)
+        if (!found.empty() || _wcsicmp(entry.szExeFile, L"MilesMorales.exe") != 0)
             continue;
         // A game whose modules cannot be listed may hold them too.
         found = narrow(entry.szExeFile);
@@ -270,6 +272,12 @@ void Updater::run(bool clear, bool check) {
     }
     if (!check)
         return;
+    if (!*kLatestUrl) {
+        std::lock_guard lock(mutex_);
+        status_.checkedAt = localTime();
+        status_.state = UpdateState::current;
+        return;
+    }
     std::string answer, error;
     const bool reached = get(kLatestUrl, L"Accept: application/vnd.github+json\r\nX-GitHub-Api-Version: 2022-11-28",
                              [&](const char* data, size_t size) {
@@ -439,7 +447,7 @@ bool Updater::busy() {
 }
 
 bool restartLauncher(const std::wstring& folder, std::string& error) {
-    const std::wstring exe = (fs::path(folder) / L"Spidy Launcher.exe").wstring();
+    const std::wstring exe = (fs::path(folder) / L"MilesVR Launcher.exe").wstring();
     std::wstring command = text::quoteArgument(exe) + L" --updated-from " + widen(kVersion) + L" --wait-for " +
                            std::to_wstring(GetCurrentProcessId());
     STARTUPINFOW startup{sizeof(startup)};
@@ -447,7 +455,7 @@ bool restartLauncher(const std::wstring& folder, std::string& error) {
     if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup,
                         &info)) {
         error = "Spidy is updated, but Windows did not start its launcher (error " + std::to_string(GetLastError()) +
-                "). Start Spidy Launcher from the Spidy folder.";
+                "). Start MilesVR Launcher from the MilesVR folder.";
         return false;
     }
     CloseHandle(info.hThread);

@@ -43,7 +43,7 @@ ENTRIES = (0x338e1c0, 0x24cc6b0, 0x24cbda0, 0x337b4b0)
 LIFT = {'throwable': .45, 'bot': .95}
 PHASES = {0: 'none', 1: 'tethered', 2: 'yanked', 3: 'held'}
 GRAB_SIZE = 368
-# Hero::HeroRopeManager: 16 rope slots of 0x7c8 bytes from +0x50; in a slot, +0x70c bit 0 in use, bit 1 released,
+# Hero::HeroRopeManager: 16 rope slots of 0x7d8 bytes (0x7c8 in Spider-Man.exe) from +0x50; in a slot, +0x70c bit 0 in use, bit 1 released,
 # +0x6b8 seconds since released, +0x67c the target position SetRopeTargetPosition writes, +0x720 the anchor drawn.
 ROPE_MANAGER = 0x3e13930
 STEREO_DLL = ROOT/'build/windows-ninja/spidy_stereo_probe.dll'
@@ -53,7 +53,7 @@ def ropes(game, manager):
     """The hero's ropes in use: slot, released or not, its target and its drawn anchor."""
     out = []
     for slot in range(16):
-        rope = manager+0x50+slot*0x7c8
+        rope = manager+0x50+slot*0x7d8
         raw = game.read(rope+0x67c, 0x720+12-0x67c)
         if len(raw) != 0x720+12-0x67c:
             continue
@@ -100,7 +100,7 @@ def prop_bodies(game, actor):
     entries = game.pointer(physics+0x1ea98+0x28)
     if index >= 0 and entries:
         kf = struct.unpack('<h', game.read(entries+index*0x130+0x5e, 2))[0]
-        pool = game.pointer(physics+0x23468)
+        pool = game.pointer(physics+0x23458)  # 0x23468 in Spider-Man.exe
         if kf >= 0 and pool:
             raw = game.read(pool+kf*0xa0, 0xa0)
             out['record'] = dict(index=kf, offset=struct.unpack_from('<16f', raw, 0x40),

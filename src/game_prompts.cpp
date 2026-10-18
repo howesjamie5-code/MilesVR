@@ -174,7 +174,7 @@ const char* __fastcall textTrace(uint32_t hash, const char* fallback) {
 // The prompt and QTE interface, by the image offset of each name the game
 // hands the UI's wrapper. One copy of each literal in the supported
 // Spider-Man.exe, the same kind of constant as game_menu's
-// openOptionsName = 0x389f4c0.
+// openOptionsName = 0x3df9568.
 struct Call {
     uintptr_t name;
     bool clears;
@@ -182,19 +182,19 @@ struct Call {
     int text = -1;
 };
 constexpr Call promptCalls[] = {
-    {0x3896ce8, false}, // ShowPlaceablePrompt
-    {0x3896cd0, true},  // HidePlaceablePrompt
-    {0x3896d00, false}, // SetPlaceablePromptProgress (a hold running on)
-    {0x3895ca0, false}, // UpdateInWorldPrompt
+    {0x3df0988, false}, // ShowPlaceablePrompt
+    {0x3df0970, true},  // HidePlaceablePrompt
+    {0x3df09a0, false}, // SetPlaceablePromptProgress (a hold running on)
+    {0x3def570, false}, // UpdateInWorldPrompt
     {0x3df2498, false}, // POIInteractAvailable
-    {0x3896e5c, false}, // AddQTE
-    {0x3896eb8, false}, // UpdateQTE
-    {0x3896e68, true},  // ClearQTE
+    {0x3df0f44, false}, // AddQTE
+    {0x3df0fc8, false}, // UpdateQTE
+    {0x3df0f50, true},  // ClearQTE
     // Where a prompt's words really come from, found in the game on October
     // 13: ShowText(channel, text, ...) through this same wrapper, its text
     // naming its buttons as `[BTN_B]`. HideText(channel, ...) ends it. The
     // localized lookup never carried one of these texts, in two sessions.
-    {0x4f44af0, false, 1}, // ShowText
+    {0x57ac648, false, 1}, // ShowText
     {0x57ac658, true},     // HideText
 };
 static_assert(std::size(promptCalls) == callNames);

@@ -409,7 +409,7 @@ int main() {
               "older, Steam sees nothing to do");
         check(unsupportedGame("4.630.0.0", "4.630.0.0", {true, "", false}) ==
                   "Version 4.630.0.0, the one Spidy supports, but a mod, a patch or a damaged download "
-                  "changed Spider-Man.exe." + verify,
+                  "changed MilesMorales.exe." + verify,
               "the supported version, changed");
         check(unsupportedGame("4.1015.0.0", "4.630.0.0", {true, "", true}) ==
                   "Version 4.1015.0.0, newer than the 4.630.0.0 Spidy supports. Spidy reads the game's code "
@@ -417,7 +417,7 @@ int main() {
               "newer: nothing to do in Steam");
         check(unsupportedGame("", "4.630.0.0", {}) ==
                   "A different game version than the one Spidy supports (4.630.0.0). Spidy works with Steam's "
-                  "copy of the game: choose the Spider-Man.exe in your Steam library with Change...",
+                  "copy of the game: choose the MilesMorales.exe in your Steam library with Change...",
               "no version resource, not installed by Steam");
         check(unsupportedGame("4.630.0.0", "", {true, "", false}) ==
                   "A different game version than the one Spidy supports." + verify,
@@ -498,14 +498,14 @@ int main() {
     });
     test("an update replaces and adds the package's files and retires stale ones in its folders only", [] {
         const std::vector<std::wstring> installed{
-            L"Spidy Launcher.exe", L"README.txt", L"my notes.txt", L"tools/run_game_vr.py", L"Tools/Old_Tool.py",
+            L"MilesVR Launcher.exe", L"README.txt", L"my notes.txt", L"tools/run_game_vr.py", L"Tools/Old_Tool.py",
             L"tools/__pycache__/x.pyc", L"python/python312.dll", L"build/windows-ninja/spidy_bridge.dll",
             L"build/windows-ninja/spidy_gone.dll", L"reports/game-vr-20261008-120000.json", L"saves/mine.txt"};
-        const std::vector<std::wstring> package{L"Spidy Launcher.exe", L"README.txt", L"tools/run_game_vr.py",
+        const std::vector<std::wstring> package{L"MilesVR Launcher.exe", L"README.txt", L"tools/run_game_vr.py",
                                                 L"tools/new_tool.py", L"python/python313.dll",
                                                 L"build/windows-ninja/SPIDY_BRIDGE.dll", L"docs/licenses/MIT.txt"};
         const auto plan = updatePlan(installed, package);
-        check(plan.replace == std::vector<std::wstring>{L"Spidy Launcher.exe", L"README.txt", L"tools/run_game_vr.py",
+        check(plan.replace == std::vector<std::wstring>{L"MilesVR Launcher.exe", L"README.txt", L"tools/run_game_vr.py",
                                                          L"build/windows-ninja/SPIDY_BRIDGE.dll"},
               "the package's files already there, case aside");
         check(plan.add == std::vector<std::wstring>{L"tools/new_tool.py", L"python/python313.dll",

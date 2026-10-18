@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Spidy VR inside a running Spider-Man Remastered Proton session.
+# Start Spidy VR inside a running Spider-Man: Miles Morales Proton session.
 # Needs: Steam launch option  STEAM_COMPAT_LAUNCHER_SERVICE=proton %command%
 #   (WiVRn: put PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 in front, and for its Flatpak also
 #    PRESSURE_VESSEL_FILESYSTEMS_RW=/var/lib/flatpak/app/io.github.wivrn.wivrn, or for a --user
@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Default: the Spidy folder this script is in (tools/ sits next to python/ and build/).
 SPIDY_DIR="${SPIDY_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-BUS=com.steampowered.App1817070
+BUS=com.steampowered.App1817190
 
 # Steam libraries: the default one and those in libraryfolders.vdf.
 libraries=("$HOME/.local/share/Steam/steamapps")

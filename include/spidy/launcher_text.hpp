@@ -97,7 +97,7 @@ inline std::string_view vdfBlock(std::string_view text, std::string_view name) {
     return {};
 }
 
-// What Steam's app manifest (steamapps\appmanifest_1817070.acf) says about the game it installed.
+// What Steam's app manifest (steamapps\appmanifest_1817190.acf) says about the game it installed.
 struct SteamApp {
     bool found{};
     // The beta chosen in the game's Properties > Betas; empty for none.
@@ -713,7 +713,7 @@ inline std::array<int, 4> parseVersion(std::string_view text) {
     return fields;
 }
 
-// Why the game's Spider-Man.exe is not the file Spidy supports, and what to do about it. `version`:
+// Why the game's MilesMorales.exe is not the file Spidy supports, and what to do about it. `version`:
 // the file's own (its version resource; empty without one); `expected`: the supported file's
 // (tools/inspect_game.py's EXPECTED_VERSION); `steam`: Steam's app manifest for the game's folder.
 inline std::string unsupportedGame(std::string_view version, std::string_view expected,
@@ -733,7 +733,7 @@ inline std::string unsupportedGame(std::string_view version, std::string_view ex
         text = "Version " + have + ", older than the " + want + " Spidy supports.";
     else
         text = "Version " + have +
-               ", the one Spidy supports, but a mod, a patch or a damaged download changed Spider-Man.exe.";
+               ", the one Spidy supports, but a mod, a patch or a damaged download changed MilesMorales.exe.";
     if (!steam.beta.empty())
         return text + " Steam is set to the beta \"" + steam.beta +
                "\": in Steam, right-click the game > Properties > Betas, choose None and let it update. "
@@ -745,7 +745,7 @@ inline std::string unsupportedGame(std::string_view version, std::string_view ex
     if (steam.found)
         return text + " In Steam, right-click the game > Properties > Installed Files > Verify integrity of "
                       "game files, then press Re-check.";
-    return text + " Spidy works with Steam's copy of the game: choose the Spider-Man.exe in your Steam "
+    return text + " Spidy works with Steam's copy of the game: choose the MilesMorales.exe in your Steam "
                   "library with Change...";
 }
 

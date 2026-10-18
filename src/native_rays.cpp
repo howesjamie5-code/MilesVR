@@ -262,7 +262,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayStart(void* input) {
             next.magic != 0x53525943 || next.version != 1 || next.bytes != sizeof(next) ||
             next.pid != GetCurrentProcessId() ||
             next.base != reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) ||
-            !GetModuleHandleW(L"Spider-Man.exe") || (next.durationMs && next.durationMs < 500) ||
+            !GetModuleHandleW(L"MilesMorales.exe") || (next.durationMs && next.durationMs < 500) ||
             next.durationMs > 30000 || next.mask != 0x410) {
             result = 1001;
             break;

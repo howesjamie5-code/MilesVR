@@ -1,7 +1,7 @@
 # Builds dist\Spidy-<version>-win64.zip: the launcher, the game modules, the
 # Python tools a VR session runs, an embeddable Python, the notices, and the
 # starters for Linux (docs\LINUX.md).
-# Players extract it anywhere and start "Spidy Launcher.exe"; nothing else to install.
+# Players extract it anywhere and start "MilesVR Launcher.exe"; nothing else to install.
 param([switch]$KeepFolder)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -34,7 +34,7 @@ if ((Get-FileHash -LiteralPath $pythonZip -Algorithm SHA256).Hash -ne $pythonHas
     throw "The Python download does not match the pinned hash. Delete $pythonZip and try again."
 }
 
-$name = "Spidy-$version"
+$name = "MilesVR-$version"
 $dist = Join-Path $root 'dist'
 # Staged under build\, never dist\: players extract the zip into dist\Spidy-<version>
 # and play from there, and the line below would wipe that folder.
@@ -43,7 +43,7 @@ if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -F
 foreach ($folder in @('build\windows-ninja', 'tools', 'python', 'docs\licenses')) {
     New-Item -ItemType Directory -Force (Join-Path $stage $folder) | Out-Null
 }
-Copy-Item -LiteralPath (Join-Path $bin 'spidy_launcher.exe') -Destination (Join-Path $stage 'Spidy Launcher.exe')
+Copy-Item -LiteralPath (Join-Path $bin 'spidy_launcher.exe') -Destination (Join-Path $stage 'MilesVR Launcher.exe')
 foreach ($module in $modules) { Copy-Item -LiteralPath (Join-Path $bin $module) -Destination (Join-Path $stage 'build\windows-ninja') }
 foreach ($tool in $tools) { Copy-Item -LiteralPath (Join-Path $root "tools\$tool.py") -Destination (Join-Path $stage 'tools') }
 # The Linux starters with Unix line endings, whatever this checkout has: bash runs no script with Windows'.
@@ -55,6 +55,7 @@ Expand-Archive -LiteralPath $pythonZip -DestinationPath (Join-Path $stage 'pytho
 # The embeddable Python ignores the script's folder; the tools import each other.
 Add-Content -LiteralPath (Join-Path $stage 'python\python312._pth') -Value '..\tools' -Encoding ascii
 Copy-Item -LiteralPath (Join-Path $root 'docs\PLAYERS.md') -Destination (Join-Path $stage 'README.txt')
+Copy-Item -LiteralPath (Join-Path $root 'TEST-BUILD.txt') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'docs\LINUX.md') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stage 'LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $root 'THIRD_PARTY_NOTICES.md') -Destination $stage
@@ -73,5 +74,5 @@ Compress-Archive -LiteralPath $stage -DestinationPath $zip -CompressionLevel Opt
 if (-not $KeepFolder) { Remove-Item -LiteralPath $stage -Recurse -Force }
 $size = (Get-Item -LiteralPath $zip).Length / 1MB
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
-Write-Output ("Spidy {0}: {1} ({2:N1} MB)" -f $version, $zip, $size)
+Write-Output ("MilesVR {0}: {1} ({2:N1} MB)" -f $version, $zip, $size)
 Write-Output "SHA-256: $hash"

@@ -32,7 +32,7 @@ import xr_runtime
 
 GAME_HOOKS = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0,
               0x1dac200, 0x1da7350, 0x1d77de0, 0x1d517b0, 0x1e2db90,
-              0x1da9960, 0x1da99f0, 0x1873470, 0x1ca4100, 0x1e2bac0, 0x7ca2f0, 0x1e2b9f0,
+              0x1da9960, 0x1da99f0, 0x1d7e720, 0x1ca4100, 0x1e2bac0, 0x7ca2f0, 0x1e2b9f0,
               # The web shooter: the camera's update (shots go out on the main thread), the weapons' muzzle
               # and the shots' events (what they strike).
               0xa24e90, 0x265d730, 0xf55310,
@@ -58,7 +58,7 @@ EYE_SHOT_FIELDS = ('count', 'generation', 'serial', 'width', 'height', 'flat_scr
                    'web_hand_gap_m', 'game_web', 'wrist_px', 'rope_start_px')
 
 
-GAME_NAME = "Marvel's Spider-Man Remastered"  # its folder in Documents, and its log's name there
+GAME_NAME = "Marvel's Spider-Man Miles Morales"  # its folder in Documents, and its log's name there
 GAME_MEMORY_FIELDS = {'Working set': 'working_set_mb', 'Page file': 'commit_mb', 'Video Usage': 'video_usage_mb',
                       'Video Budget': 'video_budget_mb', 'Tex Usage': 'texture_usage_mb',
                       'Tex Budget': 'texture_budget_mb', 'Demoted': 'demoted_mb', 'fps': 'fps'}
@@ -511,7 +511,7 @@ GATE_REASONS = ((1, 'no_player'), (2, 'bridge_stopped'), (4, 'no_camera_commit')
                 (16, 'tracking'))
 # Camera movers (Camera2 vtables, image offsets) the gate has names for.
 CAMERA_MOVERS = {0x3dc8708: 'follow', 0x3dc8800: 'combat', 0x3dc8f10: 'death', 0x3dc8f80: 'exterior',
-                 0x3dc8910: 'look', 0x38728f0: 'look_game', 0x3dc9008: 'melee_animation',
+                 0x3dc8910: 'look', 0x3dc9008: 'melee_animation',  # no LookCameraMoverGame in Miles Morales
                  0x3da4090: 'relative_animation', 0x3dc9208: 'turret', 0x3dc9318: 'vehicle',
                  0x57dd9f0: 'photo_mode'}
 
@@ -1414,7 +1414,7 @@ def game_running():
         find_game()
         return True
     except RuntimeError as error:
-        return not str(error).startswith('Spider-Man is not running.')
+        return not str(error).startswith('Miles Morales is not running.')
 
 
 # Spidy's modules start once per game process and stay in it until the game exits. The XR module goes in
@@ -1674,7 +1674,7 @@ def session(a, startup):
     startup.fields['game_pid'] = game.pid
     startup.fields['steam_build'] = game.steam_build
     if not game.steam_build:
-        print(f'This Spider-Man.exe is version {EXPECTED_VERSION} but not Steam\'s file (an Epic Games Store copy?). '
+        print(f'This MilesMorales.exe is version {EXPECTED_VERSION} but not Steam\'s file (an Epic Games Store copy?). '
               'Spidy tries it: should the game\'s code differ where Spidy works with it, VR stops with a code '
               'to tell us.', flush=True)
     # Before anything of Spidy's goes into the game: another VR mod there leaves the headset black.

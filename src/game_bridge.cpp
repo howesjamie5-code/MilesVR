@@ -246,7 +246,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             break;
         Config config{};
         base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-        if (!GetModuleHandleW(L"Spider-Man.exe") ||
+        if (!GetModuleHandleW(L"MilesMorales.exe") ||
             !read(reinterpret_cast<uintptr_t>(value), &config, sizeof(config)) ||
             config.magic != configMagic || config.protocol != version || config.bytes != sizeof(config) ||
             config.pid != GetCurrentProcessId() || config.imageBase != base) {

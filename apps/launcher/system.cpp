@@ -302,8 +302,8 @@ std::wstring steamGame(const std::vector<std::wstring>& roots) {
         if (!isFile(acf))
             continue;
         auto folders = text::vdfValues(readText(acf), "installdir");
-        const std::wstring folder = folders.empty() ? L"Marvel's Spider-Man Remastered" : widen(folders.front());
-        const fs::path exe = fs::path(library) / L"steamapps\\common" / folder / L"Spider-Man.exe";
+        const std::wstring folder = folders.empty() ? L"Marvel's Spider-Man Miles Morales" : widen(folders.front());
+        const fs::path exe = fs::path(library) / L"steamapps\\common" / folder / L"MilesMorales.exe";
         if (isFile(exe))
             return exe.wstring();
     }
@@ -312,8 +312,8 @@ std::wstring steamGame(const std::vector<std::wstring>& roots) {
         HKEY_LOCAL_MACHINE,
         (std::wstring(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App ") + kSteamAppId).c_str(),
         L"InstallLocation", RRF_SUBKEY_WOW6464KEY);
-    if (!uninstall.empty() && isFile(fs::path(uninstall) / L"Spider-Man.exe"))
-        return (fs::path(uninstall) / L"Spider-Man.exe").wstring();
+    if (!uninstall.empty() && isFile(fs::path(uninstall) / L"MilesMorales.exe"))
+        return (fs::path(uninstall) / L"MilesMorales.exe").wstring();
     return {};
 }
 
@@ -327,11 +327,11 @@ std::wstring epicGame() {
         if (entry.path().extension() != L".item")
             continue;
         const std::string manifest = readText(entry.path());
-        if (manifest.find("Spider-Man") == std::string::npos || manifest.find("Remastered") == std::string::npos)
+        if (manifest.find("Spider-Man") == std::string::npos || manifest.find("Miles Morales") == std::string::npos)
             continue;
         // JSON, but its quoted keys and values read like VDF's.
         for (const auto& folder : text::vdfValues(manifest, "InstallLocation")) {
-            const fs::path exe = fs::path(widen(folder)) / L"Spider-Man.exe";
+            const fs::path exe = fs::path(widen(folder)) / L"MilesMorales.exe";
             if (isFile(exe))
                 return exe.wstring();
         }
@@ -340,8 +340,8 @@ std::wstring epicGame() {
     return {};
 }
 
-// What Steam's app manifest says about the game whose Spider-Man.exe is `exe`, when Steam
-// installed it there (steamapps\common\<installdir>\Spider-Man.exe).
+// What Steam's app manifest says about the game whose MilesMorales.exe is `exe`, when Steam
+// installed it there (steamapps\common\<installdir>\MilesMorales.exe).
 SteamApp steamAppFor(const fs::path& exe) {
     const fs::path folder = exe.parent_path(), steamapps = folder.parent_path().parent_path();
     const std::string manifest = readText(steamapps / (std::wstring(L"appmanifest_") + kSteamAppId + L".acf"));
@@ -696,7 +696,7 @@ void Scanner::run(Settings settings) {
             scan.gameVersion = std::to_string(fields[0]) + '.' + std::to_string(fields[1]) + '.' +
                                std::to_string(fields[2]) + '.' + std::to_string(fields[3]);
     }
-    scan.gameRunning = processRunning(L"Spider-Man.exe");
+    scan.gameRunning = processRunning(L"MilesMorales.exe");
     scan.runtimes = openXrRuntimes();
     wchar_t system[MAX_PATH];
     GetSystemDirectoryW(system, MAX_PATH);
@@ -1033,9 +1033,9 @@ std::optional<std::wstring> browseForGame(HWND owner, const std::wstring& curren
     IFileOpenDialog* dialog{};
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
         return std::nullopt;
-    const COMDLG_FILTERSPEC filters[] = {{L"Spider-Man.exe", L"Spider-Man.exe"}, {L"Programs", L"*.exe"}};
+    const COMDLG_FILTERSPEC filters[] = {{L"MilesMorales.exe", L"MilesMorales.exe"}, {L"Programs", L"*.exe"}};
     dialog->SetFileTypes(2, filters);
-    dialog->SetTitle(L"Find Marvel's Spider-Man Remastered (Spider-Man.exe)");
+    dialog->SetTitle(L"Find Marvel's Spider-Man: Miles Morales (MilesMorales.exe)");
     if (!current.empty()) {
         IShellItem* folder{};
         if (SUCCEEDED(SHCreateItemFromParsingName(fs::path(current).parent_path().c_str(), nullptr, IID_PPV_ARGS(&folder)))) {
@@ -1068,7 +1068,7 @@ bool createShortcuts(std::string& error) {
             continue;
         link->SetPath(exe);
         link->SetWorkingDirectory(fs::path(exe).parent_path().c_str());
-        link->SetDescription(L"Spidy - VR for Marvel's Spider-Man Remastered, by Ilya Mezerowsky");
+        link->SetDescription(L"MilesVR - VR for Marvel's Spider-Man: Miles Morales, based on Spidy by Ilya Mezerowsky");
         link->SetIconLocation(exe, 0);
         IPersistFile* file{};
         if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file)))) {
@@ -1112,7 +1112,7 @@ bool restartAsAdministrator(std::string& error) {
     }
     error = code == ERROR_CANCELLED ? std::string()
                                     : "Windows did not start Spidy as administrator (error " + std::to_string(code) +
-                                          "). Right-click Spidy Launcher and choose Run as administrator.";
+                                          "). Right-click MilesVR Launcher and choose Run as administrator.";
     return false;
 }
 

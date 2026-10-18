@@ -82,8 +82,8 @@ def process_ids(name):
     return matches
 
 def find_game():
-    matches = process_ids('spider-man.exe')
-    if not matches: raise RuntimeError('Spider-Man is not running. Load free roam before live capture.')
+    matches = process_ids('milesmorales.exe')
+    if not matches: raise RuntimeError('Miles Morales is not running. Load free roam before live capture.')
     if len(matches) != 1: raise RuntimeError('More than one Spider-Man process exists; close the extra instance.')
     return matches[0]
 
@@ -115,12 +115,12 @@ class Game:
             self.steam_build = hashlib.sha256(self.path.read_bytes()).hexdigest() == EXPECTED_SHA256
             if not self.steam_build and file_version(self.path) != EXPECTED_VERSION:
                 raise RuntimeError(f'The running executable is not the supported game version '
-                                   f'({EXPECTED_VERSION}, Steam build 23986256).')
+                                   f'({EXPECTED_VERSION}, Steam build 23986141).')
             snap = checked_snapshot(0x08 | 0x10, pid)
             try:
                 module = ModuleEntry(); module.size = c.sizeof(module)
                 if not first_module(snap, c.byref(module)): raise c.WinError(c.get_last_error())
-                if module.name.lower() != 'spider-man.exe': raise RuntimeError('Unexpected main module')
+                if module.name.lower() != 'milesmorales.exe': raise RuntimeError('Unexpected main module')
                 self.base = module.base
             finally: close(snap)
         except BaseException:

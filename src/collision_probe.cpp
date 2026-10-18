@@ -127,7 +127,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
         base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
         if(!read(reinterpret_cast<uintptr_t>(input),&config,sizeof(config)) || config.magic!=0x53435043 ||
            config.version!=1 || config.bytes!=sizeof(config) || config.pid!=GetCurrentProcessId() || config.base!=base ||
-           !GetModuleHandleW(L"Spider-Man.exe") || config.durationMs<500 || config.durationMs>10000 ||
+           !GetModuleHandleW(L"MilesMorales.exe") || config.durationMs<500 || config.durationMs>10000 ||
            !config.mask || config.mask>0x7ff || !std::isfinite(config.distance) || config.distance<1 || config.distance>150) {result=1001;break;}
         for(float v:config.origin)if(!std::isfinite(v) || std::abs(v)>100000)result=1001;
         if(result)break;

@@ -52,8 +52,10 @@ def instructions(img, begin, end):
 
 
 class Fuzzy:
-    def __init__(self, sm, mm, mapping):
+    def __init__(self, sm, mm, mapping, max_candidates=None):
         self.sm, self.mm = sm, mm
+        # Candidates compared per function at most (None: every one in the window).
+        self.max_candidates = max_candidates
         self.funcs = {int(k, 16): int(v, 16) for k, (v, _) in mapping['functions'].items()}
         self.data = {int(k, 16): int(v, 16) for k, v in mapping['data'].items()}
         for k, (v, _) in mapping.get('vtables', {}).items():
@@ -90,11 +92,15 @@ class Fuzzy:
         i = bisect.bisect_left(self.mm.starts, lo)
         best = (0.0, None, None)
         second = 0.0
+        tried = 0
         while i < len(self.mm.starts) and self.mm.starts[i] < hi:
+            if self.max_candidates and tried >= self.max_candidates:
+                break
             b0, b1 = self.mm.functions[i]
             i += 1
             if b0 in self.taken or not (0.5 < (b1 - b0) / max(1, end - start) < 2.0):
                 continue
+            tried += 1
             b = instructions(self.mm, b0, b1)
             m = difflib.SequenceMatcher(None, sa, [s for _, _, s, _ in b], autojunk=False)
             if m.real_quick_ratio() < max(0.5, second) or m.quick_ratio() < max(0.5, second):

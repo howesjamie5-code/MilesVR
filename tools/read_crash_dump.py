@@ -13,7 +13,7 @@ import pathlib
 import struct
 import sys
 
-REPORTS = pathlib.Path(os.environ['APPDATA'])/"Insomniac Games/Marvel's Spider-Man Remastered/crs/reports"
+REPORTS = pathlib.Path(os.environ['APPDATA'])/"Insomniac Games/Marvel's Spider-Man Miles Morales/crs/reports"
 EXCEPTIONS = {
     0xC0000005: 'access violation', 0xC000001D: 'illegal instruction', 0xC0000025: 'noncontinuable exception',
     0xC0000026: 'invalid disposition', 0xC000008C: 'array bounds exceeded', 0xC0000094: 'integer divide by zero',

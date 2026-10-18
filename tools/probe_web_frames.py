@@ -58,7 +58,7 @@ from run_game_vr import appearance_snapshot, hud_snapshot, rgb_rows, write_rgb_p
 from vr_launcher import enlarge_render_memory, RENDER_MEMORY_HOOKS
 
 ENTRIES = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0, 0x1dac200, 0x1da7350, 0x1d77de0,
-           0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1873470, 0x1ca4100, 0x1e2bac0, 0x1da50d0,
+           0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1d7e720, 0x1ca4100, 0x1e2bac0, 0x1da50d0,
            0x1e2b9f0, 0x7ca2f0)
 HEAD = 1.6          # eye height above the feet, metres
 REACH, DROP = .6, .15   # web start: in front of and below the eye centre

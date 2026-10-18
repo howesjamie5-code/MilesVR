@@ -115,7 +115,7 @@ bool readEvent(void* event, int field, void* out, unsigned bytes) {
     const auto caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
     Guard guard;
     const bool result = eventRead(event, field, out, bytes);
-    if (result && currentAir && caller == config.base + 0xa7b489 && bytes == sizeof(Vec3)) {
+    if (result && currentAir && caller == config.base + 0xc63b79 && bytes == sizeof(Vec3)) {
         // Only the local airborne event's displacement field. Its native handler
         // derives both velocity and gravity history from this returned value.
         std::memcpy(out, &currentAir->delta, sizeof(Vec3));
@@ -323,7 +323,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
             config.magic != 0x534d5643 || config.version != 2 || config.bytes != sizeof(config) ||
             config.pid != GetCurrentProcessId() ||
             config.base != reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) ||
-            !GetModuleHandleW(L"Spider-Man.exe") || (config.durationMs && config.durationMs < 1000) ||
+            !GetModuleHandleW(L"MilesMorales.exe") || (config.durationMs && config.durationMs < 1000) ||
             config.durationMs > 30000 || !std::isfinite(config.maxSpeed) || config.maxSpeed <= 0 ||
             config.maxSpeed > 65 || config.syncAirVelocity > 1 || config.reserved) {
             result = 1001;

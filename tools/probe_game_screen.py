@@ -43,7 +43,7 @@ from probe_stereo import snapshot as stereo_snapshot, frame_snapshot
 from probe_stereo_gpu import MAX_EYE_SIZE, discover_queue, snapshot as gpu_snapshot
 from run_game_vr import hud_snapshot, write_rgb_png
 
-HOOKS = (0x1dac200, 0x1da7350, 0x1d77de0, 0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1873470,
+HOOKS = (0x1dac200, 0x1da7350, 0x1d77de0, 0x1d517b0, 0x1e2db90, 0x1da9960, 0x1da99f0, 0x1d7e720,
          0x1ca4100, 0x1e2bac0, 0x1da50d0, 0x1e2b9f0)
 SCANCODES = {'esc': 0x01, 'enter': 0x1c}
 PAD_BUTTONS = {'start': 0x10, 'a': 0x1000, 'b': 0x2000, 'x': 0x4000, 'y': 0x8000}

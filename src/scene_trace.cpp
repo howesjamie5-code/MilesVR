@@ -43,7 +43,7 @@ void record(uint32_t kind,void* view,void* caller,void* settings=nullptr,uint32_
             ++s.count;s.caller=reinterpret_cast<uint64_t>(caller);s.thread=GetCurrentThreadId();
             read(address,s.pose,sizeof(s.pose));uint8_t active{};read(address+0x1208,&active,1);s.active=active;
             bool ours=false;for(auto eye:config.eyes)ours|=eye==address;
-            if(ours)read(address+0x14e7c,&s.flags,4);
+            if(ours)read(address+0x1503c,&s.flags,4);
             if(kind==2)s.flags=flags;
             read(address,s.viewBytes,sizeof(s.viewBytes));
             if(settings)read(reinterpret_cast<uint64_t>(settings),s.toneSettings,sizeof(s.toneSettings));
@@ -66,7 +66,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* input) {
         if(!read(reinterpret_cast<uint64_t>(input),&config,sizeof(config)) || config.magic!=0x53544346 || config.version!=1 ||
            config.bytes!=sizeof(config) || config.pid!=GetCurrentProcessId() || config.base!=reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))){result=1001;break;}
         if(!created){
-            const uint32_t rvas[]={0x1e2b9f0,0x186d050,0x1e2be50,0x1da9960,0x1d517b0};
+            const uint32_t rvas[]={0x1e2b9f0,0x1d78230,0x1e2be50,0x1da9960,0x1d517b0};
             const uint8_t signatures[5][5]={{0x48,0x89,0x5c,0x24,0x08},{0x40,0x55,0x56,0x41,0x55},
                 {0x44,0x88,0x4c,0x24,0x20},{0x48,0x89,0x5c,0x24,0x08},{0x48,0x8b,0xc4,0x48,0x89}};
             for(unsigned i=0;i<hookCount;++i){uint8_t bytes[5]{};targets[i]=reinterpret_cast<void*>(config.base+rvas[i]);

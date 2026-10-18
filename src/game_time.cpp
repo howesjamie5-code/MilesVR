@@ -1,5 +1,5 @@
 // The game's time for Spidy's slow motion (game_time.hpp). Addresses are
-// image offsets in the supported Spider-Man.exe; docs/REFERENCE.md lists them.
+// image offsets in the supported MilesMorales.exe; docs/REFERENCE.md lists them.
 #include "spidy/game_time.hpp"
 #include <MinHook.h>
 #include <algorithm>

@@ -797,7 +797,7 @@ void sizeBuffers(void* buffers, const char* name, uint32_t width, uint32_t heigh
     // +12bf0: render width, height; the anti-aliased image's width, height;
     // those in multiples of 8; ... flags at +12c2c, 2 among them where the two
     // sizes are equal.
-    const auto sizes = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(buffers) + 0x12bf0);
+    const auto sizes = reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(buffers) + 0x12db0);
     sizes[2] = sizingEye[0];
     sizes[3] = sizingEye[1];
     sizes[4] = (sizingEye[0] + 7) & ~7u;
@@ -809,7 +809,7 @@ void sizeBuffers(void* buffers, const char* name, uint32_t width, uint32_t heigh
 }
 bool initBuffers(void* buffers, const void* description, const char* name) {
     const auto view = reinterpret_cast<uintptr_t>(buffers) - 0x1f80;
-    if (enabled && reinterpret_cast<uintptr_t>(_ReturnAddress()) == base + 0x186c325 &&
+    if (enabled && reinterpret_cast<uintptr_t>(_ReturnAddress()) == base + 0x1d77505 &&
         (creatingEye || view == reinterpret_cast<uintptr_t>(eyes[0].load()) ||
          view == reinterpret_cast<uintptr_t>(eyes[1].load()))) {
         // The offscreen constructor clamps both dimensions to the desktop
@@ -888,7 +888,7 @@ bool shareExposure(uintptr_t job, unsigned eye) {
     // As 189c710 picks it: the view's own buffer, else its render buffers'.
     const auto buffers = pointer(source + 0x1640);
     const auto shared =
-        pointer(source + 0x16f0) ? pointer(source + 0x16f8) : buffers ? pointer(buffers + 0x12ae8) : 0;
+        pointer(source + 0x16f0) ? pointer(source + 0x16f8) : buffers ? pointer(buffers + 0x12c78) : 0;
     if (!shared)
         return false;
     std::memcpy(reinterpret_cast<void*>(job + 0x16f8), &shared, 8);
@@ -1035,9 +1035,9 @@ void copyFinal(void* view) {
         return;
     const auto address = reinterpret_cast<uintptr_t>(view);
     uint32_t flags{}, bytes{};
-    read(address + 0x14e7c, &flags, 4);
-    read(address + 0x14e70, &bytes, 4);
-    const auto texture = pointer(address + 0x1f70), buffer = pointer(address + 0x14e68);
+    read(address + 0x1503c, &flags, 4);
+    read(address + 0x15030, &bytes, 4);
+    const auto texture = pointer(address + 0x1f70), buffer = pointer(address + 0x15028);
     if ((flags & 7) || !(flags & 0x10) || !texture || !buffer || bytes != config.width * config.height * 4)
         return;
     // Display mode bypasses the stock offscreen copy/readback function. Schedule
@@ -1055,7 +1055,7 @@ void copyFinal(void* view) {
         reinterpret_cast<void*>(base + 0x82eccc0), sizeof(Payload), "Spidy display readback"));
     if (!payload)
         return;
-    *payload = {address + 0x14e40, texture + 0x40, buffer, bytes, 0, address + 0x14e74, 0};
+    *payload = {address + 0x15000, texture + 0x40, buffer, bytes, 0, address + 0x15034, 0};
     reinterpret_cast<Enqueue>(base + 0x1d89590)(reinterpret_cast<void*>(address + 0x1630), 0xad, 0x41a,
                                                 payload);
 }
@@ -1539,7 +1539,7 @@ void maintain(void* manager) {
                         // including a different exposure mode. 0x400 sends the
                         // display conversion into our output target at +0xfa0.
                         InterlockedOr(reinterpret_cast<volatile LONG*>(
-                                          reinterpret_cast<uintptr_t>(eyes[i].load()) + 0x14e84),
+                                          reinterpret_cast<uintptr_t>(eyes[i].load()) + 0x15044),
                                       0x480);
                     // Use the engine's own asynchronous GPU readback path.
                     // This is enabled once, before deferred view initialization.
@@ -1553,7 +1553,7 @@ void maintain(void* manager) {
                 ReleaseSRWLockExclusive(&telemetry);
             } else if (retired[i]) {
                 InterlockedAnd(
-                    reinterpret_cast<volatile LONG*>(reinterpret_cast<uintptr_t>(eyes[i].load()) + 0x14e7c),
+                    reinterpret_cast<volatile LONG*>(reinterpret_cast<uintptr_t>(eyes[i].load()) + 0x1503c),
                     ~1L);
                 retired[i] = false;
                 ++live;
@@ -1567,7 +1567,7 @@ void maintain(void* manager) {
                 // Exclude from new render jobs but retain storage for already queued
                 // work. The game's normal shutdown owns final resource destruction.
                 // Immediate native deletion caused a worker to use a null resource.
-                InterlockedOr(reinterpret_cast<volatile LONG*>(reinterpret_cast<uintptr_t>(eye) + 0x14e7c),
+                InterlockedOr(reinterpret_cast<volatile LONG*>(reinterpret_cast<uintptr_t>(eye) + 0x1503c),
                               1);
                 retired[i] = true;
                 --live;
@@ -1618,18 +1618,18 @@ void maintain(void* manager) {
             native_gpu::registerEye(
                 i, reinterpret_cast<ID3D12Resource*>(pointer(pointer(e.textureObject + 0x38))));
         e.updates = updates[i].load();
-        read(e.view + 0x14e7c, &e.flags, 4);
+        read(e.view + 0x1503c, &e.flags, 4);
         e.occlusion = pointer(e.view + 0x1ba0) != 0;
-        read(e.view + 0x14e28, &e.width, 4);
-        read(e.view + 0x14e2c, &e.height, 4);
-        read(e.view + 0x1f80 + 0x12bf0, &e.renderWidth, 4);
-        read(e.view + 0x1f80 + 0x12bf4, &e.renderHeight, 4);
+        read(e.view + 0x14fe8, &e.width, 4);
+        read(e.view + 0x14fec, &e.height, 4);
+        read(e.view + 0x1f80 + 0x12db0, &e.renderWidth, 4);
+        read(e.view + 0x1f80 + 0x12db4, &e.renderHeight, 4);
         read(e.view + 0x460, &e.viewportWidth, 4);
         read(e.view + 0x464, &e.viewportHeight, 4);
         read(e.view, e.pose, sizeof(e.pose));
-        e.readback = pointer(e.view + 0x14e68);
-        read(e.view + 0x14e70, &e.readbackBytes, 4);
-        read(e.view + 0x14e74, &e.readbackCompleted, 4);
+        e.readback = pointer(e.view + 0x15028);
+        read(e.view + 0x15030, &e.readbackBytes, 4);
+        read(e.view + 0x15034, &e.readbackCompleted, 4);
     }
     InterlockedIncrement64(&d.sequence);
     ReleaseSRWLockExclusive(&telemetry);
@@ -1681,7 +1681,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         // 32 (with 8) the game's own view is not rendered while immersive
         // (restGameView): the left eye goes to the game's window instead.
         const auto views = config.createViews & ~(16u | 32u);
-        if (!GetModuleHandleW(L"Spider-Man.exe") || config.magic != 0x53534346 || config.version != 1 ||
+        if (!GetModuleHandleW(L"MilesMorales.exe") || config.magic != 0x53534346 || config.version != 1 ||
             config.bytes != sizeof(config) || config.pid != GetCurrentProcessId() || config.base != base ||
             config.durationMs > 30000 || (config.durationMs && config.durationMs < 500) ||
             (views != 0 && views != 1 && views != 3 && views != 5 && views != 7 && views != 13) ||
@@ -1747,7 +1747,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         // A view's adapted luminance for shaders: its own buffer at +16f0.
         const unsigned char adaptedLumBytes[] = {0x48, 0x8d, 0x81, 0xf0, 0x16, 0x00, 0x00, 0x48, 0x8b, 0x10};
         if (!entry(0x1dac200, maintainBytes, sizeof(maintainBytes)) ||
-            !entry(0x189c710, adaptedLumBytes, sizeof(adaptedLumBytes)) ||
+            !entry(0x1da7d60, adaptedLumBytes, sizeof(adaptedLumBytes)) ||
             !entry(0x1da50d0, submitBytes, sizeof(submitBytes)) ||
             !entry(0x1b51b9f, cameraSubmitBytes, sizeof(cameraSubmitBytes)) ||
             !entry(0x1d87e70, poseBytes, sizeof(poseBytes)) ||
@@ -1766,7 +1766,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             !entry(0x1e2db90, copyJobBytes, sizeof(copyJobBytes)) ||
             !entry(0x1da9960, beginJobBytes, sizeof(beginJobBytes)) ||
             !entry(0x1da99f0, beginJobBytes, sizeof(beginJobBytes)) ||
-            !entry(0x1873470, initBuffersBytes, sizeof(initBuffersBytes)) ||
+            !entry(0x1d7e720, initBuffersBytes, sizeof(initBuffersBytes)) ||
             !entry(0x1d802d0, sizeBuffersBytes, sizeof(sizeBuffersBytes)) ||
             !entry(0x1d80600, targetKindBytes, sizeof(targetKindBytes)) ||
             !entry(0x4407dc8, kindMaskBytes, sizeof(kindMaskBytes)) ||
@@ -1794,7 +1794,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             copyJobHook = reinterpret_cast<void*>(base + 0x1e2db90);
             beginJobHook = reinterpret_cast<void*>(base + 0x1da9960);
             endJobHook = reinterpret_cast<void*>(base + 0x1da99f0);
-            initBuffersHook = reinterpret_cast<void*>(base + 0x1873470);
+            initBuffersHook = reinterpret_cast<void*>(base + 0x1d7e720);
             sizeBuffersHook = reinterpret_cast<void*>(base + 0x1d802d0);
             renderActorHook = reinterpret_cast<void*>(base + 0x1ca4100);
             setupDisplayHook = reinterpret_cast<void*>(base + 0x1e2bac0);

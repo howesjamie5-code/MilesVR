@@ -8,7 +8,7 @@ from discover_render_types import occurrences, rva_for_offset
 
 
 def main():
-    path = pathlib.Path(r"C:\Program Files (x86)\Steam\steamapps\common\Marvel's Spider-Man Remastered\Spider-Man.exe")
+    path = pathlib.Path(r"C:\Program Files (x86)\Steam\steamapps\common\Marvel's Spider-Man Miles Morales\MilesMorales.exe")
     data = path.read_bytes()
     if hashlib.sha256(data).hexdigest() != EXPECTED_SHA256:
         raise ValueError('Unsupported executable hash')

@@ -1,5 +1,5 @@
 // The SPIDY VR tab in the game's own Settings (game_menu.hpp). Addresses are
-// image offsets in the supported Spider-Man.exe; docs/REFERENCE.md lists them.
+// image offsets in the supported MilesMorales.exe; docs/REFERENCE.md lists them.
 //
 // The game's Settings are Scaleform (Flash) screens fed by its settings system
 // (UISettingsMenuSystem) from configs/uiconfig/uisystemmenu.config: tabs of
@@ -59,13 +59,15 @@ constexpr uintptr_t buildTab = 0x807740;
 // (7dd7c0, the menu at the settings config's +0x128, its items at +0x158, as
 // many as +0x160 says) adds its items in a loop; this is where its call
 // returns to.
-constexpr uintptr_t addItem = 0x9838c0, pageItemReturn = 0x7dd8ae, pageItems = 0x158;
+constexpr uintptr_t addItem = 0x9838c0, pageItemReturn = 0x94e849, pageItems = 0x158;
 // The first page's own build (7dd7c0: its items, then Flash's Refresh), and
 // the callback Flash sends when A selects one of its items, with the item's
 // number (+8) - for VR VIEW, Spidy's setting number. The page shows its items
 // as buttons, so VR VIEW is one: A switches the view, and its name says what
 // A does next.
-constexpr uintptr_t pageRefresh = 0x7dd7c0;
+constexpr uintptr_t pageRefresh = 0x94e780;
+// MilesVR: false until the settings config's offsets are ported (see install()).
+constexpr bool kLayoutPorted = false;
 constexpr uint32_t pageSelectHash = 0xd0dbcfa5;
 constexpr unsigned char pageRefreshBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
                                               0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18, 0x55};
@@ -74,7 +76,7 @@ const char* const pageTitles[] = {"SWITCH TO GAME SCREEN", "SWITCH TO VR"};
 constexpr uintptr_t uiMovie = 0x2238250;
 // "OpenOptions", the literal openOptions passes; the hash Flash's
 // ResetAllOptionsForCurrentOptionsMenu callback arrives with (set at start-up).
-constexpr uintptr_t openOptionsName = 0x389f4c0, resetAllHash = 0x77f76e8;
+constexpr uintptr_t openOptionsName = 0x3df9568, resetAllHash = 0x77f76e8;
 // The option types of a setting item and of a section heading (vtables).
 constexpr uintptr_t settingType = 0x4099560, headingType = 0x40996b0;
 // The tab's id: the game's run 0-10, and its RESET ALL ignores any above.
@@ -533,13 +535,13 @@ const Hook hooks[] = {
      {0x80, 0xb9, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x75, 0x03}, 9},
     {0x94d0e0, reinterpret_cast<void*>(&callbackHook), reinterpret_cast<void**>(&originalCallback),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
-    {0x72d640, reinterpret_cast<void*>(&typeHook), reinterpret_cast<void**>(&originalType),
+    {0x89fa90, reinterpret_cast<void*>(&typeHook), reinterpret_cast<void**>(&originalType),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0x8b, 0x84, 0xd1}, 10},
     {0x89faa0, reinterpret_cast<void*>(&valueHook), reinterpret_cast<void**>(&originalValue),
      {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18}, 10},
-    {0x72e1d0, reinterpret_cast<void*>(&activeHook), reinterpret_cast<void**>(&originalActive),
+    {0x8a04a0, reinterpret_cast<void*>(&activeHook), reinterpret_cast<void**>(&originalActive),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0x0f, 0xb6, 0x84}, 10},
-    {0x72d5f0, reinterpret_cast<void*>(&defaultHook), reinterpret_cast<void**>(&originalDefault),
+    {0x89fa40, reinterpret_cast<void*>(&defaultHook), reinterpret_cast<void**>(&originalDefault),
      {0x48, 0x63, 0xc2, 0x48, 0x8d, 0x14, 0x80, 0xf3, 0x0f, 0x10}, 10},
     {0x89fa60, reinterpret_cast<void*>(&defaultChoiceHook), reinterpret_cast<void**>(&originalDefaultChoice),
      {0x48, 0x83, 0xec, 0x28, 0x48, 0x63, 0xc2, 0x0f, 0x57, 0xc9}, 10},
@@ -572,6 +574,11 @@ vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Valu
 uint32_t game_menu::install(uintptr_t base) {
     if (hooked)
         return 0;
+    // MilesVR: the settings config's layout differs in MilesMorales.exe (its first page's menu is at
+    // +0x130, not +0x128, and the tab array moved with it), and the offsets below are Spider-Man.exe's
+    // until they are mapped. Without the tab the launcher's settings apply, as they do on a failed check.
+    if (!kLayoutPorted)
+        return 9300;
     if (!created) {
         for (size_t i = 0; i < std::size(hooks); ++i)
             if (!matches(base + hooks[i].offset, hooks[i].bytes, hooks[i].count))

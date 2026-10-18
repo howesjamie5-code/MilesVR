@@ -1,0 +1,38 @@
+MilesVR 0.1.0 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+=================================================================
+
+An unofficial port of Spidy 0.3.8 by Ilya Mezerowsky (GPL-3.0,
+https://github.com/IlyaMez/SpidyVR) from Spider-Man Remastered to Miles Morales.
+Not made or endorsed by Ilya, Insomniac, Sony or Marvel. Please do not report
+problems with this build to Spidy's Discord: they are this port's, not Spidy's.
+
+This build has NOT been run in a headset yet. It was ported offline: every game
+address Spidy uses was translated from Spider-Man.exe to MilesMorales.exe and
+every one of its 126 code checks passes against your MilesMorales.exe
+(4.630.0.0, Steam build 23986141). If a check failed in the game, VR would stop
+with a code instead of crashing.
+
+What to test (in this order)
+----------------------------
+1. Start "MilesVR Launcher.exe". The game line should name Marvel's Spider-Man:
+   Miles Morales and show it as supported. Connect Virtual Desktop, close the
+   game, press START VR.
+2. Menus/intro on the screen in the headset, then load your save.
+3. VR view: both eyes, head tracking, the picture steady and at full size.
+4. SWINGING: grip to fire a web from that hand, swing on it, release; trigger
+   to reel in; pull sharply to zip. Webs on buildings and in open air.
+5. Look down: Miles's body and arms should follow your controllers.
+
+Known gaps in 0.1
+-----------------
+- No SPIDY VR tab in the game's Settings: Miles Morales lays out its settings
+  menu differently. Set options in the launcher instead (the session says
+  "No SPIDY VR tab ... (9300)" - that is expected).
+- Combat, grabbing, gadgets, prompts and slow motion are ported but untested;
+  they come after swinging. Miles's venom powers are not in this build.
+- The launcher's update check is off (Spidy's own releases are for Remastered).
+
+What to send back
+-----------------
+Whatever happened, and the newest report from the "reports" folder (and any
+"Game XR start: <number>" or other code the launcher showed).

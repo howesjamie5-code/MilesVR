@@ -18,7 +18,7 @@ BEGIN
             VALUE "InternalName", "spidy_launcher"
             VALUE "LegalCopyright", "Copyright 2026 Ilya Mezerowsky"
             VALUE "OriginalFilename", "Spidy Launcher.exe"
-            VALUE "ProductName", "Spidy - VR for Marvel's Spider-Man Remastered"
+            VALUE "ProductName", "MilesVR - VR for Marvel's Spider-Man: Miles Morales (based on Spidy)"
             VALUE "ProductVersion", SPIDY_VERSION
         END
     END

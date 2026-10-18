@@ -494,7 +494,7 @@ void App::header() {
     const ImVec2 tagSize = measure(fonts_.bold, S(11.5f), "VR");
     draw->AddRect(tag, ImVec2(tag.x + tagSize.x + S(14), tag.y + S(20)), col(kRed), S(6), 0, S(1.5f));
     draw->AddText(fonts_.bold, S(11.5f), ImVec2(tag.x + S(7), tag.y + (S(20) - tagSize.y) * 0.5f), col({255, 120, 120}), "VR");
-    const char* subtitle = "VR mod for Marvel's Spider-Man Remastered";
+    const char* subtitle = "VR mod for Marvel's Spider-Man: Miles Morales (based on Spidy)";
     const float lineY = at.y + S(58);
     draw->AddText(fonts_.body, S(14.5f), ImVec2(x, lineY), col(kMuted), subtitle);
     float bylineX = x + measure(fonts_.body, S(14.5f), subtitle).x;
@@ -770,9 +770,9 @@ void App::setupCard(float width) {
         if (scan_.done && scan_.gameExe.empty()) {
             mark = Mark::error;
             detail = scan_.epicFound ? "The Epic Games Store has it installed, but not where. Show Spidy where "
-                                       "Spider-Man.exe is."
+                                       "MilesMorales.exe is."
                                      : "Not found in your Steam or Epic Games Store libraries. Show Spidy where "
-                                       "Spider-Man.exe is.";
+                                       "MilesMorales.exe is.";
         } else if (scan_.done) {
             switch (scan_.build) {
             case Build::checking:
@@ -803,7 +803,7 @@ void App::setupCard(float width) {
                 break;
             }
         }
-        setupRow(mark, "Marvel's Spider-Man Remastered", detail, S(98), [&] {
+        setupRow(mark, "Marvel's Spider-Man: Miles Morales", detail, S(98), [&] {
             ImGui::BeginDisabled(running || !scan_.done);
             if (secondaryButton(scan_.gameExe.empty() ? "Browse..." : "Change...", S(98))) {
                 if (auto chosen = browseForGame(window_, scan_.gameExe)) {
@@ -1498,7 +1498,7 @@ void App::about(ImVec2 origin, ImVec2 size) {
         ImGui::Dummy(ImVec2(0, S(86)));
         ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("Spidy puts you inside Marvel's Spider-Man Remastered: your head is the camera, each hand "
+        ImGui::TextUnformatted("Spidy puts you inside Marvel's Spider-Man: Miles Morales: your head is the camera, each hand "
                                "shoots its own web, and you swing, zip and throw with your own arms.");
         ImGui::Dummy(ImVec2(0, S(8)));
         ImGui::TextUnformatted("Spidy changes nothing in the game's folder. It attaches to the game while it runs and "

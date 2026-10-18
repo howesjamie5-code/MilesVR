@@ -21,7 +21,7 @@ using spidy::launcher::SteamApp;
 inline constexpr const char* kVersion = SPIDY_VERSION;
 inline constexpr const char* kAuthor = "Ilya Mezerowsky";
 inline constexpr const char* kKofiUrl = "https://ko-fi.com/ilyamezerowsky";
-inline constexpr const wchar_t* kSteamAppId = L"1817070";
+inline constexpr const wchar_t* kSteamAppId = L"1817190";
 // The runtime choice that lets each session find the runtime its headset is connected to
 // (tools/xr_runtime.py detect); any other choice is a runtime's manifest.
 inline constexpr const wchar_t* kAutoRuntime = L"auto";
@@ -52,7 +52,7 @@ struct Scan {
     bool epicFound{}, gameRunning{};
     Build build = Build::unknown;
     std::string expectedHash;
-    // Spider-Man.exe's version and the supported file's, and what Steam says about the game.
+    // MilesMorales.exe's version and the supported file's, and what Steam says about the game.
     std::string gameVersion, expectedVersion;
     SteamApp steamApp;
     std::wstring hashPath;

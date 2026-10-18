@@ -170,7 +170,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* parameter) {
         auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(imageBase + dos->e_lfanew);
         target = reinterpret_cast<void*>(imageBase + cameraUpdateRva);
         unsigned char actual[sizeof(signature)]{};
-        if (!GetModuleHandleW(L"Spider-Man.exe") || nt->OptionalHeader.SizeOfImage != 140496896 ||
+        if (!GetModuleHandleW(L"MilesMorales.exe") || nt->OptionalHeader.SizeOfImage != 151085056 ||
             !readBytes(reinterpret_cast<uintptr_t>(target), actual, sizeof(actual)) ||
             std::memcmp(actual, signature, sizeof(signature))) {
             status = fail(1001);

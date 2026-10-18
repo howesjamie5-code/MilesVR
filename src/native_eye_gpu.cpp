@@ -1174,7 +1174,7 @@ DWORD start(void* input) {
     if (!read(reinterpret_cast<uintptr_t>(input), &c, sizeof(c)) || c.magic != 0x53475043 || c.version != 3 ||
         c.bytes != sizeof(c) || c.pid != GetCurrentProcessId() ||
         c.base != reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) ||
-        !GetModuleHandleW(L"Spider-Man.exe") || (c.durationMs && c.durationMs < 500) ||
+        !GetModuleHandleW(L"MilesMorales.exe") || (c.durationMs && c.durationMs < 500) ||
         c.durationMs > 30000 || c.copyToXr > 2 || c.captureImages > 1 || c.reserved ||
         (!c.copyToXr && !c.captureImages) || !c.queue)
         return 1001;

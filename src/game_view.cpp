@@ -105,7 +105,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
     do {
         if(enabled)break;
         Config c{};base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-        if(!GetModuleHandleW(L"Spider-Man.exe") || !read(reinterpret_cast<uintptr_t>(value),&c,sizeof(c)) ||
+        if(!GetModuleHandleW(L"MilesMorales.exe") || !read(reinterpret_cast<uintptr_t>(value),&c,sizeof(c)) ||
            c.magic!=0x53564346 || c.version!=1 || c.bytes!=sizeof(c) || c.pid!=GetCurrentProcessId() || c.base!=base) {
             result=1001;break;
         }
