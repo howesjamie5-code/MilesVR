@@ -29,6 +29,8 @@ struct NativeEyeFrame {
     body_calibration::View calibration{};
     // Slow motion: the image's recolouring and the focus meter (none at rest).
     SlowMotionView slow{};
+    // Miles's venom round the right fist (0: none; venom_punch.hpp).
+    float venomGlow{};
     // The gadget wheel, open while X is held (gadget_wheel.hpp).
     GadgetWheelView gadgetWheel{};
     bool flatScreen{};

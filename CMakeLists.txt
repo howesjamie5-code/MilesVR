@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Spidy VERSION 0.1.7 LANGUAGES C CXX)
+project(Spidy VERSION 0.1.8 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -158,7 +158,7 @@ if(SPIDY_BUILD_XR)
   target_link_libraries(spidy_openxr PUBLIC spidy_d3d12 openxr_loader)
   target_compile_definitions(spidy_openxr PUBLIC XR_USE_PLATFORM_WIN32 XR_USE_GRAPHICS_API_D3D12)
   if(SPIDY_BUILD_OBSERVER)
-    target_sources(spidy_stereo_probe PRIVATE src/game_xr.cpp src/venom_probe.cpp src/game_player.cpp src/game_pad.cpp
+    target_sources(spidy_stereo_probe PRIVATE src/game_xr.cpp src/game_venom.cpp src/game_player.cpp src/game_pad.cpp
                    src/game_menu.cpp src/game_time.cpp src/game_prompts.cpp src/game_steam.cpp)
     target_link_libraries(spidy_stereo_probe PRIVATE spidy_openxr)
   endif()

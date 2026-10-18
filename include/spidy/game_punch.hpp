@@ -97,6 +97,28 @@ struct Strikes {
     uint64_t swung{}, strikeCalled{}, passedOver{};
 };
 static_assert(sizeof(Strikes) == 328);
+// Miles's venom punch (venom_punch.hpp), SpidyVenom: the headset module
+// says, every frame, whether the right fist is charged and where the meter
+// is; the next blow that fist lands (a punch, or the strike it opened) goes
+// to the game as a venom blow - DamageType kVenom with the venom status, the
+// blow of a finisher and his flight - and the meter is emptied.
+struct Venom {
+    uint32_t magic = 0x5350564e, version = 1, bytes = sizeof(Venom);
+    // In: the charge (a new number each time the fist is charged; 0: none).
+    // A charge lands one blow.
+    uint32_t charge{};
+    // In: the meter's address (HeroMeleeManager + venom_punch::meterOffset;
+    // 0: unknown, and the blow spends nothing).
+    uint64_t meter{};
+    // Out: venom blows landed, of them those that emptied the meter, and the
+    // latest's charge, place and damage.
+    uint64_t blows{}, spent{};
+    uint32_t lastCharge{};
+    Vec3 lastPoint{};
+    float lastDamage{};
+    uint32_t reserved{};
+};
+static_assert(sizeof(Venom) == 64);
 // Starts the bot watch and the main-thread damage requests.
 uint32_t start(uintptr_t base);
 uint32_t stop();
@@ -145,6 +167,8 @@ void hangInAir(float seconds);
 float worldScale();
 Data data();
 Strikes strikes();
+// The venom charge in (charge, meter), the venom blows out.
+Venom venom(const Venom& in);
 // Wire formats: SpidyPunchStart's configuration, and SpidyPunchTest's blow,
 // which a probe sends straight to the game's DamageSystem.
 struct Config {

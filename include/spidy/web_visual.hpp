@@ -304,4 +304,17 @@ struct KnockoutView {
 };
 // pixelAngle as for appendWeb.
 void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle);
+// Miles's venom round the right fist (venom_punch.hpp): gold bioelectric
+// bolts crackling out of it in a soft glow, fewer and fainter while it
+// charges, all of them once charged. `glow` 0..1; `hand` the right hand's
+// pose as the glove's (fingers along -z); `seconds` any running clock, for
+// the crackle. pixelAngle as for appendWeb.
+void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewer, float pixelAngle, float seconds);
+// A venom punch landed: a flash, and bolts thrown out from where it hit.
+struct VenomBurstView {
+    static constexpr float seconds = .5f;
+    Vec3 point{};
+    float age = -1; // seconds since it landed; below 0, or past `seconds`: nothing
+};
+void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle);
 } // namespace spidy

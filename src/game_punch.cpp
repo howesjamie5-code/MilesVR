@@ -6,6 +6,7 @@
 #include "spidy/game_targets.hpp"
 #include "spidy/game_time.hpp"
 #include "spidy/native_bodies.hpp"
+#include "spidy/venom_punch.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -84,11 +85,39 @@ struct Launch {
 std::vector<Launch> launches;
 Player fighter;
 Strikes tally;
+// The venom punch (game_punch.hpp's Venom): the charge the headset module
+// holds out and the meter's address, the charge a blow spent last, and what
+// has landed.
+std::atomic<uint32_t> venomCharge{};
+std::atomic<uint64_t> venomMeter{};
+uint32_t venomUsed{};
+Venom venomOut;
+// A venom blow: a finisher's damage at least, times this, and his flight.
+constexpr float venomDamage = 3, venomLeast = 28, venomSpeed = 18, venomLift = 5;
+// DamageType kVenom and the venom status: Miles Morales's own, after
+// Remastered's 0-30 (its DamageType enum: kVenom 31, kAntiVenom 32,
+// kAntiCamo 33).
+constexpr uint32_t venomType = 31;
+constexpr int32_t venomStatus = 31;
+constexpr float venomStatusAmount = 100, venomStatusSeconds = 3;
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)
             return false;
         std::memcpy(out, reinterpret_cast<void*>(p), n);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// The meter emptied, if `meter` is still in the player's HeroMeleeManager.
+bool emptyMeter(uint64_t meter) {
+    uintptr_t vtable{};
+    if (!meter || !read(meter - venom_punch::meterOffset, &vtable, 8) ||
+        vtable != base + venom_punch::meleeManagerVtable)
+        return false;
+    __try {
+        *reinterpret_cast<float*>(meter) = 0;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -245,6 +274,19 @@ void land(PunchEvent e, bool byStrike) {
     // The flow's next call: the one that stands, or after an answer another way.
     tally.calls += cues.call(flow.count(), flow.finisher(flow.count() + 1), called,
                              static_cast<uint32_t>((tally.blows + 1) * 2654435761u >> 13));
+    // The right fist charged with venom: this blow is the venom punch, and
+    // the charge is spent.
+    const uint32_t charge = venomCharge.load();
+    const bool venom = e.hand == 1 && charge && charge != venomUsed;
+    if (venom) {
+        venomUsed = charge;
+        Vec3 along{e.direction.x, 0, e.direction.z};
+        along = length(along) > .1f ? normalized(along) : Vec3{};
+        d.kind = BlowKind::Finisher;
+        d.damage = std::max(d.damage, venomLeast) * venomDamage;
+        d.fly = true;
+        d.velocity = along * venomSpeed + Vec3{0, venomLift, 0};
+    }
     native_bodies::Damage request;
     request.victim = e.target;
     request.damager = fighter.record;
@@ -252,7 +294,15 @@ void land(PunchEvent e, bool byStrike) {
     request.direction = e.direction;
     request.normal = e.direction * -1.f;
     request.amount = d.damage;
-    if (d.kinetic) {
+    if (venom) {
+        request.type = venomType;
+        request.knockback = static_cast<int32_t>(Knockback::SuperFlyBack);
+        request.knockbackAmount = flingAmount * 1.5f;
+        request.impulse = flingImpulse * 1.5f;
+        request.statusType = venomStatus;
+        request.statusAmount = venomStatusAmount;
+        request.statusDuration = venomStatusSeconds;
+    } else if (d.kinetic) {
         request.type = 7; // kKinetic
         request.knockback = static_cast<int32_t>(Knockback::FlyBack);
         request.knockbackAmount = flingAmount;
@@ -263,6 +313,16 @@ void land(PunchEvent e, bool byStrike) {
         request.knockbackAmount = 2 + 6 * e.strength;
     }
     native_bodies::damage(request);
+    if (venom) {
+        const bool emptied = emptyMeter(venomMeter.load());
+        AcquireSRWLockExclusive(&output);
+        ++venomOut.blows;
+        venomOut.spent += emptied;
+        venomOut.lastCharge = charge;
+        venomOut.lastPoint = e.point;
+        venomOut.lastDamage = d.damage;
+        ReleaseSRWLockExclusive(&output);
+    }
     if (d.fly && machine) {
         const auto waiting = std::find_if(launches.begin(), launches.end(),
                                           [&](const Launch& l) { return l.record == e.target; });
@@ -571,6 +631,16 @@ Strikes game_punch::strikes() {
     ReleaseSRWLockShared(&output);
     return out;
 }
+Venom game_punch::venom(const Venom& in) {
+    venomCharge = in.charge;
+    venomMeter = in.meter;
+    AcquireSRWLockShared(&output);
+    auto out = venomOut;
+    ReleaseSRWLockShared(&output);
+    out.charge = in.charge;
+    out.meter = in.meter;
+    return out;
+}
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyPunchStart(void* input) {
     Config c{};
     if (!read(reinterpret_cast<uintptr_t>(input), &c, sizeof(c)) || c.magic != 0x53505543 || c.version != 1 ||
@@ -596,6 +666,20 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStrikeSample(void* out) {
     const auto sample = game_punch::strikes();
     __try {
         std::memcpy(out, &sample, sizeof(sample));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 9503;
+    }
+    return 0;
+}
+// The venom charge in, the venom blows out (game_punch::Venom), in place.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyVenom(void* inout) {
+    Venom v{};
+    if (!read(reinterpret_cast<uintptr_t>(inout), &v, sizeof(v)) || v.magic != Venom{}.magic ||
+        v.version != Venom{}.version || v.bytes != sizeof(v))
+        return 9502;
+    const auto out = game_punch::venom(v);
+    __try {
+        std::memcpy(inout, &out, sizeof(out));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 9503;
     }

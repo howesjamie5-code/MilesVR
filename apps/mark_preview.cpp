@@ -281,6 +281,31 @@ int main(int argc, char** argv) {
         blows.push_back({"KNOCKOUT LEAVING 1", knockout(at(6))});
         blows.push_back({"KNOCKOUT LEAVING 2", knockout(at(7))});
         ok &= sheet(name + "blows.bmp", scene.backdrop, camera, scene.u, scene.v, side, 5, blows);
+        // Miles's venom: round the right fist (half a metre off, as a fist
+        // held up is) as it charges and once charged, and a venom punch's
+        // burst where it landed.
+        const auto fist = [&](float glow, float seconds) {
+            std::vector<Vertex> v;
+            const Vec3 knuckles = normalized(p) * .5f;
+            appendVenomFist(v, glow, {knuckles - Vec3{0, -.01f, -.06f}, {}}, viewer, pixelAngle, seconds);
+            return v;
+        };
+        const auto venomBurst = [&](float age) {
+            std::vector<Vertex> v;
+            appendVenomBurst(v, {p, age}, viewer, pixelAngle);
+            return v;
+        };
+        ok &= sheet(name + "venom.bmp", scene.backdrop, camera, scene.u, scene.v, side, 5,
+                    {{"FIST CHARGING 30%", fist(.3f, 1)},
+                     {"FIST CHARGING 70%", fist(.7f, 1.2f)},
+                     {"FIST CHARGED", fist(1, 1.4f)},
+                     {"FIST CHARGED LATER", fist(1, 1.55f)},
+                     {"FIST FADING", fist(.4f, 1.7f)},
+                     {"VENOM BURST 0.03 S", venomBurst(.03f)},
+                     {"VENOM BURST 0.1 S", venomBurst(.1f)},
+                     {"VENOM BURST 0.2 S", venomBurst(.2f)},
+                     {"VENOM BURST 0.35 S", venomBurst(.35f)},
+                     {"VENOM BURST 0.45 S", venomBurst(.45f)}});
         // The whole eye image with a call on him.
         Image whole = scene.backdrop;
         draw(whole, cue(CueWay::Left, false, .7f, 1), camera, 0, 0, 0, 0, whole.w, whole.h);

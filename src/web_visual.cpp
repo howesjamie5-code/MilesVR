@@ -831,4 +831,90 @@ void AimMarkerMotion::markers(const AimMarker* wanted, Vec3 origin, Vec3 directi
     spin_ = std::fmod(spin_ + dt * (.8f + 2.4f * std::clamp(std::isfinite(squeeze) ? squeeze : 0.f, 0.f, 1.f)),
                       2 * pi);
 }
+namespace {
+// Venom's gold, and its white-hot core (linear RGB).
+constexpr Vec3 venomGold{1.f, .62f, .06f}, venomCore{1.f, .93f, .62f};
+// A bolt from `from` along `way` (unit) for `reach` metres: a jagged line of
+// `kinks` pieces, each knocked sideways at random, a faint wide glow under a
+// thin bright core.
+void venomBolt(std::vector<Vertex>& out, Vec3 from, Vec3 way, float reach, Vec3 view, float px, float alpha,
+               float seed, int kinks = 4) {
+    const Vec3 a = perpendicular(way), b = cross(way, a);
+    Vec3 at = from;
+    for (int k = 1; k <= kinks; ++k) {
+        const float u = static_cast<float>(k) / kinks;
+        const float jag = k == kinks ? .15f : .35f;
+        const Vec3 next = from + way * (reach * u) +
+                          (a * (hash(seed, k) - .5f) + b * (hash(seed, k + 40) - .5f)) * (reach * jag);
+        const float thin = 1 - .6f * u;
+        softBar(out, at, next, view, std::max(3.f * px, .004f) * thin, venomGold, .35f * alpha, 2 * px);
+        softBar(out, at, next, view, std::max(.9f * px, .0012f) * thin, venomCore, alpha, px);
+        at = next;
+    }
+}
+// A direction on the sphere, from two 0..1 values.
+Vec3 sphere(float u, float v) {
+    const float z = 2 * u - 1, r = std::sqrt(std::max(0.f, 1 - z * z)), t = 2 * pi * v;
+    return {r * std::cos(t), r * std::sin(t), z};
+}
+} // namespace
+void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewer, float pixelAngle,
+                     float seconds) {
+    glow = std::isfinite(glow) ? std::clamp(glow, 0.f, 1.f) : 0.f;
+    if (glow <= 0 || !finite(hand.position) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0)
+        return;
+    // The fist: a little ahead of the glove's middle, toward the knuckles.
+    const Vec3 c = hand.position + hand.orientation.rotate({0, -.01f, -.06f});
+    const float distance = length(viewer - c);
+    if (!finite(c) || !(distance > .08f && distance < 5))
+        return;
+    const Vec3 view = (viewer - c) / distance;
+    Vec3 right = cross(Vec3{0, 1, 0}, view);
+    right = length(right) > .1f ? normalized(right) : perpendicular(view);
+    const Vec3 up = cross(view, right);
+    const float px = pixelAngle * distance;
+    const float t = std::isfinite(seconds) ? seconds : 0.f;
+    // Charged, it breathes.
+    const float breath = glow >= 1 ? .85f + .15f * std::sin(t * 9.f) : glow;
+    softArc(out, c, right, up, 0, .055f * (.6f + .4f * glow), 0, 2 * pi, venomGold, .22f * breath, .05f, 32);
+    softArc(out, c, right, up, 0, .028f, 0, 2 * pi, venomCore, .28f * breath, .02f, 24);
+    // The crackle: new bolts every 1/30 s, more of them as it charges.
+    const int frame = static_cast<int>(std::floor(t * 30));
+    const int bolts = 2 + static_cast<int>(5 * glow);
+    for (int i = 0; i < bolts; ++i) {
+        const float seed = static_cast<float>(frame * 7 + i) * .618f;
+        const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
+        const float reach = (.04f + .07f * hash(seed, 3)) * (.5f + .5f * glow);
+        venomBolt(out, c + way * .03f, way, reach, view, px, breath * (.6f + .4f * hash(seed, 4)), seed, 3);
+    }
+}
+void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle) {
+    const float distance = length(viewer - burst.point);
+    if (!finite(burst.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
+        !std::isfinite(burst.age) || burst.age < 0 || burst.age > VenomBurstView::seconds ||
+        !(distance >= .12f && distance <= 60))
+        return;
+    const Vec3 view = (viewer - burst.point) / distance;
+    Vec3 right = cross(Vec3{0, 1, 0}, view);
+    right = length(right) > .1f ? normalized(right) : perpendicular(view);
+    const Vec3 up = cross(view, right);
+    const float px = pixelAngle * distance;
+    const float u = burst.age / VenomBurstView::seconds, fade = 1 - u * u;
+    // The flash, gone in a sixth of a second.
+    const float flash = std::max(0.f, 1 - burst.age / .16f);
+    if (flash > 0) {
+        softArc(out, burst.point, right, up, 0, .35f, 0, 2 * pi, venomGold, .45f * flash, .25f, 40);
+        softArc(out, burst.point, right, up, 0, .14f, 0, 2 * pi, venomCore, .7f * flash, .08f, 32);
+    }
+    // Bolts thrown out, longer as it goes, new ones every 1/30 s.
+    const int frame = static_cast<int>(burst.age * 30);
+    const float seedBase = burst.point.x * 3.1f + burst.point.y * 5.3f + burst.point.z * 7.7f;
+    constexpr int bolts = 9;
+    for (int i = 0; i < bolts; ++i) {
+        const float seed = seedBase + static_cast<float>(frame * 13 + i) * .618f;
+        const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
+        const float reach = (.2f + .35f * u) * (.6f + .4f * hash(seed, 3));
+        venomBolt(out, burst.point + way * .05f, way, reach, view, px, fade, seed);
+    }
+}
 } // namespace spidy

@@ -38,6 +38,7 @@
 #include "spidy/xr_layers.hpp"
 #include "spidy/offer_pointing.hpp"
 #include "spidy/menu_pointer.hpp"
+#include "spidy/venom_punch.hpp"
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -566,6 +567,47 @@ int main() {
         check(o.hand == 0 && o.press && o.tookTrigger[0] && !o.tookTrigger[1], "the left trigger takes it");
         o = p.update(false, s, hands, .01f);
         check(!o.pointing && o.release, "switched off, it lets go");
+    });
+    test("venom punch charges only on a full meter, and the click is no pull meanwhile", [] {
+        using namespace spidy::venom_punch;
+        check(full(100) && !full(99.75f) && !full(-1), "full is the whole meter");
+        Charge c;
+        auto o = c.update(.1f, true, false, true, false);
+        check(o.pull && !o.armed && o.glow == 0, "below full the click is the pull");
+        for (int i = 0; i < 3; ++i)
+            o = c.update(.1f, true, true, true, false);
+        check(!o.pull && !o.armed && o.glow > .5f && o.glow < 1, "full: it charges, and is no pull");
+        o = c.update(.1f, true, true, true, false);
+        check(o.armed && o.charged && o.glow == 1, "charged after chargeSeconds, once");
+        o = c.update(.1f, true, true, true, false);
+        check(o.armed && !o.charged, "the rumble once");
+        o = c.update(.5f, true, true, false, false);
+        check(o.armed && o.glow == 1, "let go, it stays charged");
+        for (int i = 0; i < 15; ++i)
+            o = c.update(.1f, true, true, false, false);
+        check(!o.armed && o.glow == 0, "and is gone after keepSeconds");
+        o = c.update(.1f, true, true, true, false);
+        o = c.update(.1f, true, true, false, false);
+        check(!o.armed && o.glow == 0, "let go early, nothing stays");
+        for (int i = 0; i < 4; ++i)
+            o = c.update(.1f, true, true, true, false);
+        check(o.armed, "charged again");
+        c.spent();
+        o = c.update(.1f, true, true, true, false);
+        check(!o.armed && o.glow == 0, "spent: a click still held charges nothing");
+        o = c.update(.1f, true, true, false, false);
+        for (int i = 0; i < 4; ++i)
+            o = c.update(.1f, true, true, true, true);
+        check(!o.armed && !o.pull, "both sticks are the pad layer's chord, no charge");
+        o = c.update(.1f, true, false, true, false);
+        check(o.pull, "the chord let go of the left stick still pulls below full");
+        for (int i = 0; i < 4; ++i)
+            o = c.update(.1f, false, true, true, false);
+        check(!o.armed, "nothing out of play");
+        for (int i = 0; i < 4; ++i)
+            c.update(.1f, true, true, true, false);
+        o = c.update(.1f, true, false, false, false);
+        check(!o.armed && o.glow == 0, "a meter no longer full drops the charge");
     });
     test("native view conversion preserves identity and meter scale", [] {
         const Mat4 original{1,0,0,0, 0,-1,0,0, 0,0,-1,0, 10,20,30,1};

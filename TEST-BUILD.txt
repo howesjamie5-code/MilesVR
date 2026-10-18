@@ -1,19 +1,33 @@
-MilesVR 0.1.7 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.8 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.6: THE VENOM RECORDING BUILD (watches every component now)
+What changed since 0.1.7: THE VENOM PUNCH
 --------------------------------------------------
-Same as 0.1.5, plus a recorder for Miles's venom meter (for the venom punch to
-come). It only reads the game's memory, and writes reports\venom-probe-*.csv.
+Miles's venom punch, as you designed it:
+- When the venom meter is FULL, the right hand rumbles once (the launcher's
+  window says "Venom full").
+- HOLD the RIGHT STICK'S CLICK: your right fist crackles with gold venom,
+  growing for about a third of a second; a strong rumble says it is charged.
+- PUNCH with your right fist: at an enemy in reach, or swing at the marked
+  enemy (the target ring) across the room and the web strike flies you in.
+  That blow is the venom punch: a flash of venom bolts where it lands, the
+  game's own venom damage and stun, and he is sent flying. The meter empties.
+- You can let go of the stick once it is charged: the charge stays for 1.5 s.
+- While the meter is full, the right stick's click does NOT do LB + RB (doors,
+  grates). Below full it does, as before. (Clicking both sticks is still the
+  pad layer, and charges nothing.)
 
-What to do (about 5 minutes):
-1. Start VR as usual and load a save where you can fight (street thugs are fine).
-2. Fight until the venom meter fills completely, the normal way.
-3. Then spend it by HEALING: push the right stick straight down and hold it
-   (in Miles Morales healing uses the venom meter).
-4. Do steps 2-3 two or three times, then close the game.
-5. Tell Claude roughly what happened (e.g. "filled it twice, used three venom
-   punches"), and keep the reports folder.
+The meter was found from your 0.1.7 recording (thank you): it filled 6.5 a
+hit and the two heals spent it. The recorder is gone from this build.
+
+What to try (about 5 minutes, the training sim is ideal):
+1. Fight until the venom meter is full. Do you feel the rumble?
+2. Hold the right stick's click. Does the fist glow and crackle, then rumble?
+3. Punch an enemy with the right fist. Does he fly, stunned, and does the
+   game's venom meter on screen empty?
+4. Try it from across the room too (swing at the marked enemy).
+5. Below full, does the right stick's click still pull a door or grate?
+Tell Claude what happened, and keep the reports folder.
 
 0.1.5: point and click in the game's menus:
 NEW: point and click in the game's menus. On any menu shown on the screen in
@@ -88,7 +102,7 @@ Known gaps in 0.1
   menu differently. Set options in the launcher instead (the session says
   "No SPIDY VR tab ... (9300)" - that is expected).
 - Combat, grabbing, gadgets, prompts and slow motion are ported but untested;
-  they come after swinging. Miles's venom powers are not in this build.
+  the venom punch is new in 0.1.8; Miles's other venom powers are not here yet.
 - The launcher's update check is off (Spidy's own releases are for Remastered).
 
 What to send back

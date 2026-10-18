@@ -38,7 +38,8 @@
 #include "spidy/xr_layers.hpp"
 #include "spidy/xr_session.hpp"
 #include "spidy/menu_pointer.hpp"
-#include "spidy/venom_probe.hpp"
+#include "spidy/game_venom.hpp"
+#include "spidy/venom_punch.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -488,7 +489,7 @@ BridgeCall startSwing{}, submitSwing{}, sampleSwing{}, stopSwing{}, retargetSwin
 // Each web's edges (game_swing::Bends): optional, without it a web round an
 // edge is drawn to that edge.
 BridgeCall sampleBends{};
-BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{};
+BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{}, venomCall{};
 BridgeCall startShooter{}, sampleShooter{}, stopShooter{}, wheelShooter{};
 // The game's own crawl under the player (game_warp, in the same module):
 // optional, for the session report.
@@ -716,6 +717,22 @@ DWORD WINAPI run(void*) {
         game_pad::PullPress pullPress;
         game_swing::AimData aimed{};
         uint64_t pullsBefore{};
+        // Miles's venom punch (venom_punch.hpp): the meter as this frame read
+        // it, the right stick's charge, the charges made (each a new number
+        // for the punch module), the venom blows landed by the previous frame,
+        // how bright the fist shows, and the bursts where the latest landed.
+        game_venom::Meter venomMeter;
+        venom_punch::Charge venomCharge;
+        uint32_t venomCharges{};
+        uint64_t venomBlowsBefore{}, venomSpentBefore{};
+        float venomGlow{};
+        bool venomFullBefore{};
+        struct VenomBurst {
+            VenomBurstView view;
+            int64_t since{};
+        };
+        std::array<VenomBurst, 2> venomBursts{};
+        size_t nextVenomBurst{};
         // The right thumbstick pushed down is the game's D-pad down (heal),
         // pushed up its LT + RT (the zip to a point, a vent).
         game_pad::StickPush stickPush;
@@ -1419,8 +1436,8 @@ DWORD WINAPI run(void*) {
                     // once: before that the player presses blind, and the title
                     // screen's QUIT GAME is two moves from the top.
                     headSeen = headSeen || validTrackedPose(frame.head);
-                    // MilesVR research: the venom state's recording (venom_probe.hpp).
-                    venom_probe::sample(config.base, player.record);
+                    // Miles's venom meter, for the venom punch (game_venom.hpp).
+                    venomMeter = game_venom::sample(config.base, player.record);
                     const auto mapping =
                         game_pad::mappingFor(viewing, headSeen, screen, padLayer.latched());
                     const bool inPlay =
@@ -2268,9 +2285,53 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(1, 1);
                             message(3, 0, "Web pull - the game's LB + RB, for as long as you hold both web buttons");
                         }
+                        // Miles's venom punch: with the meter full, the right stick's
+                        // click held charges the right fist, and is no LB + RB
+                        // (venom_punch.hpp); the punch module lands the charged blow.
+                        const bool venomFull = venom_punch::full(venomMeter.value);
+                        const auto venom =
+                            venomCharge.update(frame.seconds, steering && !layerOn && !calibrationInput, venomFull,
+                                               frame.hands[1].stickClick, frame.hands[0].stickClick);
+                        if (venomFull && !venomFullBefore && steering) {
+                            runtime.haptic(1, .4f, .08f);
+                            message(3, 0, "Venom full - hold the right stick's click to charge your right fist");
+                        }
+                        venomFullBefore = venomFull;
+                        if (venom.charged) {
+                            venomCharges = venomCharges + 1 ? venomCharges + 1 : 1;
+                            runtime.haptic(1, 1.f, .15f);
+                            runtime.haptic(0, .3f, .05f);
+                            message(3, 0, "Venom charged - punch the marked enemy with your right fist");
+                        } else if (venom.glow > 0 && !venom.armed) {
+                            runtime.haptic(1, .1f + .35f * venom.glow);
+                        }
+                        venomGlow = venom.glow;
+                        if (punchStarted && venomCall) {
+                            game_punch::Venom exchange;
+                            exchange.charge = venom.armed ? venomCharges : 0;
+                            exchange.meter = venomMeter.address;
+                            if (!venomCall(&exchange)) {
+                                venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
+                                if (exchange.blows > venomBlowsBefore) {
+                                    venomCharge.spent();
+                                    venomGlow = 0;
+                                    runtime.haptic(0, 1.f, .3f);
+                                    runtime.haptic(1, 1.f, .35f);
+                                    if (finite(exchange.lastPoint)) {
+                                        auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
+                                        burst.view = {exchange.lastPoint, 0};
+                                        burst.since = frame.predictedDisplayTime;
+                                    }
+                                    message(3, 0, exchange.spent > venomSpentBefore
+                                                      ? "Venom punch!"
+                                                      : "Venom punch! (the meter could not be emptied)");
+                                }
+                                venomBlowsBefore = exchange.blows;
+                                venomSpentBefore = exchange.spent;
+                            }
+                        }
                         const bool pulled =
-                            pullPress.update(frame.seconds, reaching, frame.hands[1].stickClick,
-                                             frame.hands[0].stickClick) ||
+                            pullPress.update(frame.seconds, reaching, venom.pull, frame.hands[0].stickClick) ||
                             (yanked && playing);
                         // A yank at a thing the game is prompting for sends what it
                         // asks (its LT + RT for a vent as readily as its LB + RB for a
@@ -2802,6 +2863,7 @@ DWORD WINAPI run(void*) {
                     saved.screenPose = screenPose;
                     saved.screenAspect = SpidyFlatAspect();
                     saved.slow = moments.view(slowMotion.view());
+                    saved.venomGlow = venomGlow;
                     if (gadgetWheel.open()) {
                         // The gadget wheel, from tracking space into this frame's
                         // world, with the gadgets in their places.
@@ -3126,6 +3188,22 @@ DWORD WINAPI run(void*) {
                             appendSlowMotionMeter(translucent, saved->slow, wrist, viewer, pixelAngle,
                                                   static_cast<float>(clock));
                         }
+                        // Miles's venom round the right fist, moved with the player
+                        // to this image as the glove is; and where venom punches landed.
+                        if (!saved->flatScreen && saved->venomGlow > 0 && rendered.swing.hands[1].tracked) {
+                            auto fist = rendered.hands[1];
+                            fist.position += travel;
+                            appendVenomFist(translucent, saved->venomGlow, fist, viewer, pixelAngle,
+                                            static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 3600.)));
+                        }
+                        if (!saved->flatScreen)
+                            for (const auto& burst : venomBursts) {
+                                if (!burst.since)
+                                    continue;
+                                auto view = burst.view;
+                                view.age = static_cast<float>(static_cast<double>(shown - burst.since) * 1e-9);
+                                appendVenomBurst(translucent, view, viewer, pixelAngle);
+                            }
                         // The bursts where the latest blows landed: fixed in the world.
                         if (!saved->flatScreen)
                             for (const auto& burst : bursts) {
@@ -3286,8 +3364,8 @@ DWORD WINAPI run(void*) {
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts (hold: step "
                                   "up to it), X opens the game menu (hold: the gadget wheel), the menu button "
                                   "pauses, the left stick's click slows time; a trigger pulled at your temple "
-                                  "scans; right stick: click is the game's LB + RB, down heals, up is its LT + RT "
-                                  "(vents)");
+                                  "scans; right stick: click is the game's LB + RB (venom full: hold it to charge "
+                                  "a venom punch), down heals, up is its LT + RT (vents)");
                 }
             }
             {
@@ -3323,7 +3401,7 @@ DWORD WINAPI run(void*) {
     if (padInstalled)
         game_pad::uninstall();
     game_menu::uninstall();
-    venom_probe::stop();
+    game_venom::reset();
     // The game's own time back, and no blow still sounding. The ticket's
     // guard stays for as long as the game runs: it is what keeps a quit to
     // the main menu after VR from closing the game.
@@ -3437,6 +3515,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
     stopPunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchStop"));
     // Optional: an older ray module has no web strike, and a punch only its short pulse.
     sampleStrike = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyStrikeSample"));
+    // Optional: an older ray module has no venom punch.
+    venomCall = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyVenom"));
     swingSettings = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSettings"));
     // Optional: an older ray module has no web shooter.
     startShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterStart"));
