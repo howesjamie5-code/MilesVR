@@ -20,7 +20,10 @@ namespace {
 // candidate slots (0x18 each from +0x48, the offer's handle at +0x14);
 // Offer::IsAvailableTo; VentOffer's own entry check (its vtable +0x128).
 constexpr uintptr_t updateRva = 0x9e1320, availableRva = 0x237c980, ventCheckRva = 0x817d40;
-constexpr uintptr_t maskOffset = 0x1c8, slotsOffset = 0x48, slotBytes = 0x18, slotHandle = 0x14;
+// MilesVR: the mask is +1d0 in MilesMorales.exe (the gather, 9df330, reads it there; Spider-Man.exe's
+// 855460 at +1c8). Miles Morales put a pointer at +1c8: writing the mask there, as 0.1.3 did on a
+// wall, broke it, and the update (9e1a20) crashed reading through it.
+constexpr uintptr_t maskOffset = 0x1d0, slotsOffset = 0x48, slotBytes = 0x18, slotHandle = 0x14;
 // The handle of the offer it picked (SetBest, 8571c0, writes it).
 constexpr uintptr_t bestOffset = 0x1ac;
 // An offer: its own handle (+0x14), its kind (+0xa8), whether it is on

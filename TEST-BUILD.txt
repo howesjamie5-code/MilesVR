@@ -1,8 +1,18 @@
-MilesVR 0.1.3 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.4 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.2
+What changed since 0.1.3
 ------------------------
+0.1.3 played in VR, swinging included (73 webs and 48 zips in the first
+session), then crashed after about nine minutes. The cause: on a wall, Spidy
+gives the game's "interaction offers" (vents, doors) a crawl mask, and Miles
+Morales keeps that mask 8 bytes further on - where Remastered had the mask,
+Miles Morales has a pointer. Spidy overwrote it, and the game crashed reading
+through it the next time it looked for something to interact with. Fixed, and
+every place Spidy writes into the game's memory has now been checked against
+Miles Morales.
+
+Before that, 0.1.3 fixed the missing eye images of 0.1.2:
 0.1.2 no longer crashed: the menus showed in the headset and VR took over the
 camera, then stopped with "No native eye images reached OpenXR within 3
 seconds" (code 1). Miles Morales keeps the eye's render job 16 bytes further
