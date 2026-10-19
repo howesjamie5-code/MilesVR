@@ -39,6 +39,7 @@
 #include "spidy/xr_session.hpp"
 #include "spidy/menu_pointer.hpp"
 #include "spidy/game_venom.hpp"
+#include "spidy/game_venom_events.hpp"
 #include "spidy/venom_punch.hpp"
 #include <algorithm>
 #include <atomic>
@@ -693,7 +694,7 @@ DWORD WINAPI run(void*) {
         // The game's request for a Steam ticket, on its way back to the main
         // menu, closed every VR session that quit to it (game_steam). The
         // guard goes in once the game holds its Steam interface.
-        bool steamGuarded{}, steamWarned{};
+        bool steamGuarded{}, steamWarned{}, venomEventsWatched{};
         uint64_t steamRetryMs{};
         // Slow motion slows the game's own time (game_time).
         const uint32_t timeCode = game_time::install(config.base);
@@ -1218,6 +1219,9 @@ DWORD WINAPI run(void*) {
                     message(3, 0, text.c_str());
                 }
             }
+            // The game's venom bar events, for the report (game_venom_events.hpp).
+            if (!venomEventsWatched)
+                venomEventsWatched = true, game_venom_events::install(config.base);
             if (!padInstalled && GetTickCount64() >= padRetryMs) {
                 padInstalled = !game_pad::install();
                 padRetryMs = GetTickCount64() + 1000;
@@ -1467,6 +1471,7 @@ DWORD WINAPI run(void*) {
                     headSeen = headSeen || validTrackedPose(frame.head);
                     // Miles's venom meter, for the venom punch (game_venom.hpp).
                     venomMeter = game_venom::sample(config.base, player.record);
+                    game_venom_events::meter(venomMeter.value);
                     const auto mapping =
                         game_pad::mappingFor(viewing, headSeen, screen, padLayer.latched());
                     const bool inPlay =

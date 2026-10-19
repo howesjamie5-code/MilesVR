@@ -21,7 +21,7 @@ from run_game_vr import (snapshot as xr_snapshot, accepted as accepted_xr, timin
                          ray_traced_view, RAY_TRACING_OFF, ASPECT_RATIO_AUTO, other_mods, real_vr_refusal,
                          other_mods_warning,
                          demand_name, reachable_in_play, prompts_line, prompt_snapshot,
-                         controller_buttons)
+                         controller_buttons, venom_events_snapshot)
 from probe_collision import snapshot as collision_snapshot
 from probe_movement import snapshot as movement_snapshot
 from probe_native_motion import snapshot as motion_snapshot
@@ -41,6 +41,24 @@ class Reader:
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_venom_events_decode_each_event_s_stacks_and_reject_torn_reads(self):
+        raw = bytearray(1184)
+        struct.pack_into('<6IQ', raw, 0, 0x53564e45, 1, 1184, 1, 0, 0, 4)
+        # Two "venom used" from one stack of the game's (its third frame in another module), at a full meter.
+        used = 32 + 2*384
+        struct.pack_into('<QfII', raw, used, 2, 15.25, 1, 0)
+        struct.pack_into('<12I', raw, used+24, 0x17a6c10, 0x1d85ff1, 1, *([0]*9))
+        struct.pack_into('<Iff', raw, used+24+48, 2, 100, 41.75)
+        result = venom_events_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
+        self.assertEqual((result['installed'], result['status']), (True, 0))
+        self.assertEqual(result['fill'], dict(events=0, meter_last=0, unlisted=0, stacks=[]))
+        self.assertEqual(result['used'], dict(events=2, meter_last=15.25, unlisted=0, stacks=[
+            dict(times=2, meter_first=100, meter_last=41.75, frames=['0x17a6c10', '0x1d85ff1', '0x1'])]))
+        torn = bytearray(raw)
+        struct.pack_into('<Q', torn, 24, 5)
+        self.assertEqual(venom_events_snapshot(Reader(*([torn, struct.pack('<Q', 5)]*8)), 0), None)
+        self.assertIsNone(venom_events_snapshot(Reader(bytes(1184)), 0))
+
     def test_appearance_decodes_each_eye_and_rejects_torn_reads(self):
         raw = bytearray(328)
         struct.pack_into('<4I6Q', raw, 0, 0x53415044, 5, 328, 1, 6, 11, 12, 21, 22, 0x123456789)

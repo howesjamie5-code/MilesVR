@@ -1,5 +1,21 @@
-MilesVR 0.1.16 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.17 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.16: WATCHING THE VENOM BAR (a recording build)
+--------------------------------------------------
+Your 0.1.16 test: the venom punch works, and after a restart too, but the
+venom bar on the HUD stays full after the punch, while the game acts on the
+empty meter. The bar does not show the meter by itself: the game tells it
+"venom gained", "venom full" and "venom used" when it changes the meter, and
+the mod's venom punch changes the meter without telling it.
+This build changes nothing you play. It records where in the game those
+messages come from, so the next build can send "venom used" the same way.
+
+What to try (a few minutes is enough):
+1. Get the meter full and HEAL once (the game's heal uses venom).
+2. Land a few hits, and if you can, use one of the game's own venom attacks.
+3. Do one venom punch as before.
+4. Close the game and keep the reports folder.
 
 What changed since 0.1.15: THE VENOM METER AFTER A RESTART, AND A CRASH
 --------------------------------------------------

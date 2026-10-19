@@ -1251,6 +1251,35 @@ def steam_snapshot(game, address):
                 last_identity=hex(identity))
 
 
+VENOM_EVENTS = ('fill', 'max_fill', 'used')
+
+
+def venom_events_snapshot(game, address):
+    """The game's venom bar events (game_venom_events.hpp): whether the hooks are in, and for each event how many
+    came, the meter at the latest, and up to six call stacks the game made it from (offsets in its image; 1: a frame
+    in another module), each with its count and the meter at its first and latest."""
+    for _ in range(8):
+        raw = game.read(address, 1184)
+        if len(raw) != 1184 or struct.unpack_from('<3I', raw) != (0x53564e45, 1, 1184):
+            return None
+        if struct.unpack_from('<Q', raw, 24)[0] & 1 or raw[24:32] != game.read(address+24, 8):
+            continue
+        installed, status = struct.unpack_from('<2I', raw, 12)
+        result = dict(installed=bool(installed), status=status)
+        for i, name in enumerate(VENOM_EVENTS):
+            o = 32 + i*384
+            events, meter_last, stacks, unlisted = struct.unpack_from('<QfII', raw, o)
+            listed = []
+            for s in range(min(stacks, 6)):
+                frames = struct.unpack_from('<12I', raw, o+24+s*60)
+                times, first, last = struct.unpack_from('<Iff', raw, o+24+s*60+48)
+                listed.append(dict(times=times, meter_first=round(first, 2), meter_last=round(last, 2),
+                                   frames=[hex(f) for f in frames if f]))
+            result[name] = dict(events=events, meter_last=round(meter_last, 2), unlisted=unlisted, stacks=listed)
+        return result
+    return None
+
+
 SLOW_MOTION_COUNTS = ('starts', 'stops', 'refused', 'emptied', 'interrupted')
 SLOW_MOMENTS = ('blow', 'called_blow', 'air_pull', 'perfect_dodge')
 
@@ -1744,7 +1773,7 @@ def session(a, startup):
                                            'SpidyGpuData', 'SpidyXrTimingData', 'SpidyAppearanceData',
                                            'SpidyStereoFrames', 'SpidyXrSnapshot', 'SpidyStereoData',
                                            'SpidyBodyData', 'SpidySlowMotionData', 'SpidyHudData',
-                                           'SpidySteamData', 'SpidyPromptData'))
+                                           'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData'))
         saved = vr_display.Registry().read(('ScreenSpaceReflections', 'RTReflections'))
         reflections, reflections_line = eye_reflections(saved.get('ScreenSpaceReflections'), a.no_eye_reflections,
                                                         saved.get('RTReflections', 0))
@@ -1788,7 +1817,7 @@ def session(a, startup):
         punch_samples = deque(maxlen=2000)
         strikes, strike_samples = None, deque(maxlen=2000)
         # Read while the game runs: a session that ends with the game has nothing to read them from.
-        ropes = steam = None
+        ropes = steam = venom_events = None
         # The web shooter: the latest, and a sample when a shot is asked for, fired or dropped.
         shooter = None
         shooter_samples = deque(maxlen=2000)
@@ -1853,7 +1882,7 @@ def session(a, startup):
                         swing_samples=list(swing_samples), motion_samples=list(motion_samples),
                         grab_samples=list(grab_samples), body=body, punch=punch,
                         punch_samples=list(punch_samples), strikes=strikes, strike_samples=list(strike_samples),
-                        ropes=ropes, steam_guard=steam,
+                        ropes=ropes, steam_guard=steam, venom_events=venom_events,
                         shooter=shooter, shooter_samples=list(shooter_samples),
                         slow_motion=slow_motion, slow_motion_samples=list(slow_motion_samples), hud=hud_last,
                         prompts=prompt_section(list(samples)),
@@ -1917,6 +1946,7 @@ def session(a, startup):
                         punch = landed
                     ropes = rope_snapshot(game, rays['SpidyRopeData']) or ropes
                     steam = steam_snapshot(game, xr['SpidySteamData']) or steam
+                    venom_events = venom_events_snapshot(game, xr['SpidyVenomEventData']) or venom_events
                     fight = strike_snapshot(game, rays['SpidyStrikeData'])
                     if fight:
                         # One row per web strike opened or ended and per blow landed.
@@ -2096,6 +2126,7 @@ def session(a, startup):
             strikes=strike_snapshot(game, rays['SpidyStrikeData']) or strikes, strike_samples=list(strike_samples),
             ropes=rope_snapshot(game, rays['SpidyRopeData']) or ropes,
             steam_guard=steam_snapshot(game, xr['SpidySteamData']) or steam,
+            venom_events=venom_events_snapshot(game, xr['SpidyVenomEventData']) or venom_events,
             shooter=shooter_snapshot(game, rays['SpidyShooterData']) or shooter,
             shooter_samples=list(shooter_samples),
             slow_motion=slow_motion_snapshot(game, xr['SpidySlowMotionData']) or slow_motion,
