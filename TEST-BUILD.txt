@@ -1,5 +1,18 @@
-MilesVR 0.1.48 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.49 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.48: WEB BALLS OFF THE SWING BUTTON
+--------------------------------------------------
+The grip's tap web ball (0.1.42-0.1.48) interfered with swinging in a
+fight and with camouflage: a quick web counted as a tap and fired a web
+ball. So the web button is your webs and swinging alone again.
+With your settings (Web button: Grip, Venom button: Trigger):
+- Grip: webs and swinging only, on both hands.
+- Trigger, no web: a web ball, the moment you pull it (as originally).
+- Trigger, web attached: reel in.
+- Venom full, right trigger: TAP for a web ball, HOLD to charge.
+The other way round (Web button: Trigger, Venom button: Grip) swaps the
+grip and the trigger. Your other hand works as normal.
 
 What changed since 0.1.47: WEB BALLS ONLY FROM A TAP OF THE WEB BUTTON
 --------------------------------------------------

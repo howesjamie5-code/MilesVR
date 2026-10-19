@@ -68,7 +68,7 @@ The launcher's **Controls** tab lists every control. The basics:
 | Do this | With |
 |---|---|
 | Shoot a web, swing on it | Squeeze a **grip**; let go to release |
-| Web ball / reel in | **Tap the grip** for a web ball; **trigger** reels with a web attached |
+| Reel in / web ball | **Trigger** (with a web attached it reels, without one it shoots a web ball) |
 | Zip | Pull your hand sharply away from the web's anchor |
 | Punch | Throw a fast fist at an enemy; at one up to 10 m away you fly in and strike |
 | Walk, run / jump / dodge | **Left stick** / **A** / **B** |
@@ -86,10 +86,10 @@ The venom hand (the right one, unless you set VENOM HAND to LEFT) has a **web bu
 **venom button**, always opposite buttons (launcher Play tab, or WEB BUTTON / VENOM BUTTON in the
 game's MILES VR settings; change one and the other switches):
 
-| Web button | Venom button | Web button does, always (both hands) | Venom button does |
+| Web button | Venom button | Web button does | Venom button does |
 |---|---|---|---|
-| **Grip** (default) | **Trigger** | Tap: web ball. Hold: web-swing | Reels with a web attached; with a bar full, hold to charge |
-| **Trigger** | **Grip** | Tap: web ball. Hold: web-swing | Reels with a web attached; with a bar full, hold to charge |
+| **Grip** (default) | **Trigger** | Webs and swinging, always | Web balls; reels with a web attached; with a bar full, tap: web ball, hold: charge |
+| **Trigger** | **Grip** | Webs and swinging, always | Web balls; reels with a web attached; with a bar full, tap: web ball, hold: charge |
 
 With a web attached, the venom button reels in. Hold the venom button until the fist glows and the controller buzzes, then:
 

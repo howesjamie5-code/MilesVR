@@ -708,49 +708,36 @@ int main() {
         d.cancel();
         check(!d.active() && !d.step(.01f, {}, true).blast, "cancelled: nothing");
     });
-    test("venom hand's buttons: the venom button charges, the other shoots webs, a tap of it a web ball", [] {
+    test("venom hand's buttons: the web button webs alone; the venom button taps a web ball, holds the charge", [] {
         using spidy::venom_punch::VenomButtons;
         const float dt = 1.f / 90;
         VenomButtons b;
-        // The other button held: a web at once, and on as long as it is held; no web ball after.
+        // The web button: a web, held or tapped, and never a web ball.
         auto o = b.update(dt, 0, 1, false);
-        check(o.web == 1 && o.reel == 0 && o.charge == 0, "held: the web at once");
-        for (int i = 0; i < 40; ++i)
-            o = b.update(dt, 0, 1, true);
-        check(o.web == 1, "held: the web stays");
-        for (int i = 0; i < 40; ++i)
-            check(b.update(dt, 0, 0, i < 2).reel == 0, "a hold let go shot a web ball");
-        check(b.taps() == 0, "a hold is no tap");
-        // A tap: its web, let go, then the web ball once the web has gone.
-        b.update(dt, 0, 1, false);
-        for (int i = 0; i < 5; ++i)
+        check(o.web == 1 && o.reel == 0 && o.charge == 0, "the web button: a web");
+        for (int i = 0; i < 3; ++i)
             b.update(dt, 0, 1, true);
-        o = b.update(dt, 0, 0, true);
-        check(o.web == 0 && o.reel == 0 && b.taps() == 1, "the tap let go: its web first");
+        for (int i = 0; i < 20; ++i)
+            check(b.update(dt, 0, 0, i < 2).reel == 0, "a quick web shot a web ball");
+        // The venom button tapped: a web ball as it is let go.
+        o = b.update(dt, 1, 0, false);
+        check(o.charge == 1 && o.reel == 0, "down: the charge hears it");
+        for (int i = 0; i < 10; ++i)
+            b.update(dt, 1, 0, false);
         o = b.update(dt, 0, 0, false);
-        int pressed{};
+        check(o.reel == 1 && b.taps() == 1, "a tap let go: a web ball");
+        int pressed = 1;
         for (int i = 0; i < 20; ++i)
             pressed += b.update(dt, 0, 0, false).reel > 0;
-        check(pressed >= 8 && pressed <= 10, "then the web ball, a tenth of a second's press");
-        // The venom button: the charge, or the reel while a web holds.
-        o = b.update(dt, 1, 0, false);
-        check(o.charge == 1 && o.reel == 0 && o.web == 0, "the venom button charges");
+        check(pressed >= 8 && pressed <= 10, "the web ball's press lasts a tenth of a second");
+        // Held: the charge, no web ball after.
+        for (int i = 0; i < 45; ++i)
+            check(b.update(dt, 1, 0, false).reel == 0, "a hold sent a web ball");
+        check(b.update(dt, 0, 0, false).reel == 0 && b.taps() == 1, "a hold let go: no web ball");
+        // A web held: the venom button reels, and charges nothing.
         o = b.update(dt, .8f, 1, true);
-        check(o.charge == 0 && o.reel == .8f && o.web == 1, "with a web, it reels");
+        check(o.reel == .8f && o.charge == 0 && o.web == 1, "with a web, it reels");
         check(VenomButtons::tapSeconds < spidy::venom_punch::Charge::chargeSeconds, "a tap never charges");
-        // Not full (VENOM BUTTON on the other button): the venom button is the swing's own, the tap still a web ball.
-        VenomButtons n;
-        o = n.update(dt, .7f, 0, false, false);
-        check(o.reel == 0 && o.charge == 0, "not full, no web: the venom button shoots no web ball");
-        o = n.update(dt, .7f, 0, true, false);
-        check(o.reel == .7f && o.charge == 0, "not full, a web held: it reels");
-        n.update(dt, 0, 0, false, false);
-        n.update(dt, 0, 1, false, false);
-        for (int i = 0; i < 5; ++i)
-            n.update(dt, 0, 1, true, false);
-        n.update(dt, 0, 0, true, false);
-        n.update(dt, 0, 0, false, false);
-        check(n.update(dt, 0, 0, false, false).reel == 1 && n.taps() == 1, "not full: a tap of the other a web ball too");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;

@@ -186,73 +186,57 @@ class Charge {
     bool held_{}, spent_{};
 };
 
-// The venom hand's two buttons while the venom has it (MilesVR 0.1.42, the
-// user, October 20: "i want it so web balls can be shot no matter the
-// setting ... the tap of grip and then hold for swinging and then other way
-// round for trigger"). The venom button (VENOM BUTTON) holds the charge, and
-// reels while the hand's web holds. The other button is the hand's webs:
-// held it shoots and holds a web at once, as the web button does; a tap (let
-// go within tapSeconds) is a web ball, a press of pulseSeconds on the swing's
-// reel button once the tap's own web has let go (a web ball is that button
-// on a hand without a web), and no later than pendingSeconds.
+// The venom hand's buttons while the venom has it (MilesVR 0.1.49). The web
+// button is the hand's webs alone: 0.1.42-0.1.48 made its tap a web ball, and
+// the user, October 20: "seperate web balls from the web swinging button ...
+// it keeps interfering with swinging while in combat and interferes with camo"
+// (a quick web in a fight was a tap, and the web ball an attack). The venom
+// button shares: while the hand's web holds it reels; otherwise a tap (let go
+// within tapSeconds) is a web ball, a press of pulseSeconds as it is let go,
+// and a hold charges the fist. Until the venom has the hand nothing of this
+// runs: the venom button is the swing's own, a web ball the moment it is
+// pulled.
 class VenomButtons {
   public:
-    static constexpr float tapSeconds = .25f, pulseSeconds = .1f, pendingSeconds = .3f;
+    static constexpr float tapSeconds = .25f, pulseSeconds = .1f;
     static_assert(tapSeconds < Charge::chargeSeconds);
     struct Out {
         float web{};    // the swing's web button: shoot and hold a web
         float reel{};   // the swing's other: reel a held web, else a web ball
         float charge{}; // the venom charge's button (Charge::update's grip)
     };
-    // seconds: since the previous update. venom and other: the buttons, 0..1.
-    // webHeld: the hand's web holds (the swing's, a step behind). full: the
-    // venom has the hand; not full (MilesVR 0.1.46, VENOM BUTTON on the other
-    // button: the user wants the grip's tap a web ball "always ... not just
-    // when venom is full") the venom button is the swing's own, reel and web
-    // balls, and charges nothing, while the other keeps its tap.
-    Out update(float seconds, float venom, float other, bool webHeld, bool full = true) {
+    // seconds: since the previous update. venom and other: the venom button
+    // and the web button, 0..1. webHeld: the hand's web holds.
+    Out update(float seconds, float venom, float other, bool webHeld) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
         const auto unit = [](float v) { return std::isfinite(v) ? std::clamp(v, 0.f, 1.f) : 0.f; };
-        const float v = unit(venom), o = unit(other);
-        const bool down = o >= (held_ ? gripOff : gripOn);
-        if (down) {
+        const float v = unit(venom);
+        Out out;
+        out.web = unit(other);
+        if (webHeld) {
+            reset();
+            out.reel = v;
+            return out;
+        }
+        const bool down = v >= (held_ ? gripOff : gripOn);
+        if (down)
             time_ += dt;
-            pending_ = -1;
-        } else {
+        else {
             if (held_ && time_ < tapSeconds) {
-                pending_ = 0;
+                pulse_ = pulseSeconds;
                 ++taps_;
             }
             time_ = 0;
         }
         held_ = down;
-        Out out;
-        out.web = o;
-        // The venom button reels a held web; with no web it shoots nothing (MilesVR 0.1.48, the user: "make
-        // web balls only on grip tap"), and once the venom has the hand it charges.
-        if (webHeld)
-            out.reel = v;
-        else if (full)
-            out.charge = v;
-        if (pulse_ > 0) {
-            out.reel = 1;
-            pulse_ = std::max(0.f, pulse_ - dt);
-        } else if (pending_ >= 0) {
-            // The tap's web let go: the web ball. Still held after
-            // pendingSeconds (it caught and the swing kept it): none.
-            if (!webHeld) {
-                pulse_ = pulseSeconds;
-                pending_ = -1;
-            } else if ((pending_ += dt) > pendingSeconds) {
-                pending_ = -1;
-            }
-        }
+        out.charge = down ? v : 0.f;
+        out.reel = pulse_ > 0 ? 1.f : 0.f;
+        pulse_ = std::max(0.f, pulse_ - dt);
         return out;
     }
     void reset() {
         held_ = false;
         time_ = pulse_ = 0;
-        pending_ = -1;
     }
     // Web balls the taps sent.
     uint32_t taps() const {
@@ -261,7 +245,7 @@ class VenomButtons {
 
   private:
     bool held_{};
-    float time_{}, pulse_{}, pending_ = -1;
+    float time_{}, pulse_{};
     uint32_t taps_{};
 };
 

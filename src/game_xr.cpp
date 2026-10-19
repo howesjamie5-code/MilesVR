@@ -797,7 +797,7 @@ DWORD WINAPI run(void*) {
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
         // The venom hand's buttons while the venom has it: the venom button charges (and reels a held
         // web), the other shoots webs, a tap of it a web ball (venom_punch::VenomButtons).
-        venom_punch::VenomButtons venomButtons, offButtons;
+        venom_punch::VenomButtons venomButtons;
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -2032,33 +2032,16 @@ DWORD WINAPI run(void*) {
                         venomHandOn = venomHand && !venomKeepWeb;
                         venomGrip = 0;
                         if (venomHandOn) {
-                            // The venom button charges; the other one is the hand's webs.
+                            // The venom button charges, and its tap is the web ball; the other one is the
+                            // hand's webs alone.
                             const float venomValue = venomButton, other = venomOnWeb ? fist.trigger : fist.grip;
                             const auto split = venomButtons.update(frame.seconds, venomValue, other,
                                                                    swingState.webs[venomSide].attached);
                             venomGrip = split.charge;
                             fist.grip = split.web;
                             fist.trigger = split.reel;
-                        } else if (!venomOnWeb && immersive && !calibrationInput && !padLayer.latched()) {
-                            // VENOM BUTTON on the other button: its grip's tap is a web ball always,
-                            // the venom button the swing's own until the venom has the hand.
-                            const auto split = venomButtons.update(frame.seconds, venomButton, fist.grip,
-                                                                   swingState.webs[venomSide].attached, false);
-                            fist.grip = split.web;
-                            fist.trigger = split.reel;
                         } else {
                             venomButtons.reset();
-                        }
-                        // The other hand the same way, with no venom (0.1.47, the user: the web button's tap
-                        // a web ball "always"): a tap of its web button a web ball, held a web.
-                        auto& off = motion.swing.hands[1 - venomSide];
-                        if (immersive && !calibrationInput && !padLayer.latched()) {
-                            const auto split = offButtons.update(frame.seconds, off.trigger, off.grip,
-                                                                 swingState.webs[1 - venomSide].attached, false);
-                            off.grip = split.web;
-                            off.trigger = split.reel;
-                        } else {
-                            offButtons.reset();
                         }
                     }
                     // A thumbstick's click, but not the venom hand's that let the venom go.
