@@ -104,11 +104,11 @@ static_assert(sizeof(Strikes) == 328);
 // to the game as a venom blow - DamageType kVenom with the venom status, the
 // blow of a finisher and his flight - and the meter is emptied.
 struct Venom {
-    uint32_t magic = 0x5350564e, version = 1, bytes = sizeof(Venom);
+    uint32_t magic = 0x5350564e, version = 2, bytes = sizeof(Venom);
     // In: the charge (a new number each time the fist is charged; 0: none).
     // A charge lands one blow.
     uint32_t charge{};
-    // In: the meter's address (HeroMeleeManager + venom_punch::meterOffset;
+    // In: the meter's address (in the component game_venom found it in;
     // 0: unknown, and the blow spends nothing).
     uint64_t meter{};
     // Out: venom blows landed, of them those that emptied the meter, and the
@@ -120,8 +120,11 @@ struct Venom {
     // In: the venom fist, 0 the left and 1 the right (version 1 had a zero
     // here: the right's, as then).
     uint32_t hand = 1;
+    // In (version 2): the component the meter lies in and its vtable: each
+    // write checks it is still there, and nothing is written otherwise.
+    uint64_t holder{}, holderClass{};
 };
-static_assert(sizeof(Venom) == 64);
+static_assert(sizeof(Venom) == 80);
 // Starts the bot watch and the main-thread damage requests.
 uint32_t start(uintptr_t base);
 uint32_t stop();

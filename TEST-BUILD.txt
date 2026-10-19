@@ -1,5 +1,24 @@
-MilesVR 0.1.17 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.18 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.17: THE VENOM BAR, FIXED AT THE ROOT
+--------------------------------------------------
+You said the venom bar sometimes stays full after a venom punch and
+sometimes doesn't. 0.1.17's recording showed the bar does follow the meter
+by itself. The real problem was where the mod read the meter: Miles's melee
+data ends before the place the mod used. The meter lives in the next piece
+of the game's data after it - most of the time. When the game laid things out
+differently, the mod read and wrote the wrong spot: the punch "worked" for
+the mod while the game's own meter, and so the bar, stayed full. (That is
+also what crashed the game in 0.1.15.)
+Now the mod finds the game object that really holds the meter once, then
+always goes to that object directly, and only writes to it after checking it
+is still that object.
+
+What to try:
+1. Venom punch a few times: does the bar empty every time?
+2. Restart the challenge a couple of times and venom punch again.
+3. Close the game and keep the reports folder.
 
 What changed since 0.1.16: WATCHING THE VENOM BAR (a recording build)
 --------------------------------------------------

@@ -89,7 +89,7 @@ Strikes tally;
 // holds out and the meter's address, the charge a blow spent last, and what
 // has landed.
 std::atomic<uint32_t> venomCharge{}, venomHand{1};
-std::atomic<uint64_t> venomMeter{};
+std::atomic<uint64_t> venomMeter{}, venomHolder{}, venomHolderClass{};
 uint32_t venomUsed{};
 Venom venomOut;
 // A venom blow: a finisher's damage at least, times this, and his flight.
@@ -121,11 +121,13 @@ bool read(uintptr_t p, void* out, size_t n) {
         return false;
     }
 }
-// The meter set to `value`, if `meter` is still in the player's HeroMeleeManager.
+// The meter set to `value`, if the component it lies in (game_venom) is still there. 0.1.15 wrote
+// into whatever the game had put after the HeroMeleeManager and crashed it.
 bool writeMeter(uint64_t meter, float value) {
+    const uint64_t holder = venomHolder.load(), expected = venomHolderClass.load();
     uintptr_t vtable{};
-    if (!meter || !read(meter - venom_punch::meterOffset, &vtable, 8) ||
-        vtable != base + venom_punch::meleeManagerVtable)
+    if (!meter || !holder || meter <= holder || meter - holder >= 0x1000 || !read(holder, &vtable, 8) ||
+        vtable != expected)
         return false;
     __try {
         *reinterpret_cast<float*>(meter) = value;
@@ -688,6 +690,8 @@ Strikes game_punch::strikes() {
 Venom game_punch::venom(const Venom& in) {
     venomCharge = in.charge;
     venomMeter = in.meter;
+    venomHolder = in.holder;
+    venomHolderClass = in.holderClass;
     venomHand = in.hand ? 1u : 0u;
     AcquireSRWLockShared(&output);
     auto out = venomOut;

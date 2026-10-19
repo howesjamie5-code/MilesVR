@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 38, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 39, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -353,9 +353,13 @@ struct XrData {
     // written to (the only one, or its meter has moved by itself).
     uint32_t venomCandidates{};
     float venomOther = -1;
-    uint32_t venomWritable{}, venomSpare{};
+    uint32_t venomWritable{};
+    // Version 39: the class that holds the meter (its vtable, as an offset in
+    // the game's image; 0 until known), the meter's offset in it, and where
+    // the meter came from (game_venom::Meter::route).
+    uint32_t venomHolderVtable{}, venomHolderOffset{}, venomRoute{}, venomSpare{};
 };
-static_assert(sizeof(XrData) == 1200);
+static_assert(sizeof(XrData) == 1216);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -2375,6 +2379,8 @@ DWORD WINAPI run(void*) {
                             game_punch::Venom exchange;
                             exchange.charge = venom.armed ? venomCharges : 0;
                             exchange.meter = venomMeter.address;
+                            exchange.holder = venomMeter.holder;
+                            exchange.holderClass = venomMeter.holderClass;
                             exchange.hand = venomSide;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
@@ -2661,6 +2667,9 @@ DWORD WINAPI run(void*) {
                         d.venomCandidates = venomMeter.candidates;
                         d.venomOther = venomMeter.other;
                         d.venomWritable = venomMeter.address != 0;
+                        d.venomHolderVtable = venomMeter.holderVtable;
+                        d.venomHolderOffset = venomMeter.holderOffset;
+                        d.venomRoute = venomMeter.route;
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];
