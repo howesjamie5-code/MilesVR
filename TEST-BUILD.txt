@@ -1,5 +1,22 @@
-MilesVR 0.1.47 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.48 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.47: WEB BALLS ONLY FROM A TAP OF THE WEB BUTTON
+--------------------------------------------------
+Web balls (and a gadget picked on the wheel) now come only from a short
+tap of the web button, on both hands. The other button (the venom
+button) no longer shoots web balls: it reels in with a web attached, and
+on the venom hand it charges the venom once a bar is full.
+With your settings (Web button: Grip, Venom button: Trigger):
+- Grip: tap = web ball, hold = web-swing.
+- Trigger: reel in with a web attached; with venom full, hold the right
+  trigger to charge. With no web and no venom it does nothing.
+The other way round (Web button: Trigger, Venom button: Grip) swaps them.
+
+What to try:
+1. Tap a grip at an enemy: a web ball. Pull a trigger with no web:
+   nothing.
+2. Pick a gadget on the wheel (hold X): a tap of the grip fires it.
 
 What changed since 0.1.46: WEB BUTTON AND VENOM BUTTON ARE NEVER THE SAME
 --------------------------------------------------

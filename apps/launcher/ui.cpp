@@ -1160,8 +1160,8 @@ void App::optionsCard(ImVec2 size) {
             "If Web button is on Trigger and Venom button is on Grip, it is the other way round: tap the trigger to "
             "web up enemies and hold the trigger to web-swing, always, on both hands. With a venom bar full, hold "
             "the grip to charge your venom fist.",
-            "Until a venom bar is full, the venom button works as normal too: it shoots web balls, and with a web "
-            "attached it reels in. Web button and Venom button are always opposite buttons.",
+            "Web balls come only from a tap of the web button. The venom button reels in with a web attached, and "
+            "charges the venom once a bar is full. Web button and Venom button are always opposite buttons.",
         };
         const size_t chosen = o.venomTrigger ? 0 : 1;
         auto* draw = ImGui::GetWindowDrawList();
@@ -1542,8 +1542,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Y", "Interact with what you look at (doors, backpacks, any button the game asks for). Hold it to step "
                 "up to the thing",
            "The game would not take that from here - come closer to it and press again"},
-          {"X", "Game menu: map, suits, skills. Hold X: the gadget wheel; pick a gadget and the free hand's "
-                "trigger fires it"},
+          {"X", "Game menu: map, suits, skills. Hold X: the gadget wheel; pick a gadget and a tap of the web "
+                "button fires it"},
           {"Right stick left / right", "Turn"},
           {"Right stick down (hold)", "Heal: the game's D-pad down"},
           {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT"},
@@ -1557,10 +1557,11 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"WEBS",
          {{"Web button, hold", "Shoot a web where the hand points and swing; let go to release. The web button is "
                                "the grip unless you set Web button to Trigger"},
-          {"Web button, tap", "A web ball: web up an enemy"},
+          {"Web button, tap", "A web ball: web up an enemy (or your gadget, if you picked one on the wheel). The "
+                              "only way to shoot one"},
           {"Other button, web attached", "Reel in"},
-          {"Other button, no web", "A web ball too (on the venom hand, once a bar is full, it charges the venom "
-                                   "instead)"},
+          {"Other button, no web", "Nothing, until a venom bar is full: then, on the venom hand, hold it to charge "
+                                   "the venom"},
           {"Pull the hand sharply", "Zip toward the web's anchor"},
           {"Pull the hand in", "The web is a rope: you go where you pull it"},
           {"Other hand on the web, grip", "Take hold of the same web and climb it hand over hand"},
@@ -1619,7 +1620,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const std::string buttonsText = format(
         "Yours: Web button %s, Venom button %s (always opposite: change one on the Play tab or in the game's MILES "
         "VR settings and the other switches). Both hands: tap the %s for a web ball, hold it to web-swing. The "
-        "%s shoots web balls and reels as normal; once a bar is full, holding the %s %s charges the venom",
+        "%s only reels in with a web attached; once a bar is full, holding the %s %s charges the venom",
         vo.triggerWebs ? "TRIGGER" : "GRIP", vo.venomTrigger ? "TRIGGER" : "GRIP", webName, venomName, venomHand,
         venomName);
     struct Power {

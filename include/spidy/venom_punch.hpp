@@ -228,11 +228,12 @@ class VenomButtons {
         held_ = down;
         Out out;
         out.web = o;
-        if (webHeld || !full) {
+        // The venom button reels a held web; with no web it shoots nothing (MilesVR 0.1.48, the user: "make
+        // web balls only on grip tap"), and once the venom has the hand it charges.
+        if (webHeld)
             out.reel = v;
-        } else {
+        else if (full)
             out.charge = v;
-        }
         if (pulse_ > 0) {
             out.reel = 1;
             pulse_ = std::max(0.f, pulse_ - dt);

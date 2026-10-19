@@ -741,7 +741,10 @@ int main() {
         // Not full (VENOM BUTTON on the other button): the venom button is the swing's own, the tap still a web ball.
         VenomButtons n;
         o = n.update(dt, .7f, 0, false, false);
-        check(o.reel == .7f && o.charge == 0, "not full: the venom button reels and shoots web balls as ever");
+        check(o.reel == 0 && o.charge == 0, "not full, no web: the venom button shoots no web ball");
+        o = n.update(dt, .7f, 0, true, false);
+        check(o.reel == .7f && o.charge == 0, "not full, a web held: it reels");
+        n.update(dt, 0, 0, false, false);
         n.update(dt, 0, 1, false, false);
         for (int i = 0; i < 5; ++i)
             n.update(dt, 0, 1, true, false);
