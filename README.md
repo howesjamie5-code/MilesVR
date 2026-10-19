@@ -85,8 +85,9 @@ The launcher's **Controls** tab lists every control. The basics:
 With a venom bar full, the venom hand (the right one, unless you set VENOM HAND to LEFT) charges
 your fist with its **venom button**: the grip by default, and that hand shoots no webs while venom
 is full. Set **Venom button** to **Trigger** (launcher Play tab, or VENOM BUTTON in the game's
-MILES VR settings) to charge with the trigger instead and keep swinging on the grip. Hold the
-venom button until the fist glows and the controller buzzes, then:
+MILES VR settings) to charge with the trigger instead and keep swinging on the grip: a tap of
+that trigger still shoots a web ball, and with a web attached it still reels. Hold the venom
+button until the fist glows and the controller buzzes, then:
 
 | Venom power | How | Cost |
 |---|---|---|

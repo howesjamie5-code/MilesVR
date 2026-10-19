@@ -797,6 +797,8 @@ DWORD WINAPI run(void*) {
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
         // The venom on the hand's web button (VENOM BUTTON as WEB BUTTON): its webs are off meanwhile.
         bool venomWebsOff{};
+        // The venom on the hand's other button: a tap a web ball, a hold the charge, the reel while a web holds.
+        venom_punch::SharedButton venomShared;
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -2028,8 +2030,16 @@ DWORD WINAPI run(void*) {
                         venomHandOn = venomHand && !venomKeepWeb;
                         venomWebsOff = venomHandOn && venomOnWeb;
                         venomGrip = venomHandOn ? venomButton : 0.f;
-                        if (venomHandOn)
-                            takeVenomButton();
+                        if (venomHandOn && !venomOnWeb) {
+                            const auto shared = venomShared.update(frame.seconds, venomButton,
+                                                                   swingState.webs[venomSide].attached);
+                            venomGrip = shared.charge;
+                            venomButton = shared.button;
+                        } else {
+                            venomShared.reset();
+                            if (venomHandOn)
+                                takeVenomButton();
+                        }
                     }
                     // A thumbstick's click, but not the venom hand's that let the venom go.
                     const auto stickClick = [&](unsigned i) {

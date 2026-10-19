@@ -186,6 +186,60 @@ class Charge {
     bool held_{}, spent_{};
 };
 
+// The venom on the hand's other button (VENOM BUTTON not the web button,
+// MilesVR 0.1.41): that button is the reel's and the web balls' too, and the
+// user, October 20: with the venom on it "people cant web up enemies anymore".
+// So it shares: while the hand's web holds, the button reels as ever and
+// charges nothing; otherwise a tap (let go within tapSeconds) is a web ball,
+// sent as a press of pulseSeconds as it is let go, and a hold charges the
+// fist (Charge needs chargeSeconds, longer than a tap).
+class SharedButton {
+  public:
+    static constexpr float tapSeconds = .25f, pulseSeconds = .1f;
+    static_assert(tapSeconds < Charge::chargeSeconds);
+    struct Out {
+        float charge{}; // the venom charge's button (Charge::update's grip)
+        float button{}; // what the hand's button does as the swing's: reel, web ball
+    };
+    // seconds: since the previous update. value: the button, 0..1. reeling:
+    // the hand's web holds.
+    Out update(float seconds, float value, bool reeling) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        const float v = std::isfinite(value) ? std::clamp(value, 0.f, 1.f) : 0.f;
+        if (reeling) {
+            reset();
+            return {0, v};
+        }
+        const bool down = v >= (held_ ? gripOff : gripOn);
+        if (down)
+            time_ += dt;
+        else {
+            if (held_ && time_ < tapSeconds) {
+                pulse_ = pulseSeconds;
+                ++taps_;
+            }
+            time_ = 0;
+        }
+        held_ = down;
+        Out out{down ? v : 0.f, pulse_ > 0 ? 1.f : 0.f};
+        pulse_ = std::max(0.f, pulse_ - dt);
+        return out;
+    }
+    void reset() {
+        held_ = false;
+        time_ = pulse_ = 0;
+    }
+    // Web balls the taps sent.
+    uint32_t taps() const {
+        return taps_;
+    }
+
+  private:
+    bool held_{};
+    float time_{}, pulse_{};
+    uint32_t taps_{};
+};
+
 // The venom smash (MilesVR 0.1.20, the user's design, October 19): the
 // charged venom fist punched DOWN - in the air (no web holding him) Miles
 // drops to the ground and the smash goes off as he lands; standing, it goes

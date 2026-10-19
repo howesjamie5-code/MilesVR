@@ -1135,8 +1135,8 @@ void App::optionsCard(ImVec2 size) {
                o.venomLeftHand = left != 0;
            }, true);
     option("Venom button",
-           "The button that charges the venom fist. On the web button that hand's webs are off while venom is "
-           "full; on the other one the webs stay, and its reel and web balls go.",
+           "The button that charges the venom fist (hold it). On the web button that hand's webs are off while "
+           "venom is full; on the other one the webs stay, a tap still shoots a web ball and it still reels.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.venomTrigger ? 1 : 0;
@@ -1566,8 +1566,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                        "default) that hand shoots no webs or web balls; a web you hold as it fills stays until you "
                        "let go"},
         {"Venom Button", "Play tab > Venom button, or VENOM BUTTON in the game's MILES VR settings: GRIP (the "
-                         "default) or TRIGGER. Trigger keeps your webs on the grip while venom is full, and that "
-                         "hand's trigger charges the venom instead of reeling or shooting web balls"},
+                         "default) or TRIGGER. Trigger keeps your webs on the grip while venom is full: hold the "
+                         "trigger to charge, tap it for a web ball, and with a web attached it still reels"},
         {"Venom Charge", "Hold the venom button (the right grip by default): your fist glows and the controller "
                          "buzzes. Let go and the charge fades after a moment, so strike before it does"},
         {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "

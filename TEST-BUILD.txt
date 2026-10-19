@@ -1,5 +1,20 @@
-MilesVR 0.1.40 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.41 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.40: WEB BALLS WITH VENOM BUTTON: TRIGGER
+--------------------------------------------------
+With Venom button set to Trigger and venom full, that hand's trigger did
+only the venom: no web balls (no webbing up enemies) and no reeling. Now
+it shares:
+- HOLD the trigger: charges the venom fist (as before).
+- TAP the trigger: a web ball, as normal. It flies as you let go.
+- With that hand's web attached: the trigger reels in, as normal (and
+  does not charge the venom then).
+
+What to try:
+1. Venom button: Trigger, a bar full. Tap the right trigger at an enemy:
+   a web ball. Hold it: the fist charges; punch.
+2. Swing on the right grip and pull the right trigger: it reels.
 
 What changed since 0.1.39: VR STARTS WITH VENOM BUTTON: TRIGGER
 --------------------------------------------------
