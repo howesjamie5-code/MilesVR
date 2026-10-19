@@ -97,7 +97,9 @@ Venom venomOut;
 // The venom smash: the drop to the ground, then the blast. And the Mega
 // Venom Blast's double punch.
 venom_punch::SmashDrop smash;
-venom_punch::Spread spreadArms;
+// The Mega Venom Blast's requests (Venom::megaRequest), and the one answered.
+std::atomic<uint32_t> megaRequest{};
+uint32_t megaAnswered{};
 // Seconds since an enemy was in the fight (the headset's calm, the same way):
 // the Venom Jump goes off only in a fight.
 float sinceFight = 1e9f;
@@ -831,16 +833,14 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         strike.spent(e.hand);
         land(e, false);
     }
-    // The Mega Venom Blast: the venom fist charged and all three bars full,
-    // then both arms stretched out wide (venom_punch.hpp). It goes off where
-    // he is and takes the charge and all three bars.
+    // The Mega Venom Blast: all three bars full, both grips squeezed together
+    // (the headset asks: venom_punch::BothGrips). It goes off where he is and
+    // takes all three bars, and a charge if there is one.
     const int side = venomHand.load() ? 1 : 0;
-    {
-        const bool wide = hands[0].tracked && hands[1].tracked && !hands[0].busy && !hands[1].busy &&
-                          venom_punch::spread(hands[0].relative, hands[1].relative);
+    if (const uint32_t asked = megaRequest.load(); asked != megaAnswered) {
+        megaAnswered = asked;
         venom_punch::Bars bars;
-        if (spreadArms.update(seconds, wide) && venomArmed() && !smash.active() &&
-            strike.phase() != WebStrike::Phase::Flying && readBars(venomMeter.load(), bars) &&
+        if (!smash.active() && strike.phase() != WebStrike::Phase::Flying && readBars(venomMeter.load(), bars) &&
             venom_punch::megaReady(bars)) {
             if (strike.phase() == WebStrike::Phase::Hanging)
                 strike.cancel();
@@ -1102,6 +1102,7 @@ Venom game_punch::venom(const Venom& in) {
     venomHolder = in.holder;
     venomHolderClass = in.holderClass;
     venomHand = in.hand ? 1u : 0u;
+    megaRequest = in.megaRequest;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

@@ -798,6 +798,10 @@ DWORD WINAPI run(void*) {
         // The venom hand's buttons while the venom has it: the venom button charges (and reels a held
         // web), the other shoots webs, a tap of it a web ball (venom_punch::VenomButtons).
         venom_punch::VenomButtons venomButtons;
+        // The Mega Venom Blast: both grips together with three full bars.
+        venom_punch::BothGrips bothGrips;
+        uint32_t venomMegaRequests{};
+        bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -1907,6 +1911,20 @@ DWORD WINAPI run(void*) {
                         for (auto& hand : motion.swing.hands)
                             hand.trigger = hand.grip = 0;
                     }
+                    // The Mega Venom Blast (0.1.56): all three bars full, both grips
+                    // squeezed together. A grip alone waits a moment for the other
+                    // before the swing sees it, so the blast's squeeze shoots no webs.
+                    {
+                        const bool ready = venom_punch::megaFull(venomMeter.value) && immersive &&
+                                           !calibrationInput && !padLayer.latched();
+                        const auto both = bothGrips.update(frame.seconds, ready, frame.hands[0].squeeze,
+                                                           frame.hands[1].squeeze);
+                        if (both.fire)
+                            venomMegaRequests = venomMegaRequests + 1 ? venomMegaRequests + 1 : 1;
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (both.hold[i])
+                                (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
+                    }
                     // Miles's venom punch: with the meter full the venom hand's
                     // controller (the launcher's Venom punch hand) shoots no web nor
                     // web ball; its web button charges that fist (venom_punch.hpp). A
@@ -2824,6 +2842,15 @@ DWORD WINAPI run(void*) {
                                       venomName, values.venomTrigger ? "trigger" : "grip");
                             message(3, 0, text);
                         }
+                        // All three bars full: the Mega Venom Blast is ready.
+                        const bool megaFull = venom_punch::megaFull(venomMeter.value);
+                        if (megaFull && !venomMegaFullBefore && steering) {
+                            runtime.haptic(0, .5f, .1f);
+                            runtime.haptic(1, .5f, .1f);
+                            message(3, 0, "All three venom bars full - squeeze both grips together for the MEGA "
+                                          "VENOM BLAST");
+                        }
+                        venomMegaFullBefore = megaFull;
                         venomFills += venomFull && !venomFullBefore;
                         venomFullBefore = venomFull;
                         venomArmed = venom.armed;
@@ -2832,11 +2859,7 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(venomSide, 1.f, .15f);
                             runtime.haptic(1 - venomSide, .3f, .05f);
                             char text[96];
-                            if (venomMeter.value >= 3 * venom_punch::fullMeter - .01f)
-                                sprintf_s(text, "Venom charged, all three bars - stretch both arms out for the "
-                                                "Mega Venom Blast");
-                            else
-                                sprintf_s(text, "Venom charged - punch the marked enemy with your %s fist",
+                            sprintf_s(text, "Venom charged - punch the marked enemy with your %s fist",
                                           venomName);
                             message(3, 0, text);
                         } else if (venom.glow > 0 && !venom.armed) {
@@ -2850,6 +2873,7 @@ DWORD WINAPI run(void*) {
                             exchange.holder = venomMeter.holder;
                             exchange.holderClass = venomMeter.holderClass;
                             exchange.hand = venomSide;
+                            exchange.megaRequest = venomMegaRequests;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {

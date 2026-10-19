@@ -1621,7 +1621,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!"},
         {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up"},
         {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit"},
-        {"Mega Venom Blast", "3 bars full, charged: both arms out wide. 3 bars", "MEGA VENOM BLAST! 5 enemies hit"},
+        {"Mega Venom Blast", "3 bars full: squeeze both grips together. 3 bars", "MEGA VENOM BLAST! 5 enemies hit"},
         {"Story Venom", "Out of a fight: hold the venom button and punch",
          "Venom - the game's own venom punch (its LB + X), for as long as you hold the venom button"},
         {"Venom Release", "Venom full: click the venom hand's stick to empty the meter", releaseLine.c_str()},
@@ -1782,7 +1782,7 @@ void App::about(ImVec2 origin, ImVec2 size) {
         ImGui::Dummy(ImVec2(0, S(8)));
         ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenom));
         ImGui::TextUnformatted("Miles's venom is yours too: charge your fist with a grip and punch, jump, smash the "
-                               "ground, or throw your arms wide for the Mega Venom Blast. The Controls tab has every power.");
+                               "ground, or squeeze both grips for the Mega Venom Blast. The Controls tab has every power.");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, S(8)));
         ImGui::TextUnformatted("MilesVR changes nothing in the game's folder. It attaches to the game while it runs and "

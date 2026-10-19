@@ -104,7 +104,7 @@ static_assert(sizeof(Strikes) == 328);
 // to the game as a venom blow - DamageType kVenom with the venom status, the
 // blow of a finisher and his flight - and the meter is emptied.
 struct Venom {
-    uint32_t magic = 0x5350564e, version = 5, bytes = sizeof(Venom);
+    uint32_t magic = 0x5350564e, version = 6, bytes = sizeof(Venom);
     // In: the charge (a new number each time the fist is charged; 0: none).
     // A charge lands one blow.
     uint32_t charge{};
@@ -135,7 +135,9 @@ struct Venom {
     uint32_t megaHits{};
     uint64_t megas{};
     Vec3 megaPoint{};
-    uint32_t megaSpare{};
+    // In (version 6): a new number each time the player asks for the Mega
+    // Venom Blast (both grips with three full bars; venom_punch::BothGrips).
+    uint32_t megaRequest{};
     // Out (version 5): Venom Jumps gone off, the enemies the latest threw up,
     // and where. dashes and dashesMissed: the Venom Dash's, scrapped in
     // 0.1.36 (the user: "it didnt really work well"); always 0.

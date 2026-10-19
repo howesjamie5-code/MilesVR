@@ -1,5 +1,22 @@
-MilesVR 0.1.55 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.56 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.55: MEGA VENOM BLAST ON BOTH GRIPS
+--------------------------------------------------
+With all three venom bars full, squeeze BOTH GRIPS together: the Mega
+Venom Blast goes off. No charge needed. The arms-out-wide gesture is gone.
+When the third bar fills, both controllers buzz and the panel says "All
+three venom bars full - squeeze both grips together for the MEGA VENOM
+BLAST".
+So the squeeze shoots no webs: only while all three bars are full, a grip
+pressed alone waits about 0.15 s for the other one before it shoots its
+web. The rest of the time the grips are as before.
+
+What to try:
+1. Fill all three bars (the 100% save), squeeze both grips together: the
+   blast? No webs shot?
+2. With three bars full, swing with one grip: does the small delay bother
+   you?
 
 What changed since 0.1.54: THE WEB POSE'S FINGERS
 --------------------------------------------------

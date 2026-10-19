@@ -285,13 +285,13 @@ inline Vec3 blastFlight(Vec3 centre, Vec3 feet) {
     away = across > .05f ? away / across : Vec3{1, 0, 0};
     return away * smashThrow + Vec3{0, smashLift, 0};
 }
-// The Mega Venom Blast: the venom fist charged and all three bars full, then
-// both arms stretched out wide (the user, October 19: "i charge with grip
-// then stretch both arms out to trigger it"). Out wide: the fists at least
-// spreadSpan apart across, each within spreadHeight of the head's height (a
-// T, not arms hanging down or held up), held spreadSeconds. A blast of
-// megaRadius and megaHeight, twice the smash's damage, thrown farther.
-constexpr float spreadSpan = 1.3f, spreadHeight = .6f, spreadSeconds = .1f, megaRadius = 10, megaHeight = 5,
+// The Mega Venom Blast: all three bars full, both grips together (BothGrips,
+// since 0.1.56; until then the venom fist charged and both arms stretched out
+// wide). Arms out wide is still a gesture for the game's own venom prompts
+// (promptGesture): the fists at least spreadSpan apart across, each within
+// spreadHeight of the head's height. A blast of megaRadius and megaHeight,
+// twice the smash's damage, thrown farther.
+constexpr float spreadSpan = 1.3f, spreadHeight = .6f, megaRadius = 10, megaHeight = 5,
                 megaDamage = 2, megaThrow = 16, megaLift = 9;
 // The arms out wide: each fist's place relative to the head, in the world's axes.
 inline bool spread(Vec3 left, Vec3 right) {
@@ -299,27 +299,64 @@ inline bool spread(Vec3 left, Vec3 right) {
     return finite(left) && finite(right) && std::hypot(across.x, across.z) >= spreadSpan &&
            std::fabs(left.y) <= spreadHeight && std::fabs(right.y) <= spreadHeight;
 }
-class Spread {
+// Since MilesVR 0.1.56 (the user: the Mega Venom Blast "done by pressing
+// both grips at the same time", no charge, the arms-out gesture removed):
+// with all three bars full (megaFull), both grips squeezed within `window` of
+// each other fire it once. Meanwhile a grip pressed alone is held back from
+// the swing for up to `window`, waiting for the other (hold: the swing does
+// not see it), so the blast's squeeze shoots no webs; and both stay held back
+// after the blast until both are let go. Without three full bars nothing is
+// held back: the grips are the swing's as ever.
+inline bool megaFull(float meter) {
+    return std::isfinite(meter) && meter >= mostBars * fullMeter - .01f;
+}
+class BothGrips {
   public:
-    // True once the arms have been out wide spreadSeconds; again only after
-    // they came in.
-    bool update(float seconds, bool wide) {
+    static constexpr float window = .15f;
+    struct Out {
+        bool fire{};
+        bool hold[2]{};
+    };
+    // seconds: since the previous update. ready: the blast can go off now.
+    // grips: each hand's grip, 0..1.
+    Out update(float seconds, bool ready, float left, float right) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
-        if (!wide) {
-            held_ = 0;
-            fired_ = false;
-            return false;
+        const float grips[2]{left, right};
+        for (int i = 0; i < 2; ++i) {
+            const float g = std::isfinite(grips[i]) ? grips[i] : 0.f;
+            const bool down = g >= (held_[i] ? gripOff : gripOn);
+            since_[i] = down && !held_[i] ? 0.f : std::min(since_[i] + dt, 10.f);
+            held_[i] = down;
         }
-        held_ += dt;
-        if (fired_ || held_ < spreadSeconds)
-            return false;
-        fired_ = true;
-        return true;
+        Out out;
+        if (combo_) {
+            if (!held_[0] && !held_[1])
+                combo_ = false;
+            else
+                out.hold[0] = out.hold[1] = true;
+            return out;
+        }
+        if (!ready)
+            return out;
+        if (held_[0] && held_[1] && std::min(since_[0], since_[1]) <= window &&
+            std::fabs(since_[0] - since_[1]) <= window) {
+            out.fire = combo_ = true;
+            out.hold[0] = out.hold[1] = true;
+            ++fired_;
+            return out;
+        }
+        for (int i = 0; i < 2; ++i)
+            out.hold[i] = held_[i] && !held_[1 - i] && since_[i] < window;
+        return out;
+    }
+    uint32_t fired() const {
+        return fired_;
     }
 
   private:
-    float held_{};
-    bool fired_{};
+    bool held_[2]{}, combo_{};
+    float since_[2]{10, 10};
+    uint32_t fired_{};
 };
 inline bool inMega(Vec3 centre, Vec3 feet) {
     const Vec3 d = feet - centre;

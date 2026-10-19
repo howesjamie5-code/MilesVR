@@ -682,12 +682,28 @@ int main() {
         check(promptGesture({0, 0, -3}, {}, {}) && promptGesture({0, -3, 0}, {}, {}) &&
                   promptGesture({}, {-.75f, 0, 0}, {.75f, 0, 0}) && !promptGesture({0, 0, -1}, {}, {}),
               "a punch out or down, or arms wide, answers it; a slow move does not");
-        Spread wide;
-        check(!wide.update(.05f, true), "not held long enough yet");
-        check(wide.update(.06f, true), "held spreadSeconds: it fires");
-        check(!wide.update(.1f, true), "once, while they stay out");
-        wide.update(.01f, false);
-        check(!wide.update(.05f, true) && wide.update(.06f, true), "in and out again: again");
+        // The Mega Venom Blast's squeeze (0.1.56): both grips together with three full bars.
+        check(megaFull(300) && !megaFull(299) && !megaFull(100), "three full bars, no less");
+        const float dt = 1.f / 90;
+        BothGrips g;
+        auto o = g.update(dt, true, 1, 0);
+        check(!o.fire && o.hold[0] && !o.hold[1], "one grip: held back a moment for the other");
+        o = g.update(dt, true, 1, 1);
+        check(o.fire && o.hold[0] && o.hold[1] && g.fired() == 1, "the other within the window: the blast");
+        check(!g.update(dt, false, 1, 1).fire && g.update(dt, false, 1, 1).hold[0],
+              "after it, both stay held back until let go");
+        g.update(dt, false, 0, 0);
+        check(!g.update(dt, false, 1, 0).hold[0], "let go, and not ready: the grip is the swing's at once");
+        g.update(dt, true, 0, 0);
+        BothGrips late;
+        for (int i = 0; i < 20; ++i)
+            o = late.update(dt, true, 1, 0);
+        check(!o.hold[0], "one grip alone, past the window: the swing has it (a web, a little late)");
+        o = late.update(dt, true, 1, 1);
+        check(!o.fire, "the other long after: no blast, a second web");
+        BothGrips off;
+        o = off.update(dt, false, 1, 1);
+        check(!o.fire && !o.hold[0] && !o.hold[1], "without three full bars: nothing held back, no blast");
         check(inMega(c, {19.5f, 0, 10}) && !inMega(c, {21, 0, 10}), "10 m across");
         check(megaShare(c, c) == megaDamage && megaShare(c, c) > blastShare(c, c), "twice the smash at the middle");
         check(megaFlight(c, {12, 0, 10}).x > blastFlight(c, {12, 0, 10}).x, "thrown farther");
