@@ -769,8 +769,8 @@ DWORD WINAPI run(void*) {
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
         // (venom_punch::venomPrompt), for venomPromptLeft seconds; again once the web button is let go.
-        bool venomPromptOn{}, venomPromptSpent{}, venomRelSeen{};
-        float venomPromptLeft{};
+        bool venomPromptOn{}, venomPromptSpent{}, venomRelSeen{}, venomGameHeld{};
+        float venomPromptLeft{}, venomGameSeconds{};
         prompt_buttons::Demand venomPromptDemand{};
         uint32_t venomPromptPresses{};
         Vec3 venomRelBefore{}, venomFistVelocity{};
@@ -1716,19 +1716,52 @@ DWORD WINAPI run(void*) {
                                 venomFistVelocity = {};
                             venomRelSeen = seen;
                             venomRelBefore = rel[venomSide];
-                            const bool held = fist.grip > venom_punch::gripOn;
+                            // Out of a fight the same gesture is the game's own Venom Punch
+                            // (its LB + X), held for as long as the web button is: the
+                            // reading of the prompts is off in a session (it closed the
+                            // game at a save's load, October 13), and on the user's
+                            // generator (October 19, "the grip wouldnt do anything") no
+                            // prompt was read at all. A story's venom moment - a generator
+                            // to charge - is no fight; in a fight the mod's own venom
+                            // moves stand. Standing, and a punch away from the body: a
+                            // swing's pulls and yanks come toward it.
+                            const bool held = fist.grip > venom_punch::gripOn ||
+                                              (venomGameHeld && fist.grip > venom_punch::gripOff);
+                            const bool calm = calmSeconds >= venom_punch::fightCalmSeconds;
+                            prompt_buttons::Demand ask = venomPromptOn ? promptAsked : prompt_buttons::Demand{};
+                            if (!ask.any() && calm && immersive && !calibrationInput && !padLayer.latched()) {
+                                ask.buttons = prompt_buttons::padLeftShoulder | prompt_buttons::padX;
+                                ask.hold = true;
+                            }
                             if (!held)
                                 venomPromptSpent = false;
-                            if (venomPromptOn && held && !venomPromptSpent && venomPromptLeft <= 0 && seen &&
-                                venom_punch::promptGesture(venomFistVelocity, rel[0], rel[1])) {
+                            const bool gesture = venomPromptOn
+                                                     ? venom_punch::promptGesture(venomFistVelocity, rel[0], rel[1])
+                                                     : swingState.grounded &&
+                                                           length(venomFistVelocity) >= venom_punch::smashSpeed &&
+                                                           dot(normalized(venomFistVelocity),
+                                                               normalized(rel[venomSide])) >= .5f;
+                            if (ask.any() && held && !venomPromptSpent && !venomGameHeld && seen && gesture) {
                                 venomPromptSpent = true;
-                                venomPromptDemand = promptAsked;
-                                venomPromptLeft = promptAsked.hold ? .8f : .3f;
+                                venomGameHeld = true;
+                                venomGameSeconds = 0;
+                                venomPromptDemand = ask;
                                 ++venomPromptPresses;
                                 runtime.haptic(venomSide, 1.f, .2f);
-                                message(3, 0, "Venom - the game's venom move, as its prompt asks");
+                                message(3, 0, venomPromptOn ? "Venom - the game's venom move, as its prompt asks"
+                                                            : "Venom - the game's own venom punch (its LB + X), "
+                                                              "for as long as you hold the grip");
                             }
-                            if (venomPromptOn)
+                            // Sent while the web button is held: at least a tap's worth,
+                            // at most venomGameMost; the hand shoots no web meanwhile.
+                            constexpr float venomGameLeast = .3f, venomGameMost = 4;
+                            if (venomGameHeld) {
+                                venomGameSeconds += frame.seconds;
+                                if ((!held && venomGameSeconds >= venomGameLeast) || venomGameSeconds >= venomGameMost)
+                                    venomGameHeld = false;
+                            }
+                            venomPromptLeft = venomGameHeld ? 1.f : 0.f;
+                            if (venomPromptOn || venomGameHeld)
                                 fist.grip = fist.trigger = 0;
                         }
                         const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
@@ -2551,11 +2584,9 @@ DWORD WINAPI run(void*) {
                             walk.demand = asked;
                         else
                             walk.pull = pulled;
-                        // A venom gesture answering the game's venom prompt (above).
-                        if (venomPromptLeft > 0) {
+                        // A venom gesture sending the game's own venom move (above).
+                        if (venomPromptLeft > 0)
                             walk.demand = venomPromptDemand;
-                            venomPromptLeft -= frame.seconds;
-                        }
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");

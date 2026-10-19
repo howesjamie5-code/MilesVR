@@ -1,5 +1,27 @@
-MilesVR 0.1.24 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.25 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.24: THE GENERATOR (the game's own venom punch)
+--------------------------------------------------
+Your 0.1.24 test: at the generator the grip did nothing. The mod never saw
+the game's prompt: reading prompts is switched off in a session (it closed
+the game when a save loaded, back in October), so 0.1.24's idea could not
+work.
+Now: OUT OF A FIGHT, standing on the ground, hold the right grip and punch
+away from you (forward or down). The
+mod presses the game's own Venom Punch buttons (LB + X) and keeps them held
+for as long as you hold the grip (up to 4 s), so the game does its own
+venom move - charging a generator, a story moment. A buzz and a message
+tell you it was sent. The right hand shoots no web while it is held.
+In a fight nothing changes: your venom punch, smash and Mega Venom Blast
+work as before.
+
+What to try:
+1. At the generator: hold the right grip and punch at it. Keep holding the
+   grip if the game wants a hold. Did it charge?
+2. Out of a fight, does that grip + punch get in the way of anything
+   (web swinging off a punch-like motion)?
+3. Close the game and keep the reports folder.
 
 What changed since 0.1.23: VENOM MOVES FOR THE GAME'S OWN PROMPTS
 --------------------------------------------------
