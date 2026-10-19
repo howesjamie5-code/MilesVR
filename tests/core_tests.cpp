@@ -803,10 +803,16 @@ int main() {
         check(fired&&t.fires()==1,"the yank fired once");
         o=t.update(dt,true,0,hand);
         check(!o.hold,"let go: the hand is the swing's again");
-        // The grip down away from his back: no hold, no takedown.
+        // No takedown marked: the grip is the swing's.
         Takedown away;
         away.update(dt,false,0,{0,0,-.5f});
-        check(!away.update(dt,false,1,{0,0,-.5f}).hold,"a grip off his back held the hand");
+        check(!away.update(dt,false,1,{0,0,-.5f}).hold,"a grip with nothing marked held the hand");
+        // A gentle yank, 1 m/s, fires too (0.1.67).
+        Takedown gentle;Vec3 g{0,-.3f,-.5f};
+        gentle.update(dt,true,0,g);gentle.update(dt,true,1,g);
+        bool soft=false;
+        for(int k=0;k<20;++k){g=g*(1-1.f*dt/length(g));soft|=gentle.update(dt,true,1,g).fire;}
+        check(soft,"a gentle yank fired nothing");
         // A hand drawn back slowly fires nothing.
         Takedown slow;Vec3 h{0,0,-.6f};
         slow.update(dt,true,0,h);slow.update(dt,true,1,h);

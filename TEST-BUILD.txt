@@ -1,5 +1,16 @@
-MilesVR 0.1.66 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.67 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.66: QUICKER STEALTH TAKEDOWNS
+--------------------------------------------------
+In 0.1.66 your hand had to be on his back before the grip counted, and
+the yank had to be quick: only one takedown went off in your session
+while the enemies spotted you. Now, as soon as the blue mark shows:
+- squeeze either grip and yank toward you - anywhere, your hand needn't
+  touch him - with a gentler yank; or
+- just press Y: the game's takedown at once (not the step toward where
+  you look that Y does otherwise).
+Be quick: standing behind him long gives him time to turn.
 
 What changed since 0.1.65: STEALTH TAKEDOWNS
 --------------------------------------------------

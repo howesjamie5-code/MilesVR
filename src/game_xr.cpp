@@ -808,6 +808,7 @@ DWORD WINAPI run(void*) {
         Vec3 takedownPoint{};
         uint32_t takedownOnBack{}, takedownsDone{};
         float takedownPress{};
+        bool takedownY{}; // Y down at the last frame
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -1934,7 +1935,7 @@ DWORD WINAPI run(void*) {
                     // him its web is not shot (no web grab catches and flings him).
                     for (unsigned i = 0; i < 2; ++i) {
                         const auto grab = takedownHands[i].update(
-                            frame.seconds, immersive && !calibrationInput && ((takedownOnBack >> i) & 1u),
+                            frame.seconds, immersive && !calibrationInput && takedownTarget != 0,
                             frame.hands[i].squeeze, frame.hands[i].grip.position - frame.head.position);
                         if (grab.hold)
                             (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
@@ -2790,6 +2791,19 @@ DWORD WINAPI run(void*) {
                         // The game's Y: the player's, and after a tap the time the
                         // hero takes to turn to what they look at.
                         walk.interact = interactStep.pressed();
+                        // Y while a takedown is marked: the game's takedown at once, past the
+                        // step toward the look (0.1.67).
+                        {
+                            const bool y = (origins.play() & buttonY) != 0;
+                            if (takedownTarget && y && !takedownY) {
+                                takedownPress = .3f;
+                                ++takedownsDone;
+                                message(3, 0, "Takedown");
+                            }
+                            takedownY = y;
+                            if (takedownTarget || takedownPress > 0)
+                                walk.interact = false;
+                        }
                         // What the game is asking for, if it named a button: the
                         // interact button sends that instead of the game's Y, so one
                         // control answers every prompt in the game rather than a

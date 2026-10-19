@@ -28,21 +28,25 @@ inline bool behind(Vec3 enemyFeet, Vec3 enemyForward, Vec3 playerFeet) {
         return false;
     return dot(away / a, facing / f) <= -behindCos;
 }
-// One hand's grab and yank. The grip goes down with the hand on his back: the
-// hand is the takedown's until the grip is let go (`hold`: its web is not
+// One hand's grab and yank. The grip goes down while a takedown is marked:
+// the hand is the takedown's until the grip is let go (`hold`: its web is not
 // shot, so the web grab neither catches nor flings him). Within `window` of
 // the grab, the hand pulled toward the head at `yankSpeed` or faster fires
-// it, once.
+// it, once. (0.1.66 wanted the hand on his back, within onBack of his middle,
+// and a yank of 1.2 m/s: the user, trying it, "they would just keep seeing me"
+// while that was lined up - one takedown in a session. Since 0.1.67 any hand,
+// anywhere, while the mark shows, and a gentler yank.)
 class Takedown {
   public:
-    static constexpr float gripOn = .6f, gripOff = .35f, yankSpeed = 1.2f, window = .6f;
+    static constexpr float gripOn = .6f, gripOff = .35f, yankSpeed = .9f, window = .8f;
     struct Out {
         bool hold{}; // the hand's grip is the takedown's
         bool fire{}; // the yank: press the game's takedown now
     };
-    // seconds: since the previous update. onBack: the hand is on a marked
-    // enemy's back. grip: its grip, 0..1. hand: the hand relative to the
-    // head, metres (any axes, the same each update).
+    // seconds: since the previous update. onBack: a takedown is marked (the
+    // name from 0.1.66, when the hand had to be on his back). grip: its grip,
+    // 0..1. hand: the hand relative to the head, metres (any axes, the same
+    // each update).
     Out update(float seconds, bool onBack, float grip, Vec3 hand) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
         const bool down = std::isfinite(grip) && grip >= (down_ ? gripOff : gripOn);
