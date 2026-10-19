@@ -1954,7 +1954,7 @@ DWORD WINAPI run(void*) {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, "Takedown - the game's Y, %.1f m from him", metres);
+                                sprintf_s(text, "Takedown - the game's X, %.1f m from him", metres);
                                 message(3, 0, text);
                             }
                         }
@@ -2818,7 +2818,7 @@ DWORD WINAPI run(void*) {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, "Takedown - the game's Y, %.1f m from him", metres);
+                                sprintf_s(text, "Takedown - the game's X, %.1f m from him", metres);
                                 message(3, 0, text);
                             }
                             }
@@ -3073,9 +3073,11 @@ DWORD WINAPI run(void*) {
                         // A venom gesture sending the game's own venom move (above).
                         if (venomPromptLeft > 0)
                             walk.demand = venomPromptDemand;
-                        // A stealth takedown's yank: the game's Y, past the step toward the look.
+                        // A stealth takedown's yank: the game's X (Square: its ground and wall
+                        // takedown; Y, Triangle, is its web strike takedown from a perch - 0.1.66
+                        // to 0.1.68 sent Y, and the game never took a ground takedown from it).
                         if (takedownPress > 0)
-                            walk.demand.buttons |= prompt_buttons::padY;
+                            walk.demand.buttons |= prompt_buttons::padX;
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");

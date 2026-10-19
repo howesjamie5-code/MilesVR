@@ -1,5 +1,13 @@
-MilesVR 0.1.68 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.69 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.68: TAKEDOWNS PRESS THE RIGHT BUTTON
+--------------------------------------------------
+0.1.66-0.1.68 pressed the game's Y (Triangle) for a ground takedown, and
+your log shows it at 0.7 m behind him with no takedown. In Miles Morales
+Y is the web strike takedown from a perch; a ground or wall takedown is
+Square - the Xbox X. The grip-and-yank (and Y while the mark shows) now
+presses the game's X. Perch takedowns stay on Y.
 
 What changed since 0.1.67: TAKEDOWNS TURN MILES TO FACE HIM
 --------------------------------------------------

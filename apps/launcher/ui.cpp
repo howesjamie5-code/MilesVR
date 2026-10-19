@@ -1571,7 +1571,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Red / yellow lines", "Dodge (B) / jump (A)"},
           {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"},
           {"Blue mark over an enemy: grip + yank, or Y", "Stealth takedown (the game's own). The mark shows when "
-                                                         "you are behind him, close enough", "Takedown"},
+                                                         "you are behind him, close enough",
+           "Takedown - the game's X, 1.2 m from him"},
           {"From a perch above him: Y", "Perch takedown (the game's own)"}}},
         {"PHONE",
          {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "

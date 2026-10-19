@@ -7,7 +7,9 @@
 // Stealth takedowns (MilesVR 0.1.66, the user's plan, October 20): behind an
 // enemy, reach out and grab him with the grip - the hand on his back or
 // shoulder - then yank toward you. That presses the game's own takedown
-// button (Y), so the game does its takedown and decides whether one is on
+// button (X, its Square; Y until 0.1.69, which is the game's web strike
+// takedown from a perch and never a ground one), so the game does its
+// takedown and decides whether one is on
 // (an enemy who saw you gets none). The mod cannot read whether he saw you:
 // it marks the nearest enemy you stand behind within reach, out of a fight.
 namespace spidy::stealth {
