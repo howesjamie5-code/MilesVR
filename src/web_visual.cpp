@@ -1085,12 +1085,31 @@ void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec
     const float px = pixelAngle * distance;
     const float u = burst.age / VenomBurstView::seconds, fade = 1 - u * u;
     const float s = std::isfinite(burst.scale) ? std::clamp(burst.scale, .1f, 10.f) : 1.f;
-    // The flash, gone in a sixth of a second.
-    const float flash = std::max(0.f, 1 - burst.age / .16f);
+    // MilesVR 0.1.60 (the user: the venom punch "more brighter and like a
+    // bigger explosion that is acceptable for a forceful punch"): a bigger,
+    // white-hot flash that holds a quarter of a second, an orange shockwave
+    // ring blasting out from it, more and longer bolts, and an afterglow.
+    const float flash = std::max(0.f, 1 - burst.age / .25f);
     if (flash > 0) {
-        softArc(out, burst.point, right, up, 0, .35f * s, 0, 2 * pi, venomGold, .45f * flash, .25f * s, 40);
-        softArc(out, burst.point, right, up, 0, .14f * s, 0, 2 * pi, venomCore, .7f * flash, .08f * s, 32);
+        // The smash's and the Mega's (4 and 8 times) would white out the view
+        // round the player: their flash grows no more than 2.5 times.
+        const float f = std::min(s, 2.5f) * (1 + .35f * (1 - flash)); // it swells as it goes
+        softArc(out, burst.point, right, up, 0, .75f * f, 0, 2 * pi, venomOrange, .5f * flash, .45f * f, 48);
+        softArc(out, burst.point, right, up, 0, .42f * f, 0, 2 * pi, venomGold, .75f * flash, .25f * f, 40);
+        softArc(out, burst.point, right, up, 0, .2f * f, 0, 2 * pi, venomCore, flash, .1f * f, 32);
     }
+    // The shockwave: a ring racing out to 1.5 m (times the scale) in a third
+    // of a second, thinning as it goes.
+    const float wave = std::min(1.f, burst.age / .33f);
+    if (wave < 1) {
+        const float r = 1.5f * s * std::sqrt(wave), width = std::max(.05f * s * (1 - wave), 2.f * px);
+        softArc(out, burst.point, right, up, std::max(0.f, r - width * 2.5f), r, 0, 2 * pi, venomOrange,
+                .6f * (1 - wave), width, 64);
+        softArc(out, burst.point, right, up, std::max(0.f, r - width), r, 0, 2 * pi, venomCore, .85f * (1 - wave),
+                std::max(px, width * .4f), 64);
+    }
+    // The afterglow, fading over the whole burst.
+    softArc(out, burst.point, right, up, 0, .3f * s, 0, 2 * pi, venomOrange, .25f * fade * (1 - flash), .2f * s, 32);
     // The smash's ring on the ground, out to its edge.
     if (std::isfinite(burst.ring) && burst.ring > 0) {
         const float r = burst.ring * std::sqrt(u);
@@ -1103,12 +1122,13 @@ void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec
     // Bolts thrown out, longer as it goes, new ones every 1/30 s.
     const int frame = static_cast<int>(burst.age * 30);
     const float seedBase = burst.point.x * 3.1f + burst.point.y * 5.3f + burst.point.z * 7.7f;
-    constexpr int bolts = 9;
+    constexpr int bolts = 16;
     for (int i = 0; i < bolts; ++i) {
         const float seed = seedBase + static_cast<float>(frame * 13 + i) * .618f;
         const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
-        const float reach = (.2f + .35f * u) * (.6f + .4f * hash(seed, 3)) * s;
-        venomBolt(out, burst.point + way * .05f * s, way, reach, view, px, fade, seed);
+        const float reach = (.35f + .75f * u) * (.6f + .4f * hash(seed, 3)) * s;
+        venomBolt(out, burst.point + way * .08f * s, way, reach, view, px, std::min(1.f, 1.3f * fade), seed, 5,
+                  i % 3 ? venomGold : venomOrange);
     }
 }
 void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, Vec3 viewer, float pixelAngle) {

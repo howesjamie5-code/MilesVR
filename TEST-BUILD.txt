@@ -1,5 +1,16 @@
-MilesVR 0.1.59 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.60 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.59: A BIGGER, BRIGHTER VENOM PUNCH
+--------------------------------------------------
+The venom punch's burst is now an explosion: a bigger white-hot flash
+that holds a quarter of a second, an orange shockwave ring blasting out
+to about 1.5 m, twice the bolts and longer ones, and an afterglow. The
+smash and the Mega Venom Blast get the same, their flash kept from
+whiting out your view.
+
+What to try:
+1. Venom punch an enemy: does it feel forceful now? Too much?
 
 What changed since 0.1.58: THE MEGA VENOM BLAST'S SOUND, FIXED
 --------------------------------------------------
