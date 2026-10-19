@@ -271,6 +271,29 @@ inline Vec3 megaFlight(Vec3 centre, Vec3 feet) {
     const Vec3 f = blastFlight(centre, feet);
     return Vec3{f.x, 0, f.z} * (megaThrow / smashThrow) + Vec3{0, megaLift, 0};
 }
+// The Venom Jump (0.1.33, the user's choices, October 20): the charged venom
+// fist punched straight UP while standing. Every enemy within the smash's
+// blast is a venom blow of jumpDamage the smash's, thrown up at jumpLift (and
+// a little away), and Miles goes up with them: jumpHeight over jumpSeconds,
+// then he hangs there jumpHang for the blows on them. One bar.
+constexpr float jumpDamage = .7f, jumpThrow = 2, jumpLift = 9, jumpHeight = 3.5f, jumpSeconds = .3f,
+                jumpHang = 1.2f;
+inline bool jumping(Vec3 fist) {
+    const float speed = length(fist);
+    return std::isfinite(speed) && speed >= smashSpeed && fist.y >= smashSteep * speed;
+}
+inline float jumpShare(Vec3 centre, Vec3 feet) {
+    return jumpDamage * blastShare(centre, feet);
+}
+inline Vec3 jumpFlight(Vec3 centre, Vec3 feet) {
+    const Vec3 f = blastFlight(centre, feet);
+    return Vec3{f.x, 0, f.z} * (jumpThrow / smashThrow) + Vec3{0, jumpLift, 0};
+}
+// The Venom Dash (0.1.33): the charged fist punched out at the marked enemy
+// beyond the venom punch's reach and within dashRange (chest to his middle):
+// Miles flies straight to him, and the blow on arrival is a venom blow. One
+// bar. Nearer, the same punch is the venom punch.
+constexpr float dashRange = 15;
 // The game prompting for one of its own venom moves (the user, October 19:
 // story moments "such as powering stuff up" must go on with the venom punch,
 // the smash and the blast). Miles Morales's venom moves are its LB with a

@@ -37,6 +37,7 @@ void WebStrike::cancel() {
         sinceEnd_ = 0;
     phase_ = Phase::Idle;
     hangLeft_ = 0;
+    rising_ = false;
 }
 void WebStrike::wait(float seconds) {
     sinceStep_ = 0;
@@ -52,8 +53,39 @@ void WebStrike::hangOn(bool grounded, float seconds) {
         return;
     if (phase_ == Phase::Idle)
         sinceStep_ = 0;
+    // A blow never cuts a longer hang short (the Venom Jump's).
+    const float left = phase_ == Phase::Hanging ? hangLeft_ : 0.f;
     phase_ = Phase::Hanging;
-    hangLeft_ = std::max(config_.hang, std::isfinite(seconds) ? seconds : 0.f);
+    hangLeft_ = std::max({left, config_.hang, std::isfinite(seconds) ? seconds : 0.f});
+}
+bool WebStrike::dash(int hand, const FightTarget& target, Vec3 head, Vec3 feet, Vec3 way, float speed,
+                     const WorldQueries& world) {
+    if (phase_ == Phase::Flying || hand < 0 || hand > 1 || !finite(head) || !finite(feet) ||
+        !finite(target.feet) || !inSight(world, head, target.middle()))
+        return false;
+    phase_ = Phase::Flying;
+    hand_ = hand;
+    target_ = target.id;
+    armed_[static_cast<size_t>(hand)] = false;
+    direction_ = way;
+    fistSpeed_ = speed;
+    elapsed_ = sinceStep_ = waited_ = 0;
+    rising_ = false;
+    destination_ = stop(feet, target);
+    duration_ = std::max(config_.minSeconds, length(destination_ - feet) / config_.speed);
+    return true;
+}
+void WebStrike::rise(Vec3 feet, Vec3 destination, float seconds, float hang) {
+    if (!finite(feet) || !finite(destination))
+        return;
+    phase_ = Phase::Flying;
+    target_ = 0;
+    destination_ = destination;
+    direction_ = normalized(destination - feet);
+    elapsed_ = sinceStep_ = waited_ = 0;
+    duration_ = std::max(config_.minSeconds, std::isfinite(seconds) ? seconds : 0.f);
+    rising_ = true;
+    riseHang_ = std::isfinite(hang) ? std::max(0.f, hang) : 0.f;
 }
 Vec3 WebStrike::stop(Vec3 feet, const FightTarget& t) {
     // On the player's side of him; from straight above or below, the side
@@ -204,6 +236,25 @@ WebStrike::Step WebStrike::step(float seconds, Vec3 feet, bool grounded, const F
         }
         return s;
     };
+    // The Venom Jump's rise: up to its place, then the hang there.
+    if (rising_) {
+        const Vec3 to = destination_ - feet;
+        if (!finite(feet) || length(to) <= config_.arrive || elapsed_ >= duration_ + config_.grace) {
+            rising_ = false;
+            sinceEnd_ = 0;
+            phase_ = Phase::Hanging;
+            hangLeft_ = riseHang_;
+            Step hold;
+            hold.drive = true;
+            return hold;
+        }
+        const float time = std::max({duration_ - elapsed_, dt, 1e-3f});
+        elapsed_ += dt;
+        Step s;
+        s.drive = true;
+        s.velocity = limited(to / time, config_.speed * 1.25f);
+        return s;
+    }
     if (!target || !finite(feet) || !finite(target->feet))
         return end(false);
     destination_ = stop(feet, *target);

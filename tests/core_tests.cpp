@@ -708,6 +708,67 @@ int main() {
         d.cancel();
         check(!d.active() && !d.step(.01f, {}, true).blast, "cancelled: nothing");
     });
+    test("venom jump and dash: a punch up throws them up with him; one out flies him to the far one", [] {
+        using namespace spidy::venom_punch;
+        check(jumping({0, 3, 0}) && jumping({1, 3, 0}), "fast and steeply up");
+        check(!jumping({0, 2, 0}) && !jumping({0, -3, 0}) && !jumping({0, 1, -4}) && !jumping({3, 1, 0}),
+              "not slow, down (the smash), out or a hook");
+        check(!smashing({0, 3, 0}) && !jumping({0, -3, 0}), "the smash and the jump never both");
+        const Vec3 c{0, 0, 0};
+        const Vec3 f = jumpFlight(c, {2, 0, 0});
+        check(f.y == jumpLift && f.x > 0 && f.x < f.y, "mostly up, a little away");
+        check(jumpShare(c, c) < blastShare(c, c) && jumpShare(c, c) > 0, "softer than the smash");
+        struct Open : WorldQueries {
+            std::optional<RayHit> raycast(Vec3, Vec3, float) const override { return {}; }
+            bool exists(std::uint64_t) const override { return true; }
+        };
+        struct Walled : WorldQueries {
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+                if (d.z >= -1e-4f || o.z <= -3)
+                    return {};
+                const float t = (-3 - o.z) / d.z;
+                return t <= distance ? std::optional<RayHit>{RayHit{o + d * t, {0, 0, 1}, 5, true}} : std::nullopt;
+            }
+            bool exists(std::uint64_t) const override { return true; }
+        };
+        // The rise: up to its place, then a hang there of its own length, no blow.
+        WebStrike strike;
+        Vec3 feet{};
+        strike.rise(feet, {0, jumpHeight, 0}, jumpSeconds, jumpHang);
+        check(strike.phase() == WebStrike::Phase::Flying && strike.lifting(feet), "a flight up: the game jumps first");
+        float t{};
+        while (strike.phase() == WebStrike::Phase::Flying && t < 2) {
+            const auto s = strike.step(1.f / 90, feet, false, nullptr);
+            check(!s.landed && !s.missed, "no blow, no miss");
+            feet += s.velocity * (1.f / 90);
+            t += 1.f / 90;
+        }
+        check(std::fabs(feet.y - jumpHeight) < .1f && t < jumpSeconds + .1f, "up there in about jumpSeconds");
+        check(strike.phase() == WebStrike::Phase::Hanging, "then he hangs");
+        strike.hangOn(false);
+        float hung{};
+        while (strike.phase() == WebStrike::Phase::Hanging && hung < 3) {
+            strike.step(1.f / 90, feet, false, nullptr);
+            hung += 1.f / 90;
+        }
+        check(hung > jumpHang - .1f, "a blow up there does not cut the hang short");
+        // The dash: straight to the far one, from any fist the caller judged.
+        WebStrike dash;
+        Open open;
+        Walled walled;
+        const FightTarget far{7, {0, 0, -12}, 1.8f, .3f, false};
+        check(!dash.dash(1, far, {0, 1.65f, 0}, {}, {0, 0, -1}, 4, walled), "none through a wall");
+        check(dash.dash(1, far, {0, 1.65f, 0}, {}, {0, 0, -1}, 4, open) && dash.target() == 7 && dash.hand() == 1,
+              "12 m off, past a strike's reach: it flies to him");
+        feet = {};
+        bool landed{};
+        for (int i = 0; i < 300 && dash.phase() == WebStrike::Phase::Flying; ++i) {
+            const auto s = dash.step(1.f / 90, feet, true, &far);
+            feet += s.velocity * (1.f / 90);
+            landed |= s.landed;
+        }
+        check(landed && feet.z < -10, "he arrives, and the blow lands");
+    });
     test("native view conversion preserves identity and meter scale", [] {
         const Mat4 original{1,0,0,0, 0,-1,0,0, 0,0,-1,0, 10,20,30,1};
         const auto same=native_view::relativePose(original,{});

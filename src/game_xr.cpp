@@ -136,7 +136,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 45, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 46, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -383,8 +383,11 @@ struct XrData {
     // for an attacker out of view, tingles sent to the controllers, marks a
     // counter broke, and the game's dodge (B) pressed while a warning stood.
     uint32_t senseShown{}, senseFrames{}, senseSightFrames{}, senseTingles{}, senseBroken{}, senseDodges{};
+    // Version 46: Venom Jumps gone off and the enemies the latest threw up;
+    // Venom Dashes that landed, and those that ended without their blow.
+    uint32_t venomJumps{}, venomJumpHits{}, venomDashes{}, venomDashesMissed{};
 };
-static_assert(sizeof(XrData) == 1328);
+static_assert(sizeof(XrData) == 1344);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -772,6 +775,8 @@ DWORD WINAPI run(void*) {
         venom_punch::Charge venomCharge;
         uint32_t venomCharges{};
         uint64_t venomBlowsBefore{}, venomSpentBefore{}, venomSmashesBefore{}, venomMegasBefore{};
+        uint64_t venomJumpsBefore{}, venomDashesBefore{};
+        uint32_t venomJumpHits{}, venomDashesMissed{};
         uint32_t venomMegaHits{};
         uint32_t venomSmashHits{}, venomSmashesCalledOff{};
         float venomGlow{};
@@ -2798,9 +2803,12 @@ DWORD WINAPI run(void*) {
                                         burst.view = {exchange.lastPoint, 0};
                                         burst.since = frame.predictedDisplayTime;
                                     }
+                                    // A Venom Dash's blow on arrival is one of these too.
+                                    const bool dashed = exchange.dashes > venomDashesBefore;
                                     message(3, 0, exchange.spent > venomSpentBefore
-                                                      ? "Venom punch!"
-                                                      : "Venom punch! (the meter could not be emptied)");
+                                                      ? (dashed ? "Venom dash!" : "Venom punch!")
+                                                      : (dashed ? "Venom dash! (the meter could not be emptied)"
+                                                                : "Venom punch! (the meter could not be emptied)"));
                                 }
                                 // The venom smash went off (venom_punch.hpp): a big burst
                                 // with its ring on the ground, and both hands feel it.
@@ -2842,6 +2850,29 @@ DWORD WINAPI run(void*) {
                                     message(3, 0, text);
                                 }
                                 venomMegasBefore = exchange.megas;
+                                // The Venom Jump went off: a burst where he stood, its ring
+                                // the blast's, and both hands feel him leave the ground.
+                                venomJumpsBefore = std::min(venomJumpsBefore, exchange.jumps);
+                                if (exchange.jumps > venomJumpsBefore) {
+                                    venomCharge.spent();
+                                    venomGlow = 0;
+                                    runtime.haptic(0, 1.f, .35f);
+                                    runtime.haptic(1, 1.f, .35f);
+                                    if (finite(exchange.jumpPoint)) {
+                                        auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
+                                        burst.view = {exchange.jumpPoint + Vec3{0, .3f, 0}, 0, 4.f,
+                                                      venom_punch::smashRadius};
+                                        burst.since = frame.predictedDisplayTime;
+                                    }
+                                    char text[96];
+                                    sprintf_s(text, "Venom jump! %u %s", exchange.jumpHits,
+                                              exchange.jumpHits == 1 ? "enemy up" : "enemies up");
+                                    message(3, 0, text);
+                                }
+                                venomJumpsBefore = exchange.jumps;
+                                venomJumpHits = exchange.jumpHits;
+                                venomDashesBefore = exchange.dashes;
+                                venomDashesMissed = exchange.dashesMissed;
                                 venomMegaHits = exchange.megaHits;
                                 venomSmashHits = exchange.smashHits;
                                 venomSmashesCalledOff = exchange.smashesCalledOff;
@@ -3161,6 +3192,10 @@ DWORD WINAPI run(void*) {
                         d.venomSmashesCalledOff = venomSmashesCalledOff;
                         d.venomMegas = static_cast<uint32_t>(venomMegasBefore);
                         d.venomMegaHits = venomMegaHits;
+                        d.venomJumps = static_cast<uint32_t>(venomJumpsBefore);
+                        d.venomJumpHits = venomJumpHits;
+                        d.venomDashes = static_cast<uint32_t>(venomDashesBefore);
+                        d.venomDashesMissed = venomDashesMissed;
                         d.venomPromptPresses = venomPromptPresses;
                         std::memcpy(d.venomAround, venomMeter.around, sizeof(d.venomAround));
                         d.senseShown = senseShown;

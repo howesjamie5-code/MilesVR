@@ -1554,8 +1554,11 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                        "web you hold as it fills stays until you let go"},
         {"Venom Charge", "Hold the right grip (the trigger, if Web button is set to it): your fist glows and the "
                          "controller buzzes. Let go and the charge fades after a moment, so strike before it does"},
-        {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "
-                        "web strike flies you in and lands it. Uses one bar"},
+        {"Venom Punch", "Charge, then punch the marked thug within 2 m: the charged fist lands it. Uses one bar"},
+        {"Venom Dash", "Charge, then punch out at the marked thug 2 to 15 m away: you shoot straight to him and the "
+                       "hit as you arrive is a venom blow. Uses one bar"},
+        {"Venom Jump", "Standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "
+                       "jump up with them and hang there a moment to keep hitting them. Uses one bar"},
         {"Venom Smash", "Charge, then punch down. Standing, it goes off where you are; in the air (not on a web) you "
                         "drop and it goes off as you land. Every enemy within 5 m is hit and thrown. Uses one bar"},
         {"Mega Venom Blast", "All three bars full: charge, then stretch both arms out wide to the sides. Every enemy "
@@ -1701,8 +1704,8 @@ void App::about(ImVec2 origin, ImVec2 size) {
                                "shoots its own web, and you swing, zip and throw with your own arms.");
         ImGui::Dummy(ImVec2(0, S(8)));
         ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenom));
-        ImGui::TextUnformatted("Miles's venom is yours too: charge your fist with a grip and punch, smash the ground, "
-                               "or throw your arms wide for the Mega Venom Blast. The Controls tab has every power.");
+        ImGui::TextUnformatted("Miles's venom is yours too: charge your fist with a grip and punch, dash, jump, smash the "
+                               "ground, or throw your arms wide for the Mega Venom Blast. The Controls tab has every power.");
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, S(8)));
         ImGui::TextUnformatted("MilesVR changes nothing in the game's folder. It attaches to the game while it runs and "

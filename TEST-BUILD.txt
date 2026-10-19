@@ -1,5 +1,33 @@
-MilesVR 0.1.32 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.33 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.32: VENOM JUMP AND VENOM DASH
+--------------------------------------------------
+Two new venom powers. Both start like the others: with a bar full, hold the
+venom hand's grip until the fist glows (the controller buzzes). Each uses
+one bar.
+
+VENOM JUMP - standing on the ground, punch the charged fist straight UP.
+  Every enemy within 5 m is hit with venom and thrown up into the air, and
+  you jump up with them (about 3.5 m) and hang there for a moment, so you
+  can keep hitting them up there. Blows in the air keep you up as before.
+  Punching DOWN is still the Venom Smash.
+
+VENOM DASH - punch the charged fist OUT at the marked enemy when he is
+  between 2 m and 15 m away. You shoot straight to him and the hit as you
+  arrive is a venom blow. Within 2 m the same punch is the Venom Punch, as
+  before. While your fist is charged, enemies up to 15 m away can be marked
+  (normally 13 m).
+
+What to try:
+1. Fill a bar, charge, punch straight up next to a group. Do they go up?
+   Do you go up with them, and is the hang long enough to hit them?
+2. Fill a bar, look at a thug 5-15 m away, charge, punch at him. Do you fly
+   to him and does he get the venom hit?
+3. The smash (punch down) and the venom punch (close) still work as before?
+The session report's venom section has jumps, jump_hits, dashes and
+dashes_missed.
+
 
 What changed since 0.1.31: THE PHONE'S MUSIC FOLDER
 --------------------------------------------------

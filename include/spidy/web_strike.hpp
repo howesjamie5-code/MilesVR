@@ -178,6 +178,14 @@ class WebStrike {
     // the player hangs (WebStrikeConfig::hang, or `seconds` if longer: a thug
     // pulled to him in the air has just arrived).
     void hangOn(bool grounded, float seconds = 0);
+    // MilesVR's Venom Dash: a flight to `target` opened at once, whatever
+    // open() asks of a fist (the caller judged the punch, and its range); none
+    // to one out of sight from `head`.
+    bool dash(int hand, const FightTarget& target, Vec3 head, Vec3 feet, Vec3 way, float speed,
+              const WorldQueries& world);
+    // MilesVR's Venom Jump: a flight up to `destination`, there in `seconds`,
+    // with no one at its end and no blow; the player then hangs there `hang`.
+    void rise(Vec3 feet, Vec3 destination, float seconds, float hang);
     // This hand landed a punch: its swing opens no strike.
     void spent(int hand);
     // Idle at once, with no blow.
@@ -218,6 +226,8 @@ class WebStrike {
     std::uint64_t target_{};
     Vec3 destination_{}, direction_{}, away_{0, 0, 1};
     float fistSpeed_{}, elapsed_{}, duration_{}, hangLeft_{}, hung_{}, sinceEnd_ = 100, sinceStep_{}, waited_{};
+    bool rising_{};
+    float riseHang_{};
     std::array<float, 2> freeFor_{}, thrownFor_{}, sincePress_{100, 100};
     std::array<bool, 2> armed_{true, true}, pressed_{}, passed_{};
     std::uint64_t passedOver_{};
