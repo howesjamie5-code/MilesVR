@@ -738,6 +738,16 @@ int main() {
         o = b.update(dt, .8f, 1, true);
         check(o.charge == 0 && o.reel == .8f && o.web == 1, "with a web, it reels");
         check(VenomButtons::tapSeconds < spidy::venom_punch::Charge::chargeSeconds, "a tap never charges");
+        // Not full (VENOM BUTTON on the other button): the venom button is the swing's own, the tap still a web ball.
+        VenomButtons n;
+        o = n.update(dt, .7f, 0, false, false);
+        check(o.reel == .7f && o.charge == 0, "not full: the venom button reels and shoots web balls as ever");
+        n.update(dt, 0, 1, false, false);
+        for (int i = 0; i < 5; ++i)
+            n.update(dt, 0, 1, true, false);
+        n.update(dt, 0, 0, true, false);
+        n.update(dt, 0, 0, false, false);
+        check(n.update(dt, 0, 0, false, false).reel == 1 && n.taps() == 1, "not full: a tap of the other a web ball too");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;

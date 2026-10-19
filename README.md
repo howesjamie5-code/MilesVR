@@ -92,7 +92,8 @@ MILES VR settings):
 | **Trigger** | Trigger | Grip |
 
 With a web attached, the venom button reels in. Until a bar is full, the buttons work as normal:
-the grip shoots webs and the trigger shoots web balls.
+the grip shoots webs and the trigger shoots web balls - and on **Trigger**, a tap of the grip is a
+web ball too, always.
 Hold the venom button until the fist glows and the controller buzzes, then:
 
 | Venom power | How | Cost |

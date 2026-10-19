@@ -2036,6 +2036,13 @@ DWORD WINAPI run(void*) {
                             venomGrip = split.charge;
                             fist.grip = split.web;
                             fist.trigger = split.reel;
+                        } else if (!venomOnWeb && immersive && !calibrationInput && !padLayer.latched()) {
+                            // VENOM BUTTON on the other button: its grip's tap is a web ball always,
+                            // the venom button the swing's own until the venom has the hand.
+                            const auto split = venomButtons.update(frame.seconds, venomButton, fist.grip,
+                                                                   swingState.webs[venomSide].attached, false);
+                            fist.grip = split.web;
+                            fist.trigger = split.reel;
                         } else {
                             venomButtons.reset();
                         }

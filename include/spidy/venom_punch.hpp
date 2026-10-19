@@ -205,8 +205,12 @@ class VenomButtons {
         float charge{}; // the venom charge's button (Charge::update's grip)
     };
     // seconds: since the previous update. venom and other: the buttons, 0..1.
-    // webHeld: the hand's web holds (the swing's, a step behind).
-    Out update(float seconds, float venom, float other, bool webHeld) {
+    // webHeld: the hand's web holds (the swing's, a step behind). full: the
+    // venom has the hand; not full (MilesVR 0.1.46, VENOM BUTTON on the other
+    // button: the user wants the grip's tap a web ball "always ... not just
+    // when venom is full") the venom button is the swing's own, reel and web
+    // balls, and charges nothing, while the other keeps its tap.
+    Out update(float seconds, float venom, float other, bool webHeld, bool full = true) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
         const auto unit = [](float v) { return std::isfinite(v) ? std::clamp(v, 0.f, 1.f) : 0.f; };
         const float v = unit(venom), o = unit(other);
@@ -224,7 +228,7 @@ class VenomButtons {
         held_ = down;
         Out out;
         out.web = o;
-        if (webHeld) {
+        if (webHeld || !full) {
             out.reel = v;
         } else {
             out.charge = v;
