@@ -69,6 +69,9 @@ body::Targets lastTargets;
 // The hero's instance and rig at the previous hero job (solveLock): another
 // instance is another actor, and the body starts over on it.
 uintptr_t lastInstance{}, lastRig{};
+// The hero's place in the world at the last solve (Targets::travel).
+Vec3 lastHeroAt{};
+bool lastHeroAtSet{};
 uint32_t rigSwitches{};
 // The rigs the hero's pose jobs named (Status::rigs), under solveLock.
 uint64_t censusRig[native_body::Status::censusRigs]{};
@@ -433,11 +436,21 @@ void solveHero(float* out, uintptr_t job, uintptr_t instance) {
                 t.floor = {};
                 t.ground = true;
             } else {
-                state.feet = {};
                 state.crouched = 0;
                 state.perched = false;
             }
+            if (!t.plant)
+                state.feet = {};
             t.kneel = standing && (wanted.flags & native_body::kneel);
+            // How far he moved since the last solve, into model space: a jump of
+            // more than 2 m is a teleport, and no step.
+            {
+                const Vec3 at{transform[12], transform[13], transform[14]};
+                const Vec3 moved = lastHeroAtSet && finite(at) ? at - lastHeroAt : Vec3{};
+                t.travel = length(moved) < 2 ? toModel.rotate(moved) : Vec3{};
+                lastHeroAt = at;
+                lastHeroAtSet = finite(at);
+            }
             t.eyes = toModel.rotate(wanted.eyes);
             t.facing = toModel * wanted.facing;
             if (const Quat tilt = wanted.tilt; tilt.x != 0 || tilt.y != 0 || tilt.z != 0)

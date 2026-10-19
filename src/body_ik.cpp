@@ -560,18 +560,32 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
             const Vec3 side = i == 0 ? left : left * -1.f;
             const bool perch = state.perched && !t.kneel;
             Vec3 foot = hip - up * (height - ankle) - forward * back + side * (perch ? c.perchStance * s : 0.f);
-            // On the ground the foot stays where it stands, and steps there
-            // once the hips have carried its place far enough (the player
-            // walking about his room), one foot at a time.
-            if (t.ground && !t.kneel) {
+            // A planted foot stays where it stands in the world, and steps
+            // once the hips have carried its place far enough - the player
+            // walking about his room, or walking a wall - one foot at a time,
+            // landing ahead of the way he goes, quicker the faster he goes.
+            if (!t.kneel) {
                 auto& f = state.feet[static_cast<size_t>(i)];
                 const auto& other = state.feet[static_cast<size_t>(1 - i)];
                 const float reach = c.stepReach * s;
-                if (!f.set) {
+                const Vec3 travel = finite(t.travel) && length(t.travel) < 2 ? t.travel : Vec3{};
+                const Vec3 going = dt > 0 ? level(travel) / dt : Vec3{};
+                const float speed = length(going);
+                const float stepSeconds = c.stepSeconds / (1 + .35f * speed);
+                if (f.set) {
+                    f.at = f.at - travel;
+                    f.from = f.from - travel;
+                }
+                foot = foot + going * (stepSeconds * .6f);
+                // Still blending in from the game's pose, the hips go a long way:
+                // a foot remembers its place only once the body is all there.
+                if (w < .999f) {
+                    f = {false, foot, foot, foot, -1};
+                } else if (!f.set) {
                     f = {true, foot, foot, foot, -1};
                 } else if (f.step >= 0) {
                     f.to = foot;
-                    f.step = std::min(1.f, f.step + dt / c.stepSeconds);
+                    f.step = std::min(1.f, f.step + dt / stepSeconds);
                     const float e = f.step * f.step * (3 - 2 * f.step);
                     f.at = f.from + (f.to - f.from) * e + up * (c.stepLift * s * std::sin(3.14159265f * f.step));
                     if (f.step >= 1) {

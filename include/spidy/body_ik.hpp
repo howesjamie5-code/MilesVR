@@ -197,9 +197,13 @@ struct Targets {
     // his eyes. Standing tall enough, kneeling is standing.
     bool kneel{};
     // Planted on the ground the hero stands on himself (not a wall): the
-    // game's pose may say he perches there (MilesVR 0.1.63), and the feet
-    // step after the hips rather than slide.
+    // game's pose may say he perches there (MilesVR 0.1.63).
     bool ground{};
+    // How far the hero's model moved since the last solve, model space
+    // (MilesVR 0.1.64): planted feet stay where they stand in the world as he
+    // travels, and step after him - a walk on a wall, where the game has no
+    // walking legs (the user: "apply the walking animation to walls aswell").
+    Vec3 travel{};
 };
 struct Config {
     // Where the wrist joint sits from the grip point of a right hand, in its

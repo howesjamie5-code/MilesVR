@@ -1,5 +1,17 @@
-MilesVR 0.1.63 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.64 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.63: WALKING LEGS ON WALLS
+--------------------------------------------------
+Walking a wall (the left stick while you stand on it), Miles's feet now
+walk too: each foot stays where it stands on the wall, then steps ahead
+in the way you go, left and right in turn, quicker the faster you walk -
+no more sliding. The same steps show anywhere the game moves him while
+his legs are planted.
+
+What to try:
+1. Stand on a wall, walk with the stick slowly and quickly: do the legs
+   walk? Too fast, too slow, too big steps?
 
 What changed since 0.1.62: WALKING LEGS, STEPPING FEET AND A PERCH
 --------------------------------------------------
