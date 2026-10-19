@@ -152,23 +152,28 @@ frames may be mirrored, so no joint orientation is ever taken as a rotation):
    the palm (the hero's rest pose holds its palms 30 degrees from down,
    toward the thumb).
 8. A fist: each finger joint past the palm turns about its finger's own hinge
-   (across the finger's bone in the palm and the palm's normal at rest,
-   carried by the joint before it) to 83, 95 and 63 degrees from the bone
-   before it, however the game had bent it; a hand closed part of the way
-   goes that share of the way from the game's bend. The thumb's last joint
-   bends 63 degrees about the thumb's hinge (across its first bone, toward
-   the little finger), the joint before it as far as puts the tip as far from
-   the thumb's base as the tip's place (at most 80 degrees), and the base
-   swings the tip there: over the middle bones of the index and middle
-   fingers, 1.6 cm out of the fist.
-   Shooting a web goes over the fist (`Targets::Hand::shoot`, 0 to 1): of
-   the four fingers the first and the last go to 3, 5 and 3 degrees, nearly
-   straight, and the two between them to 74, 89 and 43 degrees, their tips
-   in the middle of the palm where the web shooter's trigger is; the thumb's
-   two joints straighten to 6 degrees and its base swings it 57 degrees from
-   the fingers' way toward its own side, in the palm's plane. At 1 the hand
-   is that pose whatever the fist was; between, each joint is that share of
-   the way from where the fist left it.
+   (across the finger's bone in the palm and the palm's normal: the knuckle's,
+   the one axis the rest pose gives all three joints) to 83, 95 and 63 degrees
+   from the bone before it, however the game had bent it; a hand closed part
+   of the way goes that share of the way from the game's bend. First each
+   finger gathers in: its first bone turns that share of the way into the
+   plane its knuckle bends in. The rest pose spreads the fingers (the index 9
+   degrees one way, the ring and little fingers 12 and 16 the other), and
+   until October 18 a closed hand kept that spread, its tips 4 cm apart where
+   the knuckles are 2.3: a fanned claw. The thumb's last joint bends 63
+   degrees about the thumb's hinge (across its first bone, toward the little
+   finger), the joint before it as far as puts the tip as far from the thumb's
+   base as the tip's place (at most 80 degrees), and the base swings the tip
+   there: over the middle bones of the index and middle fingers, 1.6 cm out of
+   the fist. Shooting a web goes over the fist (`Targets::Hand::shoot`, 0 to
+   1): of the four fingers the first and the last go to 3, 5 and 3 degrees,
+   nearly straight, and the two between them, gathered in, to 86, 92 and 63
+   degrees, their tips on the palm as deep as a fist's, where the web
+   shooter's trigger is (until October 18, 74, 89 and 43: 2 cm short of it);
+   the thumb's two joints straighten to 6 degrees and its base swings it 57
+   degrees from the fingers' way toward its own side, in the palm's plane. At
+   1 the hand is that pose whatever the fist was; between, each joint is that
+   share of the way from where the fist left it.
 9. A flip (the left stick or A in the air, game_tracking's FlipMotion): the headset and the
    controllers go into steps 2-8 turned back level about the eyes, so the
    body is solved as if the player stood level; then everything under the
@@ -264,8 +269,10 @@ eye images like the rest of the overlay. Measured on the GPU test's eye image
 ## How punching works
 
 Every controller sample reaches the swing's world-query callback
-(`game_swing.cpp`), where the web grab takes it too. The fist is the aim
-pose's point (at the knuckles); its speed is that of the grip relative to the
+(`game_swing.cpp`), where the web grab takes it too. The fist is 15.5 cm
+along the hand from its web shooter (the aim, `webShooter`: the suit's
+nozzle, the rig's webStart joint, since October 18), at the knuckles; its
+speed is that of the grip relative to the
 head, turned from tracking space into the world: the arm's own motion, whatever
 the player's flight. The characters are the game's bots, kept by a registry
 watch (`game_targets`, every 250 ms), each an upright capsule from his feet,

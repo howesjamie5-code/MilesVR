@@ -26,14 +26,57 @@ STAGING = ROOT / 'reports/bridge-modules'
 HOOKS = (0x232bcb0, 0x21f15a0, 0x21ee0d0, 0x21edea0, 0x70b880)
 
 
+class GameNeedsRestart(RuntimeError):
+    """The running game already holds Spidy: VR ran in it, or another build's modules are in it. A game
+    process takes each of Spidy's modules once and keeps it until it exits, so only a new game process can
+    start VR (the launcher offers to close the game: CLOSE_GAME_EXIT in vr_launcher.py)."""
+
+
+class OtherBuild(GameNeedsRestart):
+    """A module of another Spidy build is in the game: one built since the game started (it was open while
+    Spidy was updated), or one from another Spidy folder. `folder`: where it came from, None if unknown."""
+
+    def __init__(self, message, folder=None):
+        super().__init__(message)
+        self.folder = folder
+
+
+def spidy_folder(path):
+    """The Spidy folder a staged module was loaded from (<folder>/reports/<kind>-modules/<sha256>/<name>),
+    or None for a path of another shape."""
+    path = pathlib.Path(path)
+    parents = path.parents
+    if len(parents) > 3 and parents[1].name.lower().endswith('-modules') and parents[2].name.lower() == 'reports':
+        return parents[3]
+    return None
+
+
+def other_build_text(folder):
+    """What a player reads when the game holds another Spidy build than this folder's; until October 18:
+    "Different bridge build is resident. Restart the game before replacing it." A player with 32 GB took the
+    module it named for memory."""
+    if folder is not None and pathlib.Path(folder).resolve() == ROOT:
+        return ('Spider-Man is still running with an older Spidy build in it: it was open while Spidy was updated. '
+                'Close Spider-Man, then press START VR: the launcher starts the game again.')
+    where = f'Spidy from another folder in it ({folder})' if folder is not None else 'another Spidy build in it'
+    return (f'Spider-Man is still running with {where}, and a running game takes Spidy only once. Close '
+            'Spider-Man, then press START VR: the launcher starts the game again.')
+
+
+def staged(path, staging, digest):
+    """A module the game loaded from `path` is this folder's build `digest`, staged where prepare puts it."""
+    path = pathlib.Path(path).resolve()
+    return staging in path.parents and path.parent.name == digest
+
+
 def prepare(pid, process, dll=DLL, staging=STAGING,
             names=('SpidyStart','SpidyStop','SpidySubmit','SpidyBridgeData')):
     digest = hashlib.sha256(dll.read_bytes()).hexdigest()
     loaded = next((x for x in modules(pid) if x['name'].lower() == dll.name.lower()), None)
     if loaded:
         path = pathlib.Path(loaded['path']).resolve()
-        if staging not in path.parents or path.parent.name != digest:
-            raise RuntimeError('Different bridge build is resident. Restart the game before replacing it.')
+        if not staged(path, staging, digest):
+            raise OtherBuild(other_build_text(spidy_folder(path)), spidy_folder(path))
     else:
         path = staging / digest / dll.name
         path.parent.mkdir(parents=True, exist_ok=True)

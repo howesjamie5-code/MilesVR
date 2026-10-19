@@ -53,8 +53,9 @@ enum class Mapping {
     // buttons; walking, jumping, B (the game's B: dodge), Y (the game's
     // Y: interact), the right stick's click (the game's LB + RB: its
     // web pull), that stick pushed down (the game's D-pad down: heal) and
-    // up (its LT + RT: the zip to a point) reach it as the swing leaves
-    // them (Walk). The virtual controller's own right stick turns the
+    // up (its LT + RT: the zip to a point; held into the game's aim mode,
+    // the zip as it is let go: ZipPress) reach it as the swing leaves them
+    // (Walk). The virtual controller's own right stick turns the
     // game's camera to where the player looks (CameraLook, CameraPitch). A
     // held on the ground charges the swing's own leap (ChargeJump), and a
     // trigger pulled with its hand at the temple is the game's R3, its scan
@@ -94,12 +95,14 @@ enum class Mapping {
 // D-pad, and their triggers and grips are the webs in VR play, so the right
 // thumbstick pushed down and up gives them (StickPush): until October 12
 // nothing did, and the first mission stopped at the heal it asks for and at
-// its vent. look and lookUp: the virtual controller's own right stick, its
-// X and Y, which turn the game's camera (CameraLook, CameraPitch). scan: the
-// game's R3, held: its scan of the surroundings (TemplePress).
+// its vent. aim: the game's LT alone, held: its aim mode, which a zip held
+// on in it turns into (ZipPress). look and lookUp: the virtual controller's
+// own right stick, its X and Y, which turn the game's camera (CameraLook,
+// CameraPitch). scan: the game's R3, held: its scan of the surroundings
+// (TemplePress).
 struct Walk {
     float right{}, forward{};
-    bool jump{}, interact{}, dodge{}, pull{}, heal{}, zip{};
+    bool jump{}, interact{}, dodge{}, pull{}, heal{}, zip{}, aim{};
     // The game's RT, alone: its parkour. With the jump on the game's own wall
     // crawl it is the only way off the wall - A by itself, in any direction
     // of the stick, only leaps the hero along it (October 14, measured: back,
@@ -294,17 +297,26 @@ class TemplePress {
 // holdSeconds, and holds until the stick is back within `released`: a turn
 // rolled round to the top, a diagonal and a flick through the line are none.
 // Outside VR play nothing holds, and a stick held through that must be let
-// go first (on the game screen it is the game's own right stick).
+// go first (on the game screen it is the game's own right stick) - but a
+// push already under way keeps through a moment out of play, as long as
+// graceSeconds (a long frame, a blink of the headset's focus), and goes on
+// counting after it. Until October 18 one such moment spent it.
 class StickPush {
   public:
-    static constexpr float pushed = .75f, aside = .45f, released = .5f, holdSeconds = .15f;
+    static constexpr float pushed = .75f, aside = .45f, released = .5f, holdSeconds = .15f,
+                           graceSeconds = .25f;
     enum class Way { none, down, up };
     // seconds: since the previous update. play: the controllers play VR.
-    // x, y: the right thumbstick, -1..1 (0 for a hand that is not tracked).
+    // x, y: the right thumbstick, -1..1.
     Way update(float seconds, bool play, float x, float y) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
         // A bad reading is a stick at rest.
         const bool rest = !std::isfinite(x) || !std::isfinite(y) || std::hypot(x, y) < released;
+        if (!play && !rest && way_ != Way::none && lapse_ + dt < graceSeconds) {
+            lapse_ += dt;
+            return Way::none;
+        }
+        lapse_ = 0;
         if (!play || rest) {
             way_ = Way::none;
             held_ = 0;
@@ -334,7 +346,109 @@ class StickPush {
   private:
     Way way_{};
     bool spent_{};
-    float held_{};
+    float held_{}, lapse_{};
+};
+// The right stick held up (StickPush) as the game's LT + RT, and what letting
+// go of it does. The two going down at once are the game's zip to a point,
+// where it has one. Where it has none, LT held on is its aim mode (its L2:
+// "the standard aim mode functionality (L2)"), whose aim snaps to the points
+// it can zip to ("If true, we'll snap to zip-to-perch targets") and which
+// slows the game's own time once it has lasted a moment ("How long to delay
+// at the start of aim-mode before triggering time-scale"). Holding the stick
+// up waits for a zip, so that is where a player who held it ended up: in the
+// user's session of October 18 the game's time went down to 0.2 eight times,
+// 0.56 to 0.64 s after the zip went out, for up to 3 s (once for a single
+// frame, the stick let go just then), and letting go zipped nowhere ("when
+// holding up (zip) and it enters the slowmo aiming mode, on release we will
+// zip").
+//
+// So a hold the game slows its time in (its own scale below slowBelow, after
+// LT + RT have been down pressSeconds) is aiming: from then on LT alone goes
+// out, the aim mode staying and RT coming up, and letting go of the stick
+// presses RT again beside it for pressSeconds (after RT has been up
+// gapSeconds): LT + RT in the aim mode, the zip to the point its aim holds.
+// A press the game zips from at once, and a hold let go before its time
+// slows, are the zip as before. Out of VR play nothing goes out; a hold keeps
+// through graceSeconds of that (as StickPush's push does) and is dropped
+// after, letting go sending nothing.
+class ZipPress {
+  public:
+    static constexpr float slowBelow = .9f, pressSeconds = .2f, gapSeconds = .05f, graceSeconds = .25f;
+    struct Keys {
+        bool zip{}; // the game's LT + RT
+        bool aim{}; // its LT alone: its aim mode
+    };
+    // seconds: since the previous update. up: the stick held up for the
+    // game's zip (StickPush). play: VR play. slow: the game's own time scale
+    // is below slowBelow now.
+    Keys update(float seconds, bool up, bool play, bool slow) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        if (!play) {
+            lapse_ += dt;
+            if (lapse_ >= graceSeconds || phase_ == Phase::waiting || phase_ == Phase::pressing)
+                phase_ = Phase::idle;
+            return {};
+        }
+        lapse_ = 0;
+        time_ += dt;
+        switch (phase_) {
+        case Phase::idle:
+            if (!up)
+                return {};
+            phase_ = Phase::held;
+            time_ = 0;
+            return {true, false};
+        case Phase::held:
+            if (!up) {
+                phase_ = Phase::idle;
+                return {};
+            }
+            if (!slow || time_ < pressSeconds)
+                return {true, false};
+            phase_ = Phase::aiming;
+            time_ = 0;
+            ++aims_;
+            return {false, true};
+        case Phase::aiming:
+            if (up)
+                return {false, true};
+            ++releases_;
+            if (time_ < gapSeconds) {
+                phase_ = Phase::waiting;
+                return {false, true};
+            }
+            phase_ = Phase::pressing;
+            time_ = 0;
+            return {true, false};
+        case Phase::waiting:
+            if (time_ < gapSeconds)
+                return {false, true};
+            phase_ = Phase::pressing;
+            time_ = 0;
+            return {true, false};
+        case Phase::pressing:
+            if (time_ < pressSeconds)
+                return {true, false};
+            phase_ = Phase::idle;
+            return {};
+        }
+        return {};
+    }
+    // Holds that became aiming, and zips sent as one was let go, so far.
+    uint32_t aims() const {
+        return aims_;
+    }
+    uint32_t releases() const {
+        return releases_;
+    }
+
+  private:
+    // held: LT + RT down; aiming: LT alone, RT up for time_; waiting: let
+    // go, RT not up long enough yet; pressing: the zip let go of.
+    enum class Phase { idle, held, aiming, waiting, pressing };
+    Phase phase_{};
+    float time_{}, lapse_{};
+    uint32_t aims_{}, releases_{};
 };
 // The game's own camera, kept looking where the player looks. VR shows the
 // world from the headset; the game's follow camera is still there, turns
@@ -607,6 +721,10 @@ class PressOrigins {
 // the game's X, its L3, each bumper and each trigger on its own and three
 // ways of its D-pad could not be sent at all.
 //
+// Both thumbsticks held in this long are the game's Start (PausePress); let
+// go sooner, a click of both is the pad layer's (PadLayer) or, with the game
+// played on its screen, the game's L3 + R3 (ScreenControls).
+constexpr float pauseHoldSeconds = .7f;
 // Clicking both thumbsticks together latches this layer, and every control of
 // the pad can be sent while it is on. The chord is free: neither stick's own
 // press has been half of clicking both since October 12 (PullPress,
@@ -614,6 +732,10 @@ class PressOrigins {
 // free for the face buttons, which holding the chord would not. It never
 // latches while a web carries the player, and it lets go by itself after
 // idleSeconds of nothing pressed, so a player cannot be left in it.
+//
+// The click toggles it as it is let go, once held chordSeconds: held on to
+// pauseHoldSeconds it is the pause instead (PausePress), and toggles nothing.
+// Until October 18 it toggled at chordSeconds, under the thumbs.
 class PadLayer {
   public:
     static constexpr float chordSeconds = .12f, idleSeconds = 20;
@@ -632,17 +754,18 @@ class PadLayer {
             return false;
         }
         if (!chord) {
-            held_ = 0;
-            spent_ = false;
-        } else if (!spent_) {
-            held_ += dt;
-            if (held_ >= chordSeconds) {
-                spent_ = true;
+            if (!spent_ && held_ >= chordSeconds) {
                 latched_ = !latched_;
                 idle_ = 0;
                 if (latched_)
                     ++entries_;
             }
+            held_ = 0;
+            spent_ = false;
+        } else if (!spent_) {
+            held_ += dt;
+            // Held into the pause: it is PausePress's.
+            spent_ = held_ >= pauseHoldSeconds;
         }
         if (latched_) {
             idle_ = busy ? 0.f : idle_ + dt;
@@ -664,6 +787,62 @@ class PadLayer {
     float held_{}, idle_{};
     uint32_t entries_{};
 };
+// The game's Start from both thumbsticks held in for pauseHoldSeconds, for a
+// controller whose menu button the runtime keeps for itself. Under SteamVR a
+// Quest's left menu button is SteamVR's own system button: its Touch profile
+// (drivers/oculus/resources/input/touch_profile.json) has no menu input, and
+// SteamVR opens its dashboard with that button (vrcompositor_bindings_
+// touch.json), so the game's pause never came from it (October 16: "with
+// steamvr if you're on quest you can't open the pause menu"); an Index
+// controller's system button is SteamVR's too. The menu button stays Start
+// wherever it arrives. Start goes out for tapSeconds, once a hold; the chord
+// is spent until both sticks are let go, and meanwhile neither stick's click
+// goes out (spent): the pause menu opening under the thumbs would read them.
+class PausePress {
+  public:
+    static constexpr float tapSeconds = .1f;
+    // seconds: since the previous update. allowed: the controllers drive the
+    // game (any mapping but none). left, right: each thumbstick's click.
+    // True while Start goes out.
+    bool update(float seconds, bool allowed, bool left, bool right) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        const bool chord = left && right;
+        tap_ = std::max(0.f, tap_ - dt);
+        if (!left && !right)
+            spent_ = false;
+        if (!allowed) {
+            // A chord held through this must be let go of first.
+            held_ = 0;
+            spent_ = spent_ || chord;
+            tap_ = 0;
+            return false;
+        }
+        if (!chord) {
+            held_ = 0;
+        } else if (!spent_) {
+            held_ += dt;
+            if (held_ >= pauseHoldSeconds) {
+                spent_ = true;
+                tap_ = tapSeconds;
+                ++pauses_;
+            }
+        }
+        return tap_ > 0;
+    }
+    // A hold reached the pause, and a stick is still down.
+    bool spent() const {
+        return spent_;
+    }
+    // The pauses sent so far.
+    uint32_t pauses() const {
+        return pauses_;
+    }
+
+  private:
+    bool spent_{};
+    float held_{}, tap_{};
+    uint32_t pauses_{};
+};
 // The game played on its own screen (the MILES VR tab's VIEW: GAME SCREEN):
 // every control as on an Xbox controller, as on the game screen
 // (Mapping::menus), and the two that no VR controller but the Steam Frame's
@@ -671,10 +850,11 @@ class PadLayer {
 // press is Start (pause), sent as it is let go. The D-pad (its down heals) is
 // the right thumbstick pushed decisively while the left one is clicked down,
 // which then turns no camera; a click of the left stick that pushed no D-pad
-// is the game's L3 as it is let go, and with the right stick's click held
-// too the two together (the game's L3 + R3). A press that began before the
-// game was played on its screen (a pause menu's Start) does nothing here
-// until it is let go.
+// is the game's L3 as it is let go. Both sticks clicked are the game's L3 +
+// R3, as both are let go (held on to pauseHoldSeconds they are its Start
+// instead: PausePress), and neither goes out while they are down. A press
+// that began before the game was played on its screen (a pause menu's Start)
+// does nothing here until it is let go.
 class ScreenControls {
   public:
     static constexpr float holdSeconds = .5f, tapSeconds = .1f, decisive = .7f;
@@ -687,11 +867,12 @@ class ScreenControls {
         const bool click = frame.hands[0].stickClick;
         startTap_ = std::max(0.f, startTap_ - dt);
         thumbTap_ = std::max(0.f, thumbTap_ - dt);
+        chordTap_ = std::max(0.f, chordTap_ - dt);
         if (!play) {
             menuDown_ = clickDown_ = dpad_ = chord_ = false;
-            menuHeld_ = 0;
+            menuHeld_ = chordHeld_ = 0;
             menuSpent_ = menu;
-            clickSpent_ = click;
+            clickSpent_ = click || right.stickClick;
         } else {
             s.buttons &= static_cast<uint16_t>(~start);
             if (menu && !menuSpent_) {
@@ -705,7 +886,21 @@ class ScreenControls {
                 menuDown_ = menuSpent_ = false;
                 menuHeld_ = 0;
             }
-            if (click && !clickSpent_) {
+            if (click && right.stickClick && !clickSpent_)
+                chord_ = true;
+            if (chord_) {
+                // Both sticks: nothing of either until both are let go.
+                s.buttons &= static_cast<uint16_t>(~(leftThumb | rightThumb));
+                s.thumbRX = s.thumbRY = 0;
+                if (click && right.stickClick) {
+                    chordHeld_ += dt;
+                } else if (!click && !right.stickClick) {
+                    if (chordHeld_ < pauseHoldSeconds)
+                        chordTap_ = tapSeconds;
+                    clickDown_ = dpad_ = chord_ = clickSpent_ = false;
+                    chordHeld_ = 0;
+                }
+            } else if (click && !clickSpent_) {
                 clickDown_ = true;
                 s.buttons &= static_cast<uint16_t>(~leftThumb);
                 const float rx = right.valid && std::isfinite(right.stickX) ? right.stickX : 0.f;
@@ -717,15 +912,12 @@ class ScreenControls {
                     s.buttons |= ry > 0 ? dpadUp : dpadDown;
                     dpad_ = true;
                 }
-                if (right.stickClick) {
-                    s.buttons |= leftThumb;
-                    chord_ = true;
-                }
                 s.thumbRX = s.thumbRY = 0;
             } else if (!click) {
-                if (clickDown_ && !dpad_ && !chord_)
+                if (clickDown_ && !dpad_)
                     thumbTap_ = tapSeconds;
-                clickDown_ = dpad_ = chord_ = clickSpent_ = false;
+                clickDown_ = dpad_ = false;
+                clickSpent_ = clickSpent_ && right.stickClick;
             }
         }
         // A tap let go of keeps its button down long enough for the game to
@@ -734,11 +926,13 @@ class ScreenControls {
             s.buttons |= start;
         if (thumbTap_ > 0)
             s.buttons |= leftThumb;
+        if (chordTap_ > 0)
+            s.buttons |= leftThumb | rightThumb;
     }
 
   private:
     bool menuDown_{}, menuSpent_{}, clickDown_{}, clickSpent_{}, dpad_{}, chord_{};
-    float menuHeld_{}, startTap_{}, thumbTap_{};
+    float menuHeld_{}, startTap_{}, thumbTap_{}, chordHeld_{}, chordTap_{};
 };
 // The interact button, sending what the game is asking for.
 //
@@ -938,6 +1132,8 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
             s.buttons |= dpadDown;
         if (walk.zip)
             s.leftTrigger = s.rightTrigger = 255;
+        if (walk.aim)
+            s.leftTrigger = 255;
         if (walk.parkour)
             s.rightTrigger = 255;
         if (walk.scan)

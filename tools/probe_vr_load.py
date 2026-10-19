@@ -380,9 +380,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--width', type=int, default=3072, help='eye width in pixels (headset: 3072)')
     p.add_argument('--height', type=int, default=3264, help='eye height in pixels (headset: 3264)')
-    p.add_argument('--views', type=int, default=61, choices=(5, 13, 21, 29, 45, 61),
+    p.add_argument('--views', type=int, default=61, choices=(5, 13, 21, 29, 45, 61, 125),
                    help="13 moves the game's own view to the head; +16 gives each eye occlusion culling; +32 "
-                        "(61, as a VR session does) the game's own view is not rendered itself")
+                        "(61, as a VR session does) the game's own view is not rendered itself; +64 (125) the "
+                        "eyes keep the distances their own lenses give, as before October 19 (the _lod phases "
+                        'need it: otherwise the eyes set their multiplier again each frame)')
     p.add_argument('--upscale', type=int, default=67,
                    help="percent of the eye's size per side the eyes' scene is rendered at (50..100, as a VR "
                         "session's --upscale); 100 only anti-aliases")
@@ -406,8 +408,14 @@ def main():
                    help="stock, vr, turn, narrow, after; vr_off, turn_off and narrow_off take the eyes' "
                         'occlusion away for the phase (views 21/29); vr_s0 to vr_s7 (turn_, narrow_ too) run the '
                         'phase with that --eye-shadows value, vr_m0 with every present and vr_m9 with one a '
-                        'second; shots saves eye images at four headings with and without occlusion '
+                        "second; vr_r200 (turn_, narrow_ too) with the far buildings' full models out to 200%% "
+                        "of the game's distance (SpidyImpostorReach; a session has 150), vr_lod with the eyes' "
+                        "level-of-detail multiplier at "
+                        '--eye-lod; shots saves eye images at four headings with and without occlusion '
                         '(--gpu capture)')
+    p.add_argument('--eye-lod', type=float, default=1.8,
+                   help="the eyes' level-of-detail multiplier (view +1cc8, 1 unless a cutscene sets it) in a phase "
+                        'ending in _lod')
     p.add_argument('--profile-threads', default='',
                    help='comma-separated thread ids to sample during the vr phase (from an earlier report)')
     p.add_argument('--headings', type=int, choices=(1, 2, 3, 4), default=4,
@@ -421,6 +429,8 @@ def main():
     known = {'stock', 'vr', 'turn', 'narrow', 'sway', 'after', 'vr_off', 'turn_off', 'narrow_off', 'shots'}
     known |= {f'{name}_s{mode}' for name in ('vr', 'turn', 'narrow') for mode in range(8)}
     known |= {f'{name}_m{rate}' for name in ('vr', 'turn', 'narrow') for rate in (0, 9)}
+    known |= {f'{name}_lod' for name in ('vr', 'turn', 'narrow')}
+    known |= {f'{name}_r{reach}' for name in ('vr', 'turn', 'narrow') for reach in range(50, 401)}
     if not all(64 <= x <= MAX_EYE_SIZE for x in (a.width, a.height)) or not set(phases) <= known:
         p.error(f'Eye sizes are 64..{MAX_EYE_SIZE}; phases are ' + ', '.join(sorted(known)))
     if not 50 <= a.upscale <= 100:
@@ -463,7 +473,7 @@ def main():
                                    ('SpidyStart', 'SpidyStop', 'SpidyStereoData', 'SpidySetEyes', 'SpidyStereoFrames',
                                     'SpidyGpuStart', 'SpidyGpuStop', 'SpidyGpuData', 'SpidyGpuFreeze',
                                     'SpidyEyeTemporal', 'SpidyEyeShadows', 'SpidyShadowData',
-                                    'SpidyMonitorRate', 'SpidyPresentCount'))
+                                    'SpidyMonitorRate', 'SpidyPresentCount', 'SpidyImpostorReach'))
         result['dll_sha256'] = digest
         io = IoCounters()
         # Eye commands must outnumber any earlier run's in this game process.
@@ -585,6 +595,16 @@ def main():
                 if not write(process, view+0x1ba0, value, 8, c.byref(count)) or count.value != 8:
                     raise c.WinError(c.get_last_error())
 
+        def eye_lod(multiplier):
+            """Probe-only: each eye's level-of-detail multiplier (view +1cc8), which the engine multiplies
+            into the scale its lens gives (+1cc4) for every distance it judges by: models' detail and draw
+            distances, texture requests."""
+            for view in eye_views:
+                count = c.c_size_t()
+                value = struct.pack('<f', multiplier)
+                if not write(process, view+0x1cc8, value, 4, c.byref(count)) or count.value != 4:
+                    raise c.WinError(c.get_last_error())
+
         def hold(seconds, look):
             nonlocal serial
             began = time.perf_counter()
@@ -691,6 +711,13 @@ def main():
                     result[f'{label}_stop'] = call_remote(process, export)
                 eyes_on = False
                 time.sleep(3)
+            lod = name.endswith('_lod')
+            if lod:
+                eye_lod(a.eye_lod)
+            reach = name.split('_r')[-1] if '_r' in name else None
+            if reach:
+                call_remote(process, eyes_dll['SpidyImpostorReach'], int(reach))
+                time.sleep(.5)
             off = name.endswith('_off')
             if off:
                 occlusion(False)
@@ -714,6 +741,10 @@ def main():
                 call_remote(process, eyes_dll['SpidyMonitorRate'], a.monitor_rate)
             if off:
                 occlusion(True)
+            if lod:
+                eye_lod(1)
+            if reach:
+                call_remote(process, eyes_dll['SpidyImpostorReach'], 150)
         result['render_memory'] = render_memory_snapshot(game, render['SpidyRenderMemoryData'])
     finally:
         while stops:

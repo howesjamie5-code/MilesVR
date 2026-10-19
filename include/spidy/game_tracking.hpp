@@ -1,10 +1,12 @@
 #pragma once
+#include "head_clearance.hpp"
 #include "native_rays.hpp"
 #include "native_view.hpp"
 #include "swing.hpp"
 #include "tracking.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace spidy {
 // triggerWebs: the controllers' triggers are the hands' web buttons (Input's
@@ -57,6 +59,9 @@ struct GameMotionFrame {
     // the surface's turn).
     Vec3 standUp{0, 1, 0}, floor{};
     Quat flipTilt{};
+    // How far the eyes, and the hands and the body placed with them, moved
+    // out of what the world is built of (HeadClearance), metres in the world.
+    Vec3 headPush{};
 };
 // The wall or ceiling that holds the player, as the swing module reports it
 // (game_swing::Data's wall): the swing's own wall, or the game's wall crawl.
@@ -280,6 +285,25 @@ class GameTrackingRig {
     void standOnWalls(bool on) {
         standOnWalls_ = on;
     }
+    // The eyes out of what the world is built of (HeadClearance). Before an
+    // update: a point inside the player's body, where no wall is (the rays'
+    // start), and each surface found since the last one - by the rays the
+    // last clearanceRays() asked for, and the wall that holds the player
+    // (held). Without a body point the eyes go where the headset puts them.
+    void bodyCentre(Vec3 at) {
+        bodyCentre_ = at;
+    }
+    void surfaceFound(HeadClearance::Surface s, bool held = false) {
+        clearance_.found(s, held);
+    }
+    // After an update: the rays for the next batch, along the head's own
+    // look, side and up.
+    std::array<HeadClearance::Ray, HeadClearance::rays> clearanceRays(Vec3 look, Vec3 side, Vec3 up) const {
+        return clearance_.next(look, side, up);
+    }
+    const HeadClearance& clearance() const {
+        return clearance_;
+    }
     void reset();
 
   private:
@@ -302,5 +326,7 @@ class GameTrackingRig {
     bool standing_{}, standOnWalls_ = true;
     float headroom_{};
     Vec3 headDrop_{};
+    HeadClearance clearance_{};
+    Vec3 bodyCentre_{std::numeric_limits<float>::quiet_NaN(), 0, 0};
 };
 } // namespace spidy

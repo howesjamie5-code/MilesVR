@@ -8,8 +8,8 @@ fifth of the pixels of two 3072 x 3264 eyes). The game reads these values once a
 startup. The previous values are saved in reports/ and written back once the game
 has closed.
 
-Every VR session also turns off four game settings, whatever its window (SESSION):
-frame generation, vertical sync, ray-traced reflections, and the game's
+Every VR session also turns off five game settings, whatever its window (SESSION):
+frame generation, vertical sync, ray-traced reflections, NVIDIA Reflex, and the game's
 Windows.Gaming.Input, which under SteamVR takes the controllers away from Spidy's
 XInput controller. It puts the game's Aspect Ratio at Auto. They are saved and
 restored with the window's. So are the game's depth of field and its sharpening,
@@ -71,9 +71,16 @@ ASPECT = 16/9
 #   third player had advised. One of the two named his choice, 16:9, and his report of that day has the
 #   graphics device gone by the 30th eye picture, in a 1920 x 1080 window. It was not run here with a
 #   fixed shape, so what the game does to an eye with one is not known.
+# - NVIDIA Reflex off (ReflexMode 0, the choice counted from Off), since October 18. Reflex paces the
+#   game by the frames it presents to the monitor, and in VR play Spidy holds back the presents beyond
+#   the monitor's rate (native_gpu::holdPresent, since October 11) while the headset paces the eyes, so
+#   it has nothing to pace. On October 16 a player's game (RTX 4070 SUPER, Reflex On + Boost) lost its
+#   graphics device by the 19th eye picture in every session (DXGI_ERROR_ACCESS_DENIED), on Virtual
+#   Desktop and SteamVR alike, on every preset; the one session played here with Reflex on (October 10,
+#   Low Latency, without Boost) predates the held presents. Whether Reflex is the cause is not known.
 PICTURE = dict(depth_of_field='DOFQuality', sharpening='Sharpness')
 SESSION = ((KEY, dict(DLSSG=0, FrameGen=0, VSync=0, DOFQuality=0, Sharpness=1, RTReflections=0,
-                      ForcedAspectRatio=0), False),
+                      ForcedAspectRatio=0, ReflexMode=0), False),
            (INPUT_KEY, dict(EnableWindowsGamingInput=0), True))
 
 

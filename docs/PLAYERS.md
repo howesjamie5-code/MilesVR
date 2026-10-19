@@ -79,7 +79,10 @@ Ray-Traced Reflections off too: the headset cannot show them, and with them
 on the game ended with its display driver error (DXGI_ERROR_DEVICE_HUNG)
 when a menu, the map or a cutscene opened. Leave them off in the game's
 settings while you play in VR. It puts the game's Aspect Ratio at Auto:
-with a fixed shape chosen there, players' games ended as VR started. The
+with a fixed shape chosen there, players' games ended as VR started. And it
+turns NVIDIA Reflex off: the headset paces the game's frames, not the
+monitor, and one player's game with Reflex on lost its graphics device as
+VR started. The
 launcher also turns the game's Depth of
 Field off and its Sharpness to the lowest: in the headset the game blurs
 away from where its own camera focuses, not from where you look, and its
@@ -288,6 +291,28 @@ Fighting (web strikes: punching across the room, as in Batman: Arkham Shadow)
                          colour with a black outline, popping in rather than
                          fading. They are drawn the same in both eyes, so a
                          coloured edge is print and not your lenses
+  Spider-Sense ......... an enemy about to hit you: the comic's jagged
+                         lines over his head, when the game itself warns
+                         you (its Spider-Sense sound), inside a white ring
+                         that closes on him as the blow comes. Its last
+                         notch is a yellow burst: now. The controller on
+                         his side tingles. Its colour says what to do:
+  Blue lines ........... counter: throw a fist at him. His attack breaks
+                         at once, and he is your target whoever the ring
+                         was on: within reach the fist lands, out of it you
+                         fly to him as a web strike does (10 m at most).
+                         The blow sends him flying, time slows for a
+                         moment, and it counts in your combo. A punch that
+                         lands on him while his lines show counts too
+  Red lines ............ dodge: B. The game says nothing breaks this attack
+                         (a heavy's charge, a blow from too far to counter)
+  Yellow lines ......... under a white chevron: jump over it, A
+  Out of view .......... an enemy behind you or to the side: his mark shows
+                         small near the middle of your view on his side,
+                         with an arrowhead pointing to him, and his lines
+                         at the edge of your sight on that side. A fist
+                         thrown his way counters him unseen, as in Arkham
+                         Shadow
   Yank a thug from ..... he flies to you, wherever you go meanwhile and
   the air                whether or not you still hold the grip, and floats
                          an arm's length in front of you. As he arrives
@@ -321,7 +346,9 @@ Moving
   Y .................... interact: the game's Y (backpacks, doors, prompts;
                          web strike in a fight). Look at the thing and
                          press Y, within about a metre of it: you turn to
-                         it and the game takes it
+                         it and the game takes it. While you swing too: a
+                         web strike at a thug, or onto a car in a chase,
+                         takes you from your webs once the game begins it
   Hold Y ............... you step up to what you look at until the game
                          takes it (2 seconds at most; let go to stop). At a
                          door or a console: look at it and hold Y. Not in a
@@ -338,28 +365,41 @@ Moving
   Right stick up ....... the game's LT + RT: its zip to a point. Where the
                          game shows LT + RT (a perch, a vent to enter),
                          look at it, push the stick straight up and hold
-                         it. Not while a web carries you
+                         it. While you swing, or from Spidy's wall, too:
+                         the game takes you from your webs once its zip
+                         begins. With no point to zip to, keep holding:
+                         that is the game's aim, and time slows after a
+                         moment. Look at a point and let go of the stick:
+                         you zip there (the right controller ticks)
   Hand to your temple, . scan your surroundings: the game's R3. Raise either
   trigger                hand beside your head and pull its trigger there;
                          it holds for as long as you hold the trigger. No
                          web ball from that pull
   Menu button .......... pause
+  Hold both sticks in .. pause too, after a moment (both hands buzz). Under
+                         SteamVR the Quest's menu button is SteamVR's own:
+                         it opens SteamVR's dashboard, not the game's pause
   X .................... game menu (map, suits, skills)
   Hold X ............... the gadget wheel, in front of that hand (the
                          right one on a Steam Frame): move the hand toward
-                         a gadget to light it and let go of X to equip it.
-                         Your free hand's trigger then fires that gadget
-                         from your hand, as long as it has a charge. The
-                         web shooter at the top gives you web balls again.
-                         Back in the middle and let go: nothing changes
-  Click both sticks .... the pad layer: your controllers become the whole
-                         Xbox controller for a moment. Your grips are the
-                         game's LB and RB, your triggers its LT and RT, X
-                         is its X and the right stick its D-pad (the gadget
-                         wheel). Click both again to leave it, or just stop
-                         pressing anything for 20 seconds. Your webs are
-                         off while it is on, so it does not latch while a
-                         web is carrying you
+                         a gadget to light it (it turns red, its name in
+                         the middle) and let go of X to equip it. Your
+                         free hand's trigger then fires that gadget from
+                         your hand, as long as it has a charge: the dots
+                         beside each gadget are its charges, yellow while
+                         left, and one with none is grey. The yellow
+                         gadget is the one you have now. The web shooter
+                         at the top gives you web balls again. Back in
+                         the middle and let go: nothing changes
+  Click both sticks .... the pad layer, as you let go: your controllers
+                         become the whole Xbox controller for a moment
+                         (held on, both sticks pause instead). Your grips
+                         are the game's LB and RB, your triggers its LT
+                         and RT, X is its X and the right stick its D-pad
+                         (the gadget wheel). Click both again to leave it,
+                         or just stop pressing anything for 20 seconds.
+                         Your webs are off while it is on, so it does not
+                         latch while a web is carrying you
   A, B and Y are the game's own A, B and Y: where the game shows one of
   them on screen, press that button. Your grips shoot webs, so they are
   not the game's LB and RB in VR: the right stick's click is both. The
@@ -500,22 +540,31 @@ VR settings
   choose Settings, then SPIDY VR, the last tab (Up from GAME gets there in
   one press). It works like the game's other tabs: the left stick moves and
   changes the selected setting, X resets it, Y resets the whole tab, B goes
-  back.
-  Choose the WEB BUTTON (GRIP or TRIGGER: the one that shoots and holds a
-  web; the other reels in and shoots web balls), switch the aim markers and
-  webs holding in open air (a web that meets nothing within 100 m holds
-  there; off, it misses) on or off, or step the
-  swing speed limit, your weight, snap turn, smooth turn,
-  controller vibration, the game screen's size, its 3D depth and the HUD's
-  size (OFF hides it in VR). Playing the game on its screen instead of VR is
-  on the pause menu itself: SWITCH TO GAME SCREEN, under RESUME (each session
-  starts in VR).
-  Under EXPERIMENTAL, FLIPS (off until
-  you switch it on) lets the left stick and A in the air flip you, and FLIP
-  SPEED sets how fast. Changes apply at once. The
-  launcher starts your next session with them; its options show them too.
-  CALIBRATE BODY: set it to ON RESUME and resume, and the T-pose panel asks
-  for your measurements again.
+  back. Its sections:
+  WEBS ........... WEB STYLE (REALISTIC or ARCADE, below); the WEB BUTTON
+                   (GRIP or TRIGGER: the one that shoots and holds a web;
+                   the other reels in and shoots web balls); AIM MARKERS;
+                   webs holding in open air (a web that meets nothing
+                   within 100 m holds there; off, it misses).
+  SWINGING ....... the swing speed limit and your weight.
+  COMFORT ........ snap turn, smooth turn and controller vibration.
+  DISPLAY ........ the game screen's size, its 3D depth and the HUD's size
+                   (OFF hides it in VR).
+  BODY ........... CALIBRATE BODY: set it to ON RESUME and resume, and the
+                   T-pose panel asks for your measurements again.
+  EXPERIMENTAL ... FLIPS (off until you switch it on) lets the left stick
+                   and A in the air flip you, and FLIP SPEED sets how fast.
+  Changes apply at once. The launcher starts your next session with them;
+  its options show them too. Playing the game on its screen instead of VR
+  is on the pause menu itself: SWITCH TO GAME SCREEN, under RESUME (each
+  session starts in VR).
+  WEB STYLE: REALISTIC webs are ropes. They bend round whatever comes
+  between you and where they stick, lamp posts and signs too, and a swing
+  can take you down to just over the street. ARCADE webs go through lamp
+  posts, signs, railings, cars and other thin or loose things, as they are
+  shot and as they swing, and stick to the building behind; a swing keeps
+  you about 5 m over the street (let go to come down). Buildings still hold
+  them and bend them round their corners.
   Catching props and thugs, the web shooter, your own body and punching are
   always on.
   The title screen's Options have no SPIDY VR tab: load your save first, or
@@ -562,6 +611,21 @@ IF SOMETHING IS WRONG
 - VR does not start and the game stays flat: send the whole "reports"
   folder. The newest game-vr-...-console.log holds everything the launcher
   showed, and the report beside it says where it stopped.
+- "Spider-Man is still running with an older Spidy build in it" (or "with
+  Spidy from another folder in it"): the game was open while Spidy was
+  updated, or another Spidy folder started VR in it. A running game takes
+  Spidy only once. The launcher offers to close the game for you (as its
+  close button does: it saves as it quits) and start VR again. Up to 0.3.8
+  the session log said "Different bridge build is resident" instead.
+- No pause under SteamVR with a Quest: there the left menu button is
+  SteamVR's own and opens its dashboard. Hold both thumbsticks in for a
+  moment instead: the game pauses.
+- "A problem has occurred with your display driver" as VR starts, every
+  time: the session log names the code (0x887A002B is one). Try these one
+  at a time, pressing START VR after each: in the launcher's options,
+  "Normal camera on the monitor" on; the game's Display settings with
+  Monitor set to your main display; the newest graphics driver. Then post
+  the report in #spidy-bugs on Discord.
 - The game's menus ignore the VR controllers: keep the game window in front
   on the desktop, and start the game from the launcher with the game closed
   (the launcher turns off what lets SteamVR's virtual gamepads take over).
@@ -604,6 +668,14 @@ IF SOMETHING IS WRONG
   frame rate and memory: 150% gave about 30% fewer frames on an RTX 5090.
   Press Check beside your headset to see the pixels per eye. Virtual
   Desktop's quality setting raises what 100% is.
+- Far buildings stay dark and get their lit windows (and the rooms behind
+  them) only once you are close, or right after a menu: until October 19
+  the game chose which far buildings to draw in full only for its own
+  camera's view, which Spidy does not render while you play in VR, so it
+  chose none. Your left eye chooses them now. The same day the eyes also got
+  the flat game's distances for detail, people and textures, which the
+  headset's wide lens had halved. If it still happens, send a session report
+  and say where you were.
 - The aim markers distract you: switch AIM MARKERS off in Settings > SPIDY VR
   (or "Aim markers" in the launcher's options).
 - Webs shot at the sky hold somewhere you can't see: switch "Webs hold in
@@ -625,6 +697,9 @@ IF SOMETHING IS WRONG
 - A web lets go at a corner, or does something odd as it bends round one:
   it bends round six edges at most, and lets go where it finds no edge to
   bend round. Tell us where it happened.
+- Webs get caught on lamp posts and signs, or swings drag you down to the
+  street: set WEB STYLE to ARCADE in Settings > SPIDY VR (or "Web style" in
+  the launcher's options).
 - Lowering your arm on a web moves you: with PHYSICAL WEBS the web's length
   is measured to your hand, so a taut web follows it. That is also how you
   pull yourself along it.

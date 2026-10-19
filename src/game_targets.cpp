@@ -41,9 +41,10 @@ constexpr uint32_t trait(Trait t) {
 }
 // Between the kinds and the traits: what a class is by itself, not what it
 // makes its actor. A health component (BossHealth and ArmoredHealth derive
-// from the two the scan knows by their vtables), and a state of a bot's
-// state machine that has him out of the fight.
-constexpr uint32_t downState = 1u << 5, healthClass = 1u << 6, botHealthClass = 1u << 7;
+// from the two the scan knows by their vtables), a state of a bot's state
+// machine that has him out of the fight, and one in which something else
+// moves him (bit 0: no kind is 0).
+constexpr uint32_t heldState = 1u << 0, downState = 1u << 5, healthClass = 1u << 6, botHealthClass = 1u << 7;
 constexpr Rule rules[] = {
     {".?AVThrowableHelper@@", marker(Kind::throwable)},
     {".?AVBotMoverManager@@", marker(Kind::bot)},
@@ -63,6 +64,18 @@ constexpr Rule rules[] = {
     {".?AVBotStateDeathAnim@@", downState},
     {".?AVBotStateRagdoll@@", downState},
     {".?AVBotStateWallStuck@@", downState},
+    // Held (game_targets::held): attached to an actor (a car's seat), carried,
+    // played by a cinematic, in BotStateNull, the guest of another's synced
+    // animation, in a slotted interaction, frozen, or waiting for the game's
+    // own takedown yank.
+    {".?AVBotStateAttachToActor@@", heldState},
+    {".?AVBotStateCarried@@", heldState},
+    {".?AVBotStatePlayCinematic@@", heldState},
+    {".?AVBotStateNull@@", heldState},
+    {".?AVBotStatePlaySyncedAnimGuest@@", heldState},
+    {".?AVBotStateSlottedInteract@@", heldState},
+    {".?AVBotStateFrozen@@", heldState},
+    {".?AVBotStateRequestTakedownYank@@", heldState},
 };
 // A type descriptor's decorated name (at +0x10), its first 63 characters.
 bool typeName(uintptr_t descriptor, char (&out)[64]) {
@@ -227,6 +240,10 @@ bool game_targets::up(uintptr_t base, const Candidate& c) {
     if (c.kind != Kind::bot || !inPlay(c) || (health(c, points) && points <= 0))
         return false;
     return !c.machine || !(classOf(base, pointer(pointer(c.machine + 0x70))) & downState);
+}
+bool game_targets::held(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & heldState);
 }
 bool game_targets::standing(const Candidate& c) {
     float points{};

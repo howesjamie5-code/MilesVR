@@ -1,5 +1,41 @@
-MilesVR 0.1.28 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.30 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.28: EVERYTHING NEW IN SPIDY 0.4.0 (but its gadget wheel)
+--------------------------------------------------
+Spidy 0.4.0 (October 19) is ported in: its game addresses were moved to
+Miles Morales the same way as 0.3.8's were, and the few that did not map
+by themselves were worked out by hand (Spider-Sense's list of attacks
+sits 0x20 earlier in Miles Morales). Nothing of it has run in the game
+yet. The gadget wheel is kept as it was in MilesVR, as you asked.
+- SPIDER-SENSE: when an enemy is about to hit you, comic lines appear over
+  his head - blue: throw a fist at him to COUNTER (his attack breaks, he
+  is your target, you fly to him if he is out of reach); red: dodge (B);
+  yellow: jump (A). A ring closes on the blow; the yellow burst is now.
+  An attacker out of view shows near the middle of your view with an
+  arrow, and the controller on his side tingles.
+- WEB STYLE (launcher Play tab and the MILES VR tab, first under WEBS):
+  REALISTIC as before, or ARCADE - webs go through lamp posts, signs, cars
+  and thin things, and swings stay above the street.
+- MILES VR tab in sections: WEBS, SWINGING, VENOM, COMFORT, DISPLAY, BODY,
+  EXPERIMENTAL.
+- THE PHONE: reach behind you to your back pocket and draw it out (B puts
+  it away): its apps include music and GEAR (your gadgets).
+- THE CITY: detail, draw distances and textures as in the flat game (VR
+  had halved them), far buildings lit with their windows, full models out
+  to 150% of the game's distance.
+- Fixes from Spidy's Discord: your eyes stay 20 cm off walls; a zip or web
+  strike while swinging goes to the game (Y in a car chase); right stick
+  up and hold to aim a zip; both sticks held in = pause (SteamVR on
+  Quest); a game that already ran VR offers "close and start VR again".
+
+What to try:
+1. A fight: do the Spider-Sense lines show? Counter a blue one with a fist.
+2. WEB STYLE: ARCADE in the MILES VR tab, then swing between lamp posts.
+3. Reach behind your back for the phone.
+4. Does the city look sharper / farther, and is the frame rate still OK?
+5. The tests from 0.1.28 below (the MILES VR tab, VENOM HAND).
+6. If the game crashes or VR stops with a code, tell me when and the code.
 
 What changed since 0.1.27: THE MILES VR TAB IN THE GAME'S SETTINGS
 --------------------------------------------------

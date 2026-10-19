@@ -507,6 +507,9 @@ struct SessionOptions {
     // Miles's venom punch: with the venom meter full this hand's webs switch off and its web button charges its
     // fist for the venom punch; off, the right hand's.
     bool venomLeftHand = false;
+    // Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or loose
+    // things, and swings stay above the street; off, realistic webs bend round whatever comes in their way.
+    bool arcadeWebs = false;
     int hud = 2; // the game's HUD in the headset: 0 off, 1 small, 2 medium, 3 large
     // Walking a wall or stopped on it, your view turns so that the wall is your floor; off, you stay upright.
     bool standOnWalls = true;
@@ -542,9 +545,12 @@ inline bool calibrated(const SessionOptions& options) {
 }
 
 // Arguments after the script for tools/run_game_vr.py, for an untimed session
-// that starts the game itself (or uses the one already running).
+// that starts the game itself (or uses the one already running). closeGame:
+// the player agreed to close a running game that already holds Spidy
+// (kCloseGameExit), and the session does that first.
 inline std::vector<std::wstring> sessionArguments(const SessionOptions& options, std::wstring_view report,
-                                                  std::wstring_view runtime, std::wstring_view stopEvent) {
+                                                  std::wstring_view runtime, std::wstring_view stopEvent,
+                                                  bool closeGame = false) {
     std::vector<std::wstring> args{L"--auto-launch", L"--seconds", L"0", L"--swing-speed",
                                    std::to_wstring(std::clamp(options.swingSpeed, 1, 65)), L"--output",
                                    std::wstring(report)};
@@ -562,6 +568,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--trigger-webs");
     if (options.venomLeftHand)
         args.emplace_back(L"--venom-left-hand");
+    if (options.arcadeWebs)
+        args.emplace_back(L"--arcade-webs");
     if (!options.wallRun)
         args.emplace_back(L"--no-wall-run");
     if (options.gameDepthOfField)
@@ -606,6 +614,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--stop-event");
         args.emplace_back(stopEvent);
     }
+    if (closeGame)
+        args.emplace_back(L"--close-game");
     return args;
 }
 
@@ -644,6 +654,8 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.flips = number != 0;
         else if (key == "trigger_webs")
             next.triggerWebs = number != 0;
+        else if (key == "arcade_webs")
+            next.arcadeWebs = number != 0;
         else if (key == "wall_run")
             next.wallRun = number != 0;
         else if (key == "swing_speed")
@@ -702,6 +714,12 @@ inline LineKind classifyLine(std::string_view line) {
 // the session does not (NEEDS_ADMINISTRATOR_EXIT in tools/vr_launcher.py): the launcher offers to start
 // again as administrator.
 inline constexpr unsigned long kNeedsAdministratorExit = 5;
+
+// The exit code of a session that found the running game already holding Spidy: VR ran in it, or another
+// build's modules are in it (it was open while Spidy was updated, or another Spidy folder started VR in
+// it). A game process takes Spidy's modules once, so the launcher offers to close the game and start VR
+// again (CLOSE_GAME_EXIT in tools/vr_launcher.py; the session then gets --close-game).
+inline constexpr unsigned long kCloseGameExit = 6;
 
 // "14.44.35211.0" style versions, compared field by field.
 inline std::array<int, 4> parseVersion(std::string_view text) {

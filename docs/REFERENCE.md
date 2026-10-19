@@ -123,6 +123,8 @@ disassembly, then traced and tried at a street crime with a research DLL:
 | `MoverConfig` (0x78 bytes) with a `MoverBodySize` at +0x58 (`BodyBottom`, `BodyTop`, `BodyRadius`) | vtable `0x500e950`; constructor `0x22c9300` | A thug's mover manager names his at +0x48: the same values |
 | MSVC x64 RTTI: complete object locator at vtable -8 (signature 1, offset, type descriptor, class hierarchy, its own image offset); the hierarchy's base count +8 and base array +0xc; each base names its type descriptor first, whose name is at +0x10 | — | Spidy's scan in the game counted the same 74 props and bots as the same rules read from the executable |
 | `Team` component (red and blue teams) | vtable `0x4f62ec0` | No actor had one in the running game: no hostility test there |
+| Bot states in which something else moves the bot: `BotStateAttachToActor`, `BotStateCarried`, `BotStateNull` (with `BotStatePlayCinematic` and its Game version), `BotStatePlaySyncedAnimGuest` (and Game), `BotStateSlottedInteract`, `BotStateFrozen`, `BotStateRequestTakedownYank`; riding: `Ridable` (seats kDriver, kPassenger), `RidableRider`, `VehicleAttach`, `CarTakedownManager2`, `CarWebYankTarget` | layer-0 state at the state machine's +0x70 | RTTI names read from the exe (October 18); which of them a car's passengers and the hurt officers of a crime are in is not yet seen in the running game. `game_targets::held` takes the first list for "not free to fight" |
+| `SimpleAllegiance` (kNeutral, kBlueTeam = the hero, kPolice, kFisk, kMaggia, kSableEnemy ...) and `Target::TargetData` (kMeleeTarget, kWebLineTarget ... a mask) | vtables `0x4f89dc0`, `0x4f89f28`; names at `0x39470d8`, `0x391ed74` | RTTI and strings only (October 18); field offsets unknown |
 | A record's component of a type: through its table at +0x80 when it has one (size at +0x88), else its list at +0x58; a type holds its name at +0x60 | `0x16799a0`, `0x167ab40` | Disassembly; the game's own lookups (`0x3437f0`) |
 | `BotAttackResponseManager` (type `0x6c74b40`): a damage modifier in the bot's `CommonComponentStash`; its response to a request's damager reads the bot's `AwarenessDB` (type `0x7bf4e30`) through the handle at +0xa4 unchecked | vtable `0x3836d88`; slot 11 `0x313420`, `0x314c70`, set-up `0x313150` | The October 11 minidump: a null read at `0x314d3e` for a kinetic blow with the hero as damager; 9 such blows sent without a damager in the next session, no crash |
 
@@ -163,6 +165,25 @@ running game with `tools/probe_slow_motion.py`:
 | A render instance's bounding sphere: centre in the model's own axes (3 floats), then its radius | instance `+0x40` | The HUD panel's: (-0.0098, 0, -0.4053), 1.5208; placed by that centre the HUD lies on the stereo screen's plane to a pixel, by the instance's position 22% behind it |
 | Havok's step: float step, float base (1/30 s), owner; set by `0x1822670` (step = scale x base) | `0x609a560` | In the game: 0.0333 s, 0.0100 s at 30% |
 | Component timestep (the player's mover's step) | `0x16769f0` | In the game: 0.301 game seconds per real second at 30% |
+
+For Spider-Sense (October 18; `include/spidy/game_sense.hpp`,
+`include/spidy/spider_sense.hpp`), found from RTTI, the game's reflection
+tables and disassembly. **Read offline only: not yet traced in the running
+game** (`tools/probe_sense.py` reads it there; the session report's `sense`
+does in a headset):
+
+| Fact | RVA | Verification |
+|---|---:|---|
+| `Hero::HeroDodgeManager` (0xce8 bytes), a component of the hero's actor; its type (name at +0x60 = "HeroDodgeManager" `0x38b2420`, set by the static initializer `0xb7451`) | vtable `0x38b23d0`; type `0x6dd6450` | RTTI; the hero's code finds it by that type in many places (`0x307860` ...) |
+| Its attacks: 16 slots of 0xa8 bytes from +0x78 (cleared by its init `0x925af0`), the count at +0xaf8 | | Every function that reads +0xaf8 (`0x925ef0` ... `0x92d661`) walks them so |
+| In an attack: the attacker's actor handle +0x00 (generation << 20 \| index, `0x15a0560`'s rule); when the hero is warned +0x30 (double); the flags +0x5c; the state +0x60 (0x20 waiting, 0x10 warned); when the blow lands +0x80 (double, -1 none) | | `RegisterAttack` `0x926600` writes them; `0x928780` lists the attackers whose state has 0x10; `0x928220` clamps +0x80 to now as an attack lands |
+| Register an attack (manager, attacker record, data): the warning at once, or deferred to the blow's time less DodgeTime and 1/30 s (`0x38b2434`, 0.0333) | `0x926600` (from `0x92a700`, which finds the manager on the hero) | Disassembly |
+| Warn (manager, attack): the hero's Spider-Sense sound (`0x16d5e80`, hash 0x4b5f5740), then state 0x10 for 0x20 | `0x926580` | Disassembly |
+| Take an attack off (attacker, hero) | `0x928020` | Called by the action's stop event |
+| `HeroDodgeRegisterAttackAction` (a ScriptAction): +0xb4 the attacker's handle, +0xb8 the hero's, its data at +0x60 (`0x926390` its defaults); start event 0xa5f8fd64 registers, stop event 0xfce23dc7 takes off | vtable `0x38b6840`; event `0x9aeaf0` | Disassembly |
+| `BotAttackDodgeData` Properties: 0x1 kIsDodgable, 0x2 kIsCounterable ("Hero dodging can interrupt the attack"), 0x4 kNeverBeatToThePunch, 0x8 kUsesDodgeButton, 0x10 kUsesJumpButton, 0x20-0x100 kDodgeLeft/Right/Away/Toward, 0x200 kDontAutoRotateCamera, 0x400 kReversable, 0x800 kAllowCameraTrackOnJump, 0x1000 kDontDrawRangedShooterFX; times DodgeTime, OffScreenDodgeTime, RealDodgeTime, RealOffScreenDodgeTime, MaxPerfectDodgeDistance, MaxDamageImmunityTime | values `0x5df3d80`, names `0x5df3dc0`, fields `0x391f848` | The game's reflection tables; the registered flags' default `0x103c487` has bits above 0x1000 too, meaning unknown |
+| The game's clock: seconds of game time, the manager's times on it | double `0x7a7fbd0` | Disassembly (RegisterAttack adds a time to it); its scale `0x7a7fb90` (game_time.hpp) |
+| `Hero::HeroSpiderSenseManager` answers `HeroCounterableDodgeWindowOpenEvent` / `CloseEvent` (the flat game's mask lines, a material value 0x9402b89e set to 1, then 0) and `BotConfirmTimerIncreasing` (the stealth Spider-Sense) | vtable `0x38b4028`; handlers `0x966dd0`, `0x966d80`, `0x966c70` | Disassembly of its registrations at `0x966590` |
 
 The camera-related entry was temporarily hooked by the independently written
 Spidy observer. Local disassembly showed RCX as the object, XMM1 as the float
@@ -205,6 +226,42 @@ The live experiment updated these fields but did not prevent the post-lease
 vertical drop. This experiment is disabled by default. The swing controller
 instead keeps control of flight after web release and returns it on landing.
 
+Through Spidy's flight the handler runs about twice a mover step (the
+movement bridge's `airEvents`): in the user's sessions of October 15 not one
+driven airborne step went without it. Steps without it are the hero in
+another of the game's states - its wall grasp (mover flag `0x80a0`), or one
+of its own moves, none of which derive from its jump states:
+`HeroStateZipToPointLaunch` `0x38d5dd0`, `HeroStateZipToGround` `0x38d5ea0`,
+`HeroStateWebRush` (the web strike) `0x38c4dc0`, `HeroStateVehicleLanding`
+`0x38bf1f8`, `HeroStateVehicleTakedown` `0x38bf598` (RTTI; a car chase's zip
+onto the car is the web strike at the vehicle, `VehicleWebRushedEvent`).
+`game_swing::AirYield` lets the game have the hero for such a move the
+player asked for, once the handler goes quiet.
+
+**The game's aim mode** (October 18, its strings and a session report; the
+code not traced). LT alone is it: "Lock out the standard aim mode
+functionality (L2) while the photo gadget is equipped". Its aim snaps to
+the points the hero can zip to ("If true, we'll snap to zip-to-perch
+targets", "We'll only snap if a valid snap target is found this many
+frames into aim mode"), and it slows the game's own time once it has lasted
+a moment ("How long to delay at the start of aim-mode before triggering
+time-scale", "How long in real time to allow player driven time-scale to
+persist", "How long between player driven time-scale requests", "Should
+time slow when in aim mode as this character?"). In the user's session of
+October 18, LT + RT held from the right stick brought the game's own scale
+to 0.2 eight times, 0.56-0.64 s after they went down, for up to 3 s (once a
+single frame: the stick let go then), in the air and once standing; in the
+air the game's air handler went on running through it and the swing kept the
+hero. Its states by RTTI:
+`HeroStateAimModeIdle` `0x38d1cf8` (local `0x38d1de8`),
+`HeroStateAimModePreFire` (local `0x38d2060`), and `HeroStateAirFire`
+`0x38c14a8` (local `0x38c1828`), whose table has the air handler
+`0xa7b3a0` as the jump and fall states' do. `game_pad::ZipPress` takes the
+slowed time as the sign a held zip found no point: LT alone from then on,
+and RT again beside it as the stick is let go. That RT in the aim mode zips
+to the point its aim holds is the game's LT + RT as its controls have it,
+not measured.
+
 ## Rope points and gadgets (October 15, read from the code only)
 
 Static reading of this executable, never run: what to check in the game
@@ -234,10 +291,15 @@ player owns: records at `+0x1a8 + i * 0x18` (weapon id at `+0x10`), their
 count at `+0x628`; eight slots of `0x28` bytes, slot `s`'s weapon id at
 `+0x6c + s * 0x28` - slot 0 the equipped gadget (what RB fires), slot 2 the
 built-in web shooter. A weapon by its id: `21633c0(manager, id)`. Gadget
-classes by vtable: WebShooter `391c950`, ImpactWeb `3919a80`, WebBomb
+classes by vtable: WebShooter `391c950` (the built-in one), WebBlast
+`391bb10` (the Impact Web: the exe's own text at `3abd870` has "the Web
+Blast gadget (aka Impact Web)"), WebBomb
 `391bfc0`, ElectricWeb `3919110`, ProximityMine (Trip Mine) `391ace0`,
 ShockerBlast (Concussion Blast) `391b1a0`, SpiderDrone `391b658`,
-AirLauncher (Suspension Matrix, a guess) `39186a0`, WebBlast `391bb10`. All
+AirLauncher (Suspension Matrix, a guess) `39186a0`, and ImpactWeb
+`3919a80`, which for all its name is the gadget the game calls the Web
+Shooter, its charged web ball (its HUD reads "Web Shooter" with it
+equipped; until October 18 Spidy took it for the Impact Web). All
 share the fire event (`+0x108` = `e3bd80`) and the charges: `+0x188` now
 (`e3b710`), `+0x190` most (`e3b790`), both `float(weapon, trigger)`; each has
 its own event fill at `+0x100`. Equipping: GameEquipInventory (TYPE

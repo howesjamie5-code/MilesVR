@@ -1,5 +1,6 @@
 #pragma once
 #include "math.hpp"
+#include <cstdint>
 #include <cstring>
 
 namespace spidy::native_view {
@@ -56,5 +57,32 @@ inline bool valid(const Descriptor& d) {
         if (!std::isfinite(d.values[i]) || std::abs(d.values[i]) > 100)
             return false;
     return d.values[0x400 / 4] < d.values[0x404 / 4] && d.values[0x408 / 4] < d.values[0x40c / 4];
+}
+// The engine's distance scale for a view's lens, as 189e4b0 puts it on view
+// +1cc4 in each scene submit: 1 for a 68-degree-wide 16:9 lens (tan 34
+// degrees = .6745 over tan of half its width, +410), less for a wider one;
+// across the height (tan 20.8 degrees = .3794, +414) where the lens is wider
+// than 16:9 (+41c), and the bare number with flag 2 at +438. Every distance a
+// view's model job judges by scales with it times view +1cc8 (1796d20): which
+// detail level a model draws, how far it is drawn at all, and up to where its
+// textures are asked for (16 times its size times the scale).
+inline float distanceScale(const Descriptor& d) {
+    uint32_t flags{};
+    std::memcpy(&flags, &d.values[0x438 / 4], 4);
+    const bool wide = d.values[0x41c / 4] > 16.f / 9;
+    const float scale = wide ? .37941101f : .67450851f;
+    return (flags & 2) ? scale : scale / std::tan(d.values[(wide ? 0x414 : 0x410) / 4] * .5f);
+}
+// The multiplier (view +1cc8) that gives an eye the distances of the engine's
+// 68-degree lens where its own lens is wider, at most `most` times its own.
+inline float eyeDetail(const Descriptor& eye, float most = 3) {
+    const float scale = distanceScale(eye);
+    return std::isfinite(scale) && scale > 0 ? std::clamp(1 / scale, 1.f, most) : 1.f;
+}
+// How strongly a view's model job asks for textures (1796d20, job +2fc): half
+// the image's pixels per unit of lens tangent, across whichever of its width
+// and its height (behind half tangents +420 and +424) has more of them.
+inline float requestScale(float width, float height, float halfWidth, float halfHeight) {
+    return .5f * std::max(height / halfHeight, width / halfWidth);
 }
 } // namespace spidy::native_view

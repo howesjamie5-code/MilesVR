@@ -126,7 +126,11 @@ struct Command {
     Vec3 move{};
     float trackingYaw{};
     float sampleSeconds = 1.f / 90.f;
-    uint32_t reserved{};
+    // Bit 0: the player asks the game for a move of its own now - its LT + RT
+    // (a zip to a point), its Y (a web strike; a car's in a chase), a
+    // prompt's button - and the swing lets it have the hero once it takes
+    // him (AirYield). Zero until October 18, when it was `reserved`.
+    uint32_t asks{};
     uint64_t sampleTimeNs = 1;
     // Version 3: a flip's tilt of the tracking space (Input::tilt). Version 2
     // (commandBytesV2, the probes') ends before it: level.
@@ -199,21 +203,32 @@ static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 2
 // physical: webs are ropes (SwingConfig::physical: they bend round edges,
 // are held by the hand and pay out on the ground); off, as before October
 // 12. Version 4 (settingsBytesV4) ends before it and leaves the webs as they
-// are.
+// are. Version 6, noBlows: the hands (bit 0 the left, 1 the right) whose
+// motion lands no blow, no punch and no web strike, as a hand whose web
+// carries the player lands none: both while the phone is out (phone.hpp,
+// October 19: a hand swung near a thug with the phone out punched him).
+// Version 5 (settingsBytesV5) ends before it: both hands fight. Version 7,
+// arcade: arcade webs (the VR settings' WEB STYLE: ARCADE; SwingConfig::
+// arcade). Version 6 (settingsBytesV6) ends before it and leaves the webs'
+// style as it is.
 struct Settings {
-    uint32_t magic = 0x53575354, version = 5, bytes = sizeof(Settings), grab = 1;
+    uint32_t magic = 0x53575354, version = 7, bytes = sizeof(Settings), grab = 1;
     float maxSpeed = 32;
     uint32_t airWebs = 1;
     float gravity = 6;
     uint32_t walls = 1;
     uint32_t physical = 1;
+    uint32_t noBlows{};
+    uint32_t arcade{};
 };
-constexpr uint32_t settingsBytesV3 = 28, settingsBytesV4 = 32;
-static_assert(sizeof(Settings) == 36 && offsetof(Settings, walls) == settingsBytesV3 &&
-              offsetof(Settings, physical) == settingsBytesV4);
+constexpr uint32_t settingsBytesV3 = 28, settingsBytesV4 = 32, settingsBytesV5 = 36, settingsBytesV6 = 40;
+static_assert(sizeof(Settings) == 44 && offsetof(Settings, walls) == settingsBytesV3 &&
+              offsetof(Settings, physical) == settingsBytesV4 &&
+              offsetof(Settings, noBlows) == settingsBytesV5 &&
+              offsetof(Settings, arcade) == settingsBytesV6);
 // Physical webs (SpidyRopeData): what the ropes did, for the session report.
 struct Ropes {
-    uint32_t magic = 0x53575250, version = 2, bytes = sizeof(Ropes), physical{};
+    uint32_t magic = 0x53575250, version = 3, bytes = sizeof(Ropes), physical{};
     int64_t sequence{};
     // Bends made round an edge and taken off again; webs let go because
     // something stayed in the way (no edge found, or too many); steps a web
@@ -224,9 +239,11 @@ struct Ropes {
     uint32_t bends[2]{};
     float free[2]{}, whole[2]{};
     // Version 2: grips taken on the other hand's web (EventKind::Join), and
-    // whether both hands hold one web now.
+    // whether both hands hold one web now. Version 3, in version 2's spare
+    // word: the thin or loose things arcade webs went through (EventKind::
+    // Pass: a shot past one, a swing's line coming onto one).
     uint64_t joins{};
-    uint32_t shared{}, reserved{};
+    uint32_t shared{}, passed{};
 };
 static_assert(sizeof(Ropes) == 96);
 // The edges each hand's web bends round (SpidySwingBends), for drawing it
@@ -306,7 +323,7 @@ inline bool valid(const Command& c) {
           (c.version == 4 && c.bytes == sizeof(c))) ||
         !std::isfinite(c.leap) || c.leap < 0 || c.leap > 1 || !finite(c.look) || length(c.look) > 1.01f ||
         !c.serial || c.focused > 1 || c.jump > 1 || c.leaseMs > 250 || (c.focused && !c.leaseMs) ||
-        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.reserved ||
+        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 1 ||
         !std::isfinite(c.sampleSeconds) || c.sampleSeconds <= 0 || c.sampleSeconds > .1f ||
         (c.focused && !c.sampleTimeNs) || !std::isfinite(tilt) || tilt < .99f || tilt > 1.01f)
         return false;
@@ -372,6 +389,73 @@ class InputHold {
     Command held_{};
     uint64_t heldMs_{};
     bool holding_{};
+};
+// The game's own move out of Spidy's flight, asked for (Command::asks): its
+// zip to a point (LT + RT), its web strike (Y; a car's in a chase among
+// them), a prompt's. "Is there anyway to web zip-to-point or web strike while
+// moving? ... this makes it hard to do things like the car chases" (October
+// 17): until October 18 both were held back while a web carried the player,
+// because handing him to the game in mid-flight dropped him at the game's
+// fall speed - and a hand-over before the game's move begins (a press it
+// refuses, no point in sight) would do the same.
+//
+// So the swing waits for the game to begin. Through Spidy's flight the hero
+// stays in the game's air states (its Jump and Fall), whose handler runs
+// about twice a mover step (native_movement's airEvents: never once missing
+// from a driven step in the sessions of October 15), and none of the game's
+// moves is one of them. Asked within askMs, and the handler quiet for
+// quietSteps steps (not in the game's wall grasp, which has a latch of its
+// own): the game has him, and the swing lets go - its webs too, the move has
+// its own - until he lands, the handler runs again (back in the game's air,
+// the move done), or yieldMs pass. A press the game does not take changes
+// nothing: the handler goes on, and so does the swing.
+class AirYield {
+  public:
+    static constexpr uint64_t askMs = 400, yieldMs = 3000, quietSteps = 2;
+    // nowMs: a clock in milliseconds. asked: the player asks now. owned: the
+    // swing has the hero. airborne: he is in the air. grasp: the game's wall
+    // grasp (mover flag 0x80). steps, airEvents: the player's mover steps and
+    // the game's air handler's calls so far. True while the swing must not
+    // drive.
+    bool update(uint64_t nowMs, bool asked, bool owned, bool airborne, bool grasp, uint64_t steps,
+                uint64_t airEvents) {
+        began_ = false;
+        if (!seen_ || airEvents != air_ || steps < airStep_) {
+            air_ = airEvents;
+            airStep_ = steps;
+            seen_ = true;
+        }
+        const bool quiet = steps >= airStep_ + quietSteps;
+        if (asked)
+            askedMs_ = nowMs;
+        const bool recent = askedMs_ && nowMs >= askedMs_ && nowMs - askedMs_ < askMs;
+        if (yielded_) {
+            yielded_ = airborne && quiet && nowMs >= since_ && nowMs - since_ < yieldMs;
+        } else if (owned && airborne && !grasp && quiet && recent) {
+            yielded_ = began_ = true;
+            since_ = nowMs;
+            ++yields_;
+        }
+        return yielded_;
+    }
+    bool yielded() const {
+        return yielded_;
+    }
+    // It let go in the last update (the swing drops its webs then).
+    bool began() const {
+        return began_;
+    }
+    uint32_t yields() const {
+        return yields_;
+    }
+    void reset() {
+        *this = {};
+    }
+
+  private:
+    uint64_t air_{}, airStep_{}, askedMs_{}, since_{};
+    uint32_t yields_{};
+    bool seen_{}, yielded_{}, began_{};
 };
 inline Input input(const Command& c) {
     Input out;

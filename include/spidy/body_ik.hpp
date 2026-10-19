@@ -231,8 +231,10 @@ struct Config {
     // shootPress (knuckle, middle, tip, radians, about the finger's own
     // hinge). The thumb's joints straighten to shootThumbBend and it points
     // shootThumb from the fingers' way toward its own side, in the palm's
-    // plane.
-    float shootPress[3]{1.3f, 1.55f, .75f}, shootOut[3]{.05f, .08f, .05f};
+    // plane. The pressing fingers' tips reach the palm, as deep as a fist's:
+    // until October 18 (1.3, 1.55, 0.75) they stopped 2 cm short of it ("the
+    // fingers ain't touching the button").
+    float shootPress[3]{1.5f, 1.6f, 1.1f}, shootOut[3]{.05f, .08f, .05f};
     float shootThumbBend = .1f, shootThumb = 1;
     // The open hand, holding nothing, under the fist and the shooting pose:
     // each finger joint past the palm sits this far from the bone before it

@@ -239,9 +239,10 @@ of impact:
   test with automatic hook restoration. No headset is required.
 - `tools/preview-marks.ps1` (and `spidy_mark_preview`, `apps/mark_preview.cpp`):
   draws the combat marks over two eye captures of a VR session, or over a
-  plain backdrop, as PNG sheets of their states and poses. The overlay's own
-  vertices, one sample a pixel, at about the headset's pixel density. No
-  game and no headset.
+  plain backdrop, as PNG sheets of their states and poses, and the gadget
+  wheel over the near one (`near-wheel.png`: as it lands, at rest, as a
+  gadget lights). The overlay's own vertices, one sample a pixel, at about
+  the headset's pixel density. No game and no headset.
 - `tools/probe_game_grab.py`: webs the nearest throwable prop in sight from where
   the player stands, reels (or with `--yank` yanks) it in, carries it and throws
   it, in a freshly started game; `--watch SECONDS` watches it land and come to
@@ -266,6 +267,13 @@ of impact:
   starts, its direction and speed, where it ends), shoots the nearest bot
   within 40 m if there is one, stops and starts the shooter during play, and
   checks that nothing faulted and every hook entry is restored.
+- `tools/probe_sense.py`: Spider-Sense in a freshly started game: whether
+  the hero's dodge manager is found and the game's clock read, every warning
+  the game gives (attacker, answer, flags, how long) and the census of them;
+  `--provoke` punches the nearest enemy first so a fight starts, `--counter`
+  throws a scripted fist at each warning asking for a counter and reads the
+  counter, the break, the attacker's states and the player's health across
+  the blow. Writes `reports/sense-probe.json`.
 - `tools/probe_combat.py`: Spidy's web balls, fists and web pulls on the
   game's enemies, flying ones included. `--list` reads the game only: every
   bot as Spidy's scan sees it (the same RTTI rules: mover manager, traits,
@@ -417,6 +425,21 @@ No web is wound in for the ground: an October 15 build that did pulled the
 player toward the web's end half the time he swung. A bare `SwingConfig` has
 both off, as it has walls and physical webs.
 
+**Arcade webs** (WEB STYLE: ARCADE, `SwingConfig::arcade`, `Swing::allowArcade`,
+the swing's settings version 7). Every ray a web's shot, its clear line, its
+held line, its bends and its unbending cast goes through `Swing::solid`: past a
+hit that is not fixed, or that `Swing::thin` calls thin, and out of it - the
+far face the ray then meets from inside, turned along the ray, is skipped -
+six things at most. Thin: a ray from `thinDepth` (1.5 m) behind the face,
+back out to it, meets a face turned against it (the thing's far side, so the
+ray started in the open). Started inside a building, it meets the same face
+from within, turned the same way, or nothing: the game's rays meet faces from
+either side. A web then neither sticks to a lamp post, a sign or a car, nor
+bends round one, nor is cut off by one; the shot's anchor is what comes after.
+`skimGround` uses `arcadeClearance` (6 m) for `groundClearance`. Each shot
+through something and each held line coming onto something is an
+`EventKind::Pass`, counted in the rope data's `passed`.
+
 **Webs round corners.** A web bent round edges (physical webs) is drawn by
 the game's rope from the web shooter round each edge to where it sticks: the
 ray module hands the edges on (`SpidySwingBends`, `game_swing::Bends`,
@@ -566,11 +589,16 @@ door, a grate), under the same condition (`game_pad::PullPress`,
 `Walk::pull`): the grips shoot webs in VR and are no bumpers there. That
 stick pushed straight down is the game's D-pad down, its heal (the
 controllers have no D-pad), in the air too; pushed straight up it is the
-game's LT + RT together, its zip to a point and into a vent, except while a
-web carries you. A push counts from the stick at rest, at 0.75 or more and
-no more than 0.45 aside, after 0.15 s; turning, a diagonal and a flick push
-nothing (`game_pad::StickPush`, `Walk::heal` and `Walk::zip`; XrData `heals`
-and `zips`). Until October 12 neither had a control, and the first mission
+game's LT + RT together, its zip to a point and into a vent, while a web
+carries you too since October 18 (`game_swing::AirYield`). A push counts
+from the stick at rest, at 0.75 or more and no more than 0.45 aside, after
+0.15 s; turning, a diagonal and a flick push nothing (`game_pad::StickPush`,
+`Walk::heal` and `Walk::zip`; XrData `heals` and `zips`). Held on where the
+game has no point, LT alone is its aim mode, which slows its own time after
+about 0.6 s and snaps its aim to the points it can zip to: once its time
+has slowed, LT stays down alone and letting go of the stick presses RT
+again beside it for 0.2 s, the zip to the point the aim holds
+(`game_pad::ZipPress`, `Walk::aim`; XrData `zip_releases`). Until October 12 neither had a control, and the first mission
 stopped at its heal and its vent. Until
 October 11 B was the interact, Y the game menu and X switched the aim
 markers, which are a setting only now. Every other control stays with
@@ -679,6 +707,40 @@ the device removed after 30 eye pictures: `gpu.completed` is
 18446744073709551615 and `gpu.pairs` 0. What the game does to an eye's view
 with a fixed shape was not looked into.
 
+Since October 18 it also runs with NVIDIA Reflex off (`Graphics\ReflexMode`
+0, the choice counted from Off, where the game saved it). An RTX 4070 SUPER
+player's game (Reflex On + Boost, windowed on his third monitor at 165 Hz,
+Windows build 26300) lost its graphics device by the 19th eye picture in
+every session, on Virtual Desktop and SteamVR, on every preset, with the
+reason 0x887A002B (DXGI_ERROR_ACCESS_DENIED) in its log and the same
+`gpu.completed` all ones; its log lists the one card as two adapters, which
+no other game log kept here does. Reflex paces the game by its presents,
+and in VR play the stereo module holds back the presents beyond the
+monitor's rate (`native_gpu::holdPresent`, since October 11): the one session
+run here with Reflex on (October 10, Low Latency) predates that. Whether
+Reflex is the cause is not known. A session that ends with the game's log
+saying `Device removed detected` prints the code and what to try
+(`device_removed`, `device_lost_advice` in `tools/run_game_vr.py`; the
+report's `device_removed`), and every report lists the adapters the game
+listed (`game_adapters`). "Normal camera on the monitor" (`--stock-monitor-view`)
+is the launcher's way around everything VR play starts doing to the game's
+own view: it keeps that view rendering, so nothing rests it, draws the left
+eye over its window or holds back its presents.
+
+A game that already holds Spidy - VR ran in it, or another build's module is
+in it: it was open while Spidy was updated, or another Spidy folder started
+VR in it - is named before the headset is looked for (`restart_reason`,
+`other_build` in `tools/run_game_vr.py`, over `SESSION_MODULES`; `OtherBuild`
+from `bridge_game.prepare` if one appears later). The session ends with exit
+code 6 (`CLOSE_GAME_EXIT`, `GameNeedsRestart`), and the launcher offers to
+close the game and start VR again: the next session gets `--close-game`,
+posts `WM_CLOSE` to the game's windows (`vr_launcher.close_game`: its close
+button, never a kill, so it saves as it quits), waits for its process to end
+and 3 s for Steam, restores the other folder's saved game settings if
+another folder's build was in it, and starts the game as usual. Until
+October 18 the render memory module's warning said only "Different bridge
+build is resident", and the queue search went on for three minutes.
+
 Once the game's process is there, the session looks in its folder for
 another program's way into the game (`other_mods` in `tools/run_game_vr.py`):
 a file named as one of Windows' libraries (`WRAPPERS`), which the game loads
@@ -782,6 +844,7 @@ reattaching after a stopped session or a rebuilt DLL.
 | `-Flips` | Experimental flips on (off by default): in the air the left stick turns you over, and a tap of A flips you |
 | `-FlipSpeed 240` | How fast a flip turns you at full tilt of the left stick, degrees a second (90-480, default 180) |
 | `-TriggerWebs` | The trigger shoots and holds webs, and the grip reels them in and shoots web balls (WEB BUTTON: TRIGGER) |
+| `-ArcadeWebs` | Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or loose things, and swings stay 6 m above the street |
 | `-EyeHeight 1630 -ArmLength 590` | Your T-pose calibration in millimetres (the console's last "VR settings from the headset" line has it): Spider-Man's body takes your eye height and arm length, and the first gameplay asks for none |
 | `-NoCalibrationPrompt` | Without a calibration, do not ask for the T-pose at the first gameplay (Settings > SPIDY VR > CALIBRATE BODY still does it) |
 | `-NoBody` | Hide the hero (no hands are drawn) |
@@ -793,6 +856,7 @@ reattaching after a stopped session or a rebuilt DLL.
 | `-MonitorRate 30` | How often the monitor gets your left eye in VR, pictures a second (1-240; 30 by default; 0 is every frame, as before October 11). The launcher's "Monitor frame rate" |
 | `-OwnShadows` | Each eye renders its own sun shadow maps, as before October 11; without it both use one set fitted to a lens covering both |
 | `-NoEyeReflections` | The eyes without the game's screen-space reflections, whatever its Screen Space Reflections setting (they follow it otherwise) |
+| `-EyeLensDistances` | The eyes judge detail, draw and texture distances by their own wide lenses, as before October 19: about half the flat game's distances (see [Graphics settings in VR](#graphics-settings-in-vr)) |
 | `-NoEyeOcclusion` | Turn off the eyes' occlusion culling, for comparison |
 | `-XrRuntime <manifest>` | Use this OpenXR runtime manifest instead of the one the headset is connected to |
 | `-AttachOnly` | Attach to a game that is already running instead of starting it |
@@ -851,10 +915,10 @@ session and writes them back after the game closes; see
 [Start Spider-Man in VR](#start-spider-man-in-vr).
 
 The two eyes are extra native scene views. They inherit the game's own quality
-settings, including textures, shadows, level of detail, crowds, ambient
-occlusion, and motion blur strength; not its ray-traced reflections, nor its
-anti-aliasing and upscaling, which Spidy sets for them. For each eye, Spidy
-sets only:
+settings, including textures, shadows, the Level of Detail setting, crowds,
+ambient occlusion, and motion blur strength; not its ray-traced reflections,
+its anti-aliasing and upscaling, nor the distances it judges detail by, which
+Spidy sets for them. For each eye, Spidy sets only:
 
 - the runtime-recommended resolution (3072 x 3264 in the latest session) times
   the render scale for the eye's image, and private scene buffers at the
@@ -902,7 +966,32 @@ sets only:
   eye then keeps its own exposure and the right eye takes the left's;
 - the HUD's sRGB overlay setup pass, which the game skips for secondary views;
 - avatar visibility while immersive VR is active (this also hides the avatar
-  and its shadow on the monitor).
+  and its shadow on the monitor);
+- the distances the game judges models by (since October 19). The engine
+  scales every such distance by a number each view's scene submit takes from
+  the view's lens (`189e4b0` puts it on view `+1cc4`: 0.6745 over the tangent
+  of half the lens's width, or 0.3794 over that of half its height for a lens
+  wider than 16:9), times view `+1cc8`, which only cutscenes set. It decides
+  which detail level a model draws (`17930b0`), how far away a model is drawn
+  at all (`1792b90`, `1796c40`, which also apply the Level of Detail setting)
+  and up to where its textures are asked for (16 times its size times the
+  scale, `17993e7`); many other systems read the same product. The game's
+  65-degree camera has 1.06, an eye's 98-degree lens 0.59: in VR, windows came
+  onto buildings, people onto the street and textures into focus at about half
+  the distance the flat game has them. Each eye's `+1cc8` now brings its
+  number to 1, the engine's own 68-degree lens (`matchDistances` in
+  `src/stereo_probe.cpp`, `native_view::eyeDetail`: 1.71 for that eye, never
+  below 1, at most 3). An eye's model jobs also ask for textures as strongly
+  as for its image, not for the smaller scene the upscale renders
+  (`setupModels` on the job setup `1796d20`: job `+2fc` is half the pixels per
+  unit of lens tangent, from the view's rendered size, `+448` and `+44c`; 1.49
+  times at 67%), as upscalers are meant to have it; what a job leaves out as
+  too small to see (`+300`) stays at the rendered size. The session report's
+  `appearance` has `eye_detail` and `texture_request_raise`;
+  `-EyeLensDistances` (views option 64) is the old way, and
+  `tools/probe_streaming.py` reads the texture streamer's requests (the
+  `TextureStream` at `621b4e0`) and the game's own texture memory lines to
+  compare the two.
 
 While immersive, Spidy also moves the game's own camera view, the one on the
 monitor, to your tracked head with a lens covering both eyes. The game does some
@@ -923,6 +1012,33 @@ cut to the window's shape about its middle (`mirrorEye` in
 `src/native_eye_gpu.cpp`, drawn over the back buffer in the Present hook).
 The view renders again the moment a game screen is wanted, in flat mode, and
 when the session stops; `-GameMonitorView` keeps it rendering throughout.
+
+Some of what a resting view no longer does was done for everyone. Far
+buildings are impostors, cards standing in for the model, and which of them
+draw their full model, with the lit windows and the rooms behind them, the
+game decides for its active view alone (`189daa0`: the view at
+ViewContextManager `+f8`): `ImpostorHQModelRegJob` (`16fb630`, `16fb750`)
+applies that view's wanted state per impostor from its visibility queries
+(`16faf10`, in each view's scene submit), and the impostor submit job marks
+it (`16f8afa`). Resting, the game's view submits nothing, so until October
+19's second build every building beyond the nearest stayed a dark card in VR
+and lit up only while a menu rendered that view. Since then, while it rests,
+the left eye stands in for it at those five checks (`isActiveView`: a hook on
+`189daa0` that answers yes for the left eye from those five return addresses
+only), and the session report's `appearance.impostor_frames` counts the
+frames it did. Only one view may: the registration applies a view's wanted
+states over the previous ones. How far away a building draws its full model
+is what the view's queries carry in their result (`+88`): 145 m in the game
+(`7a89170`, which region changes rewrite), more for a lens narrower than 65
+degrees. While the left eye stands in, both eyes' results get 150% of it,
+218 m (`impostorQueries`, a hook on `16faf10`; `SpidyImpostorReach`, and
+`--building-reach` for a session, set 50-400%); on October 19 that cost
+nothing measurable at 3072 x 3264 eyes, and 200% about 1%. The right eye's outer edge, which the left
+eye does not see, is not covered. Other active-view-only work still stops
+while the view rests: pedestrians ask "drawn in any view" (`18a1890`, the
+game's views' drawn bytes at `+1b80`), animated models get their joints
+updated only from the game's view (model job `+342`), and `189daa0` has about
+15 other callers (shadows, post-processing, decals).
 
 Since October 13 that left eye is the one the headset showed. The XR worker
 draws Spidy's own things (gloves and webs, the aim markers, the combat marks,
@@ -1206,6 +1322,7 @@ still requires a running game or headset.
 | `src/body_calibration.cpp`, `src/overlay_text.cpp` | The T-pose calibration (the player's eye height and arm length, and its panel in the headset); the overlay's stroke font |
 | `src/punch.cpp`, `src/game_punch.cpp` | Punching: fists against characters, and the game's own melee damage for each punch |
 | `src/web_strike.cpp` | Fighting across the room: the web strike that flies the player to the thug a fist is thrown at, the flow's count and finisher, how each blow is delivered (melee, or the kinetic blow that sends him flying), and the hit stop; `game_punch.cpp` runs it and `game_swing.cpp` flies the player |
+| `src/spider_sense.cpp`, `src/game_sense.cpp` | Spider-Sense: the game's own warnings of an attack about to land, read from the hero's `HeroDodgeManager` (`game_sense`), what each asks for, the counter a fist thrown at the attacker makes and the blow after it (`spider_sense`); `game_punch.cpp` runs it, `game_xr.cpp` tingles and draws the marks (`web_visual.cpp`'s `appendSense`, `appendSenseSight`) |
 | `src/impact_sound.cpp` | The blows' sounds and a strike's rush, synthesized as WAVs in memory |
 | `src/shooter.cpp`, `src/game_shooter.cpp` | The web shooter: trigger pulls and their aim, and the game's own web-shooter shot fired from the hand |
 | `src/slow_motion.cpp`, `src/game_time.cpp` | Slow motion: the left stick's click, focus and the eased time scale; the game's own time system slowed to it (its look: `D3D12Renderer::Grade`, the meter in `web_visual.cpp`) |

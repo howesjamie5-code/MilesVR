@@ -214,6 +214,44 @@ void* shadowFitting{};
 std::atomic<uintptr_t> tracedJobs[3]{};
 // The game's own view while this module keeps it from rendering (restGameView).
 std::atomic<uintptr_t> rested{};
+// The eyes' distances (createViews bit 64 off). A wide lens makes the engine
+// draw a model's detail, and the model itself, only within a shorter distance
+// and ask for its textures only nearer (native_view::distanceScale): an eye's
+// 98 degrees gave 0.59 where the game's camera has 1.06, so windows came onto
+// buildings, people into the streets and textures into focus at about half
+// the flat game's distance. Each eye gets the 68-degree lens's distances
+// (matchDistances, view +1cc8), and its model jobs ask for textures as for its
+// image, not for the smaller scene its upscaling renders (setupModels, +2fc).
+using SetupModels = uint64_t (*)(void*, void*, void*, uint64_t, uint64_t);
+SetupModels originalSetupModels{};
+void* setupModelsHook{};
+bool distances{};
+// The far buildings' full models (createViews bit 128 off). Far buildings are
+// impostors, and only the engine's active view (189daa0: the view at
+// ViewContextManager +f8) has the impostors it sees draw their full models,
+// with the lit windows and the rooms behind them: ImpostorHQModelRegJob
+// (16fb630, 16fb750) applies that view's wanted state per impostor, from its
+// visibility queries (16faf10), and the impostor submit job (16f8afa) marks
+// the view. A resting game view (restGameView) submits no scene, so in VR the
+// buildings beyond the nearest stayed dark cards until a menu, which renders
+// that view again, lit them. While the game view rests the left eye stands in
+// for it at those five checks (isActiveView). One view only: the
+// registration applies a view's wanted states over everyone's, and two views
+// would undo each other's every frame.
+using IsView = bool (*)(void*);
+IsView originalIsActiveView{};
+void* isActiveViewHook{};
+bool impostors{};
+// How far away an impostor draws its full model then: the eyes' visibility
+// queries (16faf10) carry the game's distance in their result (+88: 145 m from
+// 7a89170 or 7a89174, which region changes rewrite), and the impostor jobs
+// read it after the queries return. While an eye stands in, both eyes' results
+// get impostorReach percent of it (impostorQueries), so both draw alike;
+// SpidyImpostorReach sets it.
+using ImpostorQueries = void* (*)(void*, void*);
+ImpostorQueries originalImpostorQueries{};
+void* impostorQueriesHook{};
+std::atomic<uint32_t> impostorReach{150};
 // The HUD panel (native_hud.hpp): PlayerModelHudFollower's placement 73ab80,
 // on the main thread after the camera submits and before 1920240. It ends in
 // SetTransform 191c0e0 on the panel's render instance, which writes the
@@ -460,6 +498,54 @@ void renderActor(void* context, void* actor, uint8_t visibility) {
         }
     }
     originalRenderActor(context, actor, visibility);
+}
+// 1796d20 sets up a view's model job (the view at context +8): its distance
+// scale (+2f8, view +1cc4 x +1cc8; +310, 16 times that, for texture requests)
+// and how strongly it asks for textures (+2fc, requestScale of the view's
+// rendered size). An upscaled eye renders its scene smaller than its image, so
+// it asked for textures as for the smaller one: two thirds of the detail the
+// headset shows at the default 67%. Its requests are sized for its image, as
+// upscalers are meant to have them; what the job leaves out as too small to
+// see (+300) stays at the rendered size.
+uint64_t setupModels(void* context, void* job, void* third, uint64_t fourth, uint64_t fifth) {
+    const auto result = originalSetupModels(context, job, third, fourth, fifth);
+    const auto view = enabled && distances ? pointer(reinterpret_cast<uintptr_t>(context) + 8) : 0;
+    float half[2]{};
+    if (eyeView(view) < 0 || !read(view + 0x420, half, sizeof(half)) || !(half[0] > 0) || !(half[1] > 0))
+        return result;
+    const float wanted = native_view::requestScale(static_cast<float>(config.width),
+                                                   static_cast<float>(config.height), half[0], half[1]);
+    auto& asked = *reinterpret_cast<float*>(static_cast<uint8_t*>(context) + 0x2fc);
+    if (!std::isfinite(wanted) || !(asked > 0) || !(wanted > asked))
+        return result;
+    AcquireSRWLockExclusive(&telemetry);
+    InterlockedIncrement64(&SpidyAppearanceData.sequence);
+    ++SpidyAppearanceData.requestJobs;
+    SpidyAppearanceData.requestRaise = wanted / asked;
+    InterlockedIncrement64(&SpidyAppearanceData.sequence);
+    ReleaseSRWLockExclusive(&telemetry);
+    asked = wanted;
+    return result;
+}
+// 189daa0, "is this the active view", where the impostor code asks it (the
+// return addresses after its five calls there; impostors above).
+bool isActiveView(void* view) {
+    if (view && view == eyes[0].load(std::memory_order_relaxed) && impostors && enabled &&
+        rested.load(std::memory_order_relaxed)) {
+        const auto caller = reinterpret_cast<uintptr_t>(_ReturnAddress()) - base;
+        if (caller == 0x1c03b8a || caller == 0x1c0667b || caller == 0x1c0668b || caller == 0x1c0678f ||
+            caller == 0x1c0679f) {
+            if (caller == 0x1c0667b) {
+                AcquireSRWLockExclusive(&telemetry);
+                InterlockedIncrement64(&SpidyAppearanceData.sequence);
+                ++SpidyAppearanceData.impostorFrames;
+                InterlockedIncrement64(&SpidyAppearanceData.sequence);
+                ReleaseSRWLockExclusive(&telemetry);
+            }
+            return true;
+        }
+    }
+    return originalIsActiveView(view);
 }
 // Runs on the main thread in maintain(), after gameplay updated the hero and
 // before render jobs read it. Uses DrawOff 191afb0 / DrawOn 191b880, the
@@ -1214,6 +1300,42 @@ bool writeByte(uintptr_t p, uint8_t value) {
         return false;
     }
 }
+bool writeFloat(uintptr_t p, float value) {
+    __try {
+        *reinterpret_cast<volatile float*>(p) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// An eye's level-of-detail multiplier for the lens it was just given
+// (distances); the engine multiplies it into the eye's scale in the eye's
+// scene submit (189e4b0 sets +1cc4 there, 1796d20 reads both).
+void matchDistances(void* eye, const Descriptor& lens, unsigned index) {
+    if (!distances)
+        return;
+    const float detail = native_view::eyeDetail(lens);
+    if (!writeFloat(reinterpret_cast<uintptr_t>(eye) + 0x1cc8, detail) || index)
+        return;
+    AcquireSRWLockExclusive(&telemetry);
+    auto& data = SpidyAppearanceData;
+    InterlockedIncrement64(&data.sequence);
+    data.eyeScale = native_view::distanceScale(lens);
+    data.eyeDetail = detail;
+    ++data.detailFrames;
+    InterlockedIncrement64(&data.sequence);
+    ReleaseSRWLockExclusive(&telemetry);
+}
+// A view's impostor visibility queries (impostorReach above).
+void* impostorQueries(void* view, void* cull) {
+    const auto result = originalImpostorQueries(view, cull);
+    float reach{};
+    if (result && impostors && enabled && rested.load(std::memory_order_relaxed) &&
+        eyeView(reinterpret_cast<uintptr_t>(view)) >= 0 &&
+        read(reinterpret_cast<uintptr_t>(result) + 0x88, &reach, 4) && std::isfinite(reach) && reach > 0)
+        writeFloat(reinterpret_cast<uintptr_t>(result) + 0x88, reach * impostorReach.load() / 100.f);
+    return result;
+}
 void restGameView(uintptr_t primary, bool rest) {
     if (const auto was = rested.load(); was && (was != primary || !rest)) {
         // A load replaces the pool's views: only the same view is given back.
@@ -1397,6 +1519,7 @@ void placeEyes() {
                     reinterpret_cast<SetPose>(base + 0x1d87e70)(&descriptor, pose.data());
                 }
                 reinterpret_cast<Submit>(base + 0x1da50d0)(eye, &descriptor);
+                matchDistances(eye, descriptor, index);
                 continue;
             }
             auto pose = controlled
@@ -1417,6 +1540,7 @@ void placeEyes() {
                 controlled ? -std::tan(fov[2]) : 1, 0, 0, jitter[0], jitter[1], false, false);
             reinterpret_cast<SetPose>(base + 0x1d87e70)(&descriptor, pose.data());
             reinterpret_cast<Submit>(base + 0x1da50d0)(eye, &descriptor);
+            matchDistances(eye, descriptor, index);
         }
 }
 // A KeyLightContext's cascades: +d and +f count them, +150 holds one each
@@ -1707,8 +1831,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         // 8 (VR path only) move the engine's active view to the head while immersive,
         // 16 (VR path only) occlusion culling for each eye (giveOcclusion),
         // 32 (with 8) the game's own view is not rendered while immersive
-        // (restGameView): the left eye goes to the game's window instead.
-        const auto views = config.createViews & ~(16u | 32u);
+        // (restGameView): the left eye goes to the game's window instead,
+        // 64 the eyes keep the distances their own lenses give (no
+        // matchDistances or setupModels; builds before October 19),
+        // 128 no eye stands in for the resting game view's impostors (no
+        // isActiveView; builds before October 19's second).
+        const auto views = config.createViews & ~(16u | 32u | 64u | 128u);
         if (!GetModuleHandleW(L"MilesMorales.exe") || config.magic != 0x53534346 || config.version != 1 ||
             config.bytes != sizeof(config) || config.pid != GetCurrentProcessId() || config.base != base ||
             config.durationMs > 30000 || (config.durationMs && config.durationMs < 500) ||
@@ -1740,6 +1868,41 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         const unsigned char temporalBytes[] = {0x48, 0x8b, 0xc4, 0x55, 0x48, 0x8d, 0xa8, 0xf8, 0xfe, 0xff, 0xff};
         const unsigned char renderActorBytes[] = {0x48, 0x8b, 0xc4, 0x44, 0x88, 0x40, 0x18, 0x48,
                                                   0x89, 0x50, 0x10, 0x48, 0x89, 0x48, 0x08};
+        // A view's model job setup; there, its reads of the view's +1cc8 x
+        // +1cc4 and of its rendered size and half tangents into +2fc and +300;
+        // the lens scale's read of +41c and store to +1cc4 (189e4b0) with its
+        // two numerators and 16:9.
+        const unsigned char setupModelsBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10,
+                                                  0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x40,
+                                                  0x48, 0x8b, 0x02, 0x48, 0x8b, 0xf9, 0x48, 0x89, 0x01};
+        const unsigned char modelScaleBytes[] = {0xf3, 0x41, 0x0f, 0x10, 0x8a, 0xc8, 0x1c, 0x00, 0x00,
+                                                 0xf3, 0x41, 0x0f, 0x59, 0x8a, 0xc4, 0x1c, 0x00, 0x00};
+        const unsigned char modelRequestBytes[] = {0xf3, 0x41, 0x0f, 0x10, 0x8a, 0x4c, 0x04, 0x00, 0x00,
+                                                   0xf3, 0x41, 0x0f, 0x5e, 0x8a, 0x24, 0x04, 0x00, 0x00,
+                                                   0xf3, 0x41, 0x0f, 0x10, 0x82, 0x48, 0x04, 0x00, 0x00,
+                                                   0xf3, 0x41, 0x0f, 0x5e, 0x82, 0x20, 0x04, 0x00, 0x00};
+        const unsigned char modelRequestStoreBytes[] = {0xf3, 0x0f, 0x11, 0x8f, 0xfc, 0x02, 0x00, 0x00,
+                                                        0xf3, 0x0f, 0x11, 0x97, 0x00, 0x03, 0x00, 0x00};
+        const unsigned char lensAspectBytes[] = {0xf3, 0x0f, 0x10, 0x81, 0x1c, 0x04, 0x00, 0x00};
+        const unsigned char lensScaleBytes[] = {0xf3, 0x0f, 0x11, 0xb3, 0xc4, 0x1c, 0x00, 0x00};
+        const unsigned char numeratorBytes[] = {0x29, 0x42, 0xc2, 0x3e, 0x97, 0xac, 0x2c, 0x3f};
+        const unsigned char widescreenBytes[] = {0x39, 0x8e, 0xe3, 0x3f};
+        // "Is this the active view" (view == ViewContextManager +f8), and its
+        // five calls in the impostor code (the impostor submit job, both
+        // ImpostorHQModelRegJob launchers).
+        const unsigned char isActiveViewBytes[] = {0x48, 0x3b, 0x0d, 0x11, 0x19, 0x64, 0x06, 0x0f, 0x94, 0xc0, 0xc3};
+        const struct {
+            uintptr_t rva;
+            unsigned char bytes[5];
+        } impostorCalls[] = {{0x1c03b85, {0xe8, 0x66, 0x55, 0x1a, 0x00}}, {0x1c06676, {0xe8, 0x75, 0x2a, 0x1a, 0x00}},
+                             {0x1c06686, {0xe8, 0x65, 0x2a, 0x1a, 0x00}}, {0x1c0678a, {0xe8, 0x61, 0x29, 0x1a, 0x00}},
+                             {0x1c0679a, {0xe8, 0x51, 0x29, 0x1a, 0x00}}};
+        // The impostor visibility queries; their result's distance, set to 145 m
+        // first and to the lens's last, and the result returned.
+        const unsigned char impostorQueriesBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10,
+                                                      0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x41, 0x56, 0x41, 0x57};
+        const unsigned char reachFirstBytes[] = {0xc7, 0x80, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x43};
+        const unsigned char reachLastBytes[] = {0xf3, 0x0f, 0x11, 0xbb, 0x88, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xc3};
         const unsigned char setupDisplayBytes[] = {0x4d, 0x85, 0xc0, 0x0f, 0x84, 0x7f, 0x03, 0, 0};
         const unsigned char enqueueBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10};
         // ActorDrawAction's DrawOff/DrawOn: toggle flag 0x20 at +5c and mark
@@ -1800,6 +1963,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             !entry(0x4407dc8, kindMaskBytes, sizeof(kindMaskBytes)) ||
             !entry(0x1d4d9a0, temporalBytes, sizeof(temporalBytes)) ||
             !entry(0x1ca4100, renderActorBytes, sizeof(renderActorBytes)) ||
+            !entry(0x1ca1c80, setupModelsBytes, sizeof(setupModelsBytes)) ||
+            !entry(0x1da90f0, isActiveViewBytes, sizeof(isActiveViewBytes)) ||
+            !entry(0x1c05ef0, impostorQueriesBytes, sizeof(impostorQueriesBytes)) ||
             !entry(0x1e2bac0, setupDisplayBytes, sizeof(setupDisplayBytes)) ||
             !entry(0x1d89590, enqueueBytes, sizeof(enqueueBytes)) ||
             !entry(0x1e26790, drawOffBytes, sizeof(drawOffBytes)) ||
@@ -1809,6 +1975,21 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             result = 1002;
             break;
         }
+        // The eyes' distances need the job's and the lens scale's layout as
+        // read here; another game build keeps the eye lenses' own.
+        distances = !(config.createViews & 64) && (config.createViews & 4) &&
+                    entry(0x1ca1dbd, modelScaleBytes, sizeof(modelScaleBytes)) &&
+                    entry(0x1ca1edf, modelRequestBytes, 18) && entry(0x1ca1ef1, modelRequestBytes + 18, 18) &&
+                    entry(0x1ca1f1d, modelRequestStoreBytes, sizeof(modelRequestStoreBytes)) &&
+                    entry(0x1da9b17, lensAspectBytes, sizeof(lensAspectBytes)) &&
+                    entry(0x1da9ba8, lensScaleBytes, sizeof(lensScaleBytes)) &&
+                    entry(0x4413c08, numeratorBytes, sizeof(numeratorBytes)) &&
+                    entry(0x3dcf678, widescreenBytes, sizeof(widescreenBytes));
+        impostors = !(config.createViews & 128) && (config.createViews & 32);
+        for (const auto& call : impostorCalls)
+            impostors = impostors && entry(call.rva, call.bytes, sizeof(call.bytes));
+        impostors = impostors && entry(0x1c05f40, reachFirstBytes, sizeof(reachFirstBytes)) &&
+                    entry(0x1c060f3, reachLastBytes, sizeof(reachLastBytes));
         if (!hooked) {
             auto s = MH_Initialize();
             if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
@@ -1825,6 +2006,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             initBuffersHook = reinterpret_cast<void*>(base + 0x1d7e720);
             sizeBuffersHook = reinterpret_cast<void*>(base + 0x1d802d0);
             renderActorHook = reinterpret_cast<void*>(base + 0x1ca4100);
+            setupModelsHook = reinterpret_cast<void*>(base + 0x1ca1c80);
+            isActiveViewHook = reinterpret_cast<void*>(base + 0x1da90f0);
+            impostorQueriesHook = reinterpret_cast<void*>(base + 0x1c05ef0);
             setupDisplayHook = reinterpret_cast<void*>(base + 0x1e2bac0);
             submitHook = reinterpret_cast<void*>(base + 0x1da50d0);
             renderOffscreenHook = reinterpret_cast<void*>(base + 0x1e2b9f0);
@@ -1861,6 +2045,15 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
                 s = MH_CreateHook(renderActorHook, reinterpret_cast<void*>(renderActor),
                                   reinterpret_cast<void**>(&originalRenderActor));
             if (s == MH_OK)
+                s = MH_CreateHook(setupModelsHook, reinterpret_cast<void*>(setupModels),
+                                  reinterpret_cast<void**>(&originalSetupModels));
+            if (s == MH_OK)
+                s = MH_CreateHook(isActiveViewHook, reinterpret_cast<void*>(isActiveView),
+                                  reinterpret_cast<void**>(&originalIsActiveView));
+            if (s == MH_OK)
+                s = MH_CreateHook(impostorQueriesHook, reinterpret_cast<void*>(impostorQueries),
+                                  reinterpret_cast<void**>(&originalImpostorQueries));
+            if (s == MH_OK)
                 s = MH_CreateHook(setupDisplayHook, reinterpret_cast<void*>(setupDisplay),
                                   reinterpret_cast<void**>(&originalSetupDisplay));
             if (s == MH_OK)
@@ -1881,7 +2074,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             if (s != MH_OK) {
                 result = 1200 + s;
                 for (auto hook : {maintainHook, updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook,
-                                  endJobHook, initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook,
+                                  endJobHook, initBuffersHook, sizeBuffersHook, renderActorHook, setupModelsHook,
+                                  isActiveViewHook, impostorQueriesHook, setupDisplayHook, submitHook,
                                   renderOffscreenHook, hudPlaceHook, submitSceneHook, fitCascadesHook})
                     MH_RemoveHook(hook);
                 break;
@@ -1894,17 +2088,20 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         // MilesVR diagnostics: hook_mask.txt beside this module (a hex number) leaves the hooks whose bit
         // is clear disabled, in the order below; without the file every hook is enabled.
         const uint32_t mask = hookMask();
-        void* const ordered[] = {updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook,
-                                 initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook,
-                                 renderOffscreenHook, hudPlaceHook, submitSceneHook, fitCascadesHook, maintainHook};
+        void* const ordered[] = {updateHook,       copyFinalHook,     toneHook,           copyJobHook,
+                                 beginJobHook,     endJobHook,        initBuffersHook,    sizeBuffersHook,
+                                 renderActorHook,  setupModelsHook,   isActiveViewHook,   impostorQueriesHook,
+                                 setupDisplayHook, submitHook,        renderOffscreenHook, hudPlaceHook,
+                                 submitSceneHook,  fitCascadesHook,   maintainHook};
         auto s = MH_OK;
         for (size_t i = 0; i < std::size(ordered) && s == MH_OK; ++i)
             if (mask & (1u << i))
                 s = MH_EnableHook(ordered[i]);
         if (s != MH_OK) {
             for (auto hook : {updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook,
-                              initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook, renderOffscreenHook,
-                              hudPlaceHook, submitSceneHook, fitCascadesHook})
+                              initBuffersHook, sizeBuffersHook, renderActorHook, setupModelsHook, isActiveViewHook,
+                              impostorQueriesHook, setupDisplayHook, submitHook, renderOffscreenHook, hudPlaceHook,
+                              submitSceneHook, fitCascadesHook})
                 MH_DisableHook(hook);
             result = 1300 + s;
             break;
@@ -1950,7 +2147,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStop(void*) {
     else if (hooked) {
         enabled = false;
         for (auto hook : {maintainHook, updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook,
-                          endJobHook, initBuffersHook, sizeBuffersHook, renderActorHook, setupDisplayHook, submitHook, renderOffscreenHook,
+                          endJobHook, initBuffersHook, sizeBuffersHook, renderActorHook, setupModelsHook,
+                          isActiveViewHook, impostorQueriesHook, setupDisplayHook, submitHook, renderOffscreenHook,
                           hudPlaceHook, submitSceneHook, fitCascadesHook}) {
             auto s = MH_DisableHook(hook);
             if (s != MH_OK && s != MH_ERROR_DISABLED)
@@ -2040,6 +2238,16 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeShadows(void* mode) {
         return 4301;
     eyeShadows = static_cast<uint32_t>(value);
     SpidyShadowData.mode = static_cast<uint32_t>(value);
+    return 0;
+}
+// How far away the far buildings draw their full models while an eye stands in
+// for the resting game view (impostorReach above): percent of the game's own
+// distance, 50-400; 150 unless set. Takes effect at the next frame.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyImpostorReach(void* percent) {
+    const auto value = reinterpret_cast<uintptr_t>(percent);
+    if (value < 50 || value > 400)
+        return 4401;
+    impostorReach = static_cast<uint32_t>(value);
     return 0;
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeTemporal(void* packed) {

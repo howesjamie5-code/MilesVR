@@ -1,4 +1,5 @@
 #include "spidy/web_visual.hpp"
+#include "spidy/gadget_wheel.hpp"
 #include "spidy/overlay_text.hpp"
 #include <string>
 
@@ -743,6 +744,187 @@ void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3
     });
     print.layers(height * .06f, height * .1f, plate::red, land.hit ? height * plate::misprint : 0,
                  [&] { print.text(text, {width * -.5f, height * -.5f}, height, .2f, plate::yellow); });
+}
+namespace {
+// What a Spider-Sense warning asks for, as its plate.
+Vec3 senseColor(SenseAnswer answer) {
+    switch (answer) {
+    case SenseAnswer::Dodge:
+        return plate::red;
+    case SenseAnswer::Jump:
+        return plate::yellow;
+    default:
+        return plate::cyan;
+    }
+}
+// The comic's Spider-Sense lines about the mark's centre, `s` its size: five
+// jagged strokes fanned up and out from a point under them, the middle one
+// the longest, each kinked twice. `width` scales the strokes; `reach` how far
+// out they go.
+void senseLines(Print& print, float s, Vec3 color, float width = 1, float reach = 1) {
+    static constexpr float angles[5] = {-56, -28, 0, 28, 56};
+    const Flat from{0, -.62f * s};
+    for (int i = 0; i < 5; ++i) {
+        const float a = angles[i] * plate::degree;
+        const Flat way{std::sin(a), std::cos(a)}, across{way.y, -way.x};
+        const float r0 = .42f * s * reach, r1 = (i == 2 ? 1.18f : .98f) * s * reach, kink = .1f * s;
+        Flat p[4];
+        for (int k = 0; k < 4; ++k)
+            p[k] = from + way * (r0 + (r1 - r0) * static_cast<float>(k) / 3) +
+                   across * (k == 1 ? kink : k == 2 ? -kink : 0.f);
+        const float half = .062f * s * width;
+        print.line(p[0], p[1], half, color);
+        print.line(p[1], p[2], half, color, false);
+        print.line(p[2], p[3], half, color, false);
+    }
+}
+// The ring that closes on the blow, `left` 1..0 of the warning's time; in its
+// last notch a burst's edge, yellow: now.
+void senseRing(Print& print, float s, float left) {
+    if (left <= 1.f / 8 + 1e-4f) {
+        constexpr int strokes = 22;
+        const auto corner = [&](int i) {
+            const float angle = pi / 2 - 2 * pi * static_cast<float>(i) / strokes;
+            return Flat{std::cos(angle), std::sin(angle)} * (s * (i % 2 ? 1.16f : .98f));
+        };
+        for (int i = 0; i < strokes; ++i)
+            print.line(corner(i), corner(i + 1), .05f * s, plate::yellow, i == 0);
+        return;
+    }
+    print.ring({}, s * (1.02f + .55f * left), .035f * s, plate::paper);
+}
+// The held drawing's boil: three places, two poses each, once it has landed.
+struct SenseBoil {
+    float turn;
+    Flat shift;
+};
+SenseBoil senseBoil(int pose) {
+    static constexpr SenseBoil boils[3] = {{0, {}}, {-1.2f, {.02f, .03f}}, {1, {-.03f, -.02f}}};
+    return boils[pose < 3 ? 0 : (pose / 2) % 3];
+}
+// One Spider-Sense mark: its ring, its lines (a jump's under a chevron), or
+// as a counter breaks it.
+void senseMark(Print& print, SenseAnswer answer, float s, float left, bool timed, float age, float broken) {
+    const Vec3 color = senseColor(answer);
+    if (broken >= 0) {
+        switch (static_cast<int>(broken / plate::pose)) {
+        case 0:
+            print.place(1.2f, 0);
+            print.layers(.035f * s, 0, {}, plate::misprint * s, [&] { senseLines(print, s, plate::paper); });
+            break;
+        case 1:
+            print.place(1, 0);
+            print.layers(.025f * s, 0, {}, 0, [&] { senseLines(print, s, color, .5f, 1.6f); });
+            break;
+        default:
+            print.place(.6f, 0);
+            print.layers(.035f * s, 0, {}, 0, [&] { senseLines(print, s, color); });
+            break;
+        }
+        return;
+    }
+    const Landing land = landing(age);
+    // The ring stands still while the lines boil.
+    print.place(land.scale, land.turn);
+    if (timed)
+        print.layers(.03f * s, 0, {}, 0, [&] { senseRing(print, s, std::clamp(left, 0.f, 1.f)); });
+    const SenseBoil boil = senseBoil(static_cast<int>(age / plate::pose));
+    print.place(land.scale, land.turn + boil.turn * plate::degree, boil.shift * s);
+    print.layers(.035f * s, .055f * s, plate::ink, land.hit ? plate::misprint * s : 0, [&] {
+        senseLines(print, s, color);
+        if (answer == SenseAnswer::Jump) {
+            print.line({-.22f * s, .66f * s}, {0, .86f * s}, .06f * s, plate::paper);
+            print.line({0, .86f * s}, {.22f * s, .66f * s}, .06f * s, plate::paper, false);
+        }
+    });
+}
+bool senseShows(SenseAnswer answer, float age, float left, float broken, float pixelAngle) {
+    return answer != SenseAnswer::None && std::isfinite(age) && age >= 0 && std::isfinite(left) &&
+           std::isfinite(broken) && broken < SenseView::brokenSeconds && std::isfinite(pixelAngle) &&
+           pixelAngle > 0;
+}
+} // namespace
+void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle) {
+    const float away = length(viewer - sense.point);
+    if (!finite(sense.point) || !finite(viewer) || !(away >= .3f && away <= 60) ||
+        !senseShows(sense.answer, sense.age, sense.left, sense.broken, pixelAngle))
+        return;
+    // An arm's length away the mark is a hand wide; farther off it keeps
+    // most of its size on screen (six degrees across). It stands clear over
+    // his head.
+    const float s = .055f * std::clamp(away / .9f, 1.4f, 9.f);
+    const Vec3 centre = sense.point + Vec3{0, .14f + .5f * s, 0};
+    const float distance = length(viewer - centre);
+    if (!(distance >= .15f))
+        return;
+    // Level and upright across the line of sight, as the bursts are.
+    const Vec3 view = (viewer - centre) / distance;
+    Vec3 right = cross(Vec3{0, 1, 0}, view);
+    right = length(right) > .1f ? normalized(right) : perpendicular(view);
+    const Vec3 up = cross(view, right);
+    Print print(out, centre, right, up, view, pixelAngle * distance);
+    senseMark(print, sense.answer, s, sense.left, sense.timed, sense.age, sense.broken);
+}
+void appendSenseSight(std::vector<Vertex>& out, const SenseSightView& view, Pose head, float pixelAngle,
+                      const SenseSightConfig& config) {
+    const float across = std::sqrt(view.sight.x * view.sight.x + view.sight.y * view.sight.y);
+    if (!view.sight.shown || !finite(head.position) || !(across > .5f && across < 2) ||
+        !senseShows(view.answer, view.age, view.left, view.broken, pixelAngle))
+        return;
+    const Quat q = head.orientation;
+    const Vec3 forward = q.rotate({0, 0, -1}), right = q.rotate({1, 0, 0}), up = q.rotate({0, 1, 0});
+    if (!finite(forward) || !finite(right) || !finite(up))
+        return;
+    const Vec3 way = (right * view.sight.x + up * view.sight.y) / across;
+    // A metre off, upright as the view is.
+    constexpr float distance = 1, s = .032f;
+    const auto at = [&](float angle) {
+        return head.position + (forward * std::cos(angle) + way * std::sin(angle)) * distance;
+    };
+    {
+        const Vec3 centre = at(config.angle), facing = normalized(head.position - centre);
+        const Vec3 r = normalized(cross(up, facing)), u = cross(facing, r);
+        Print print(out, centre, r, u, facing, pixelAngle * distance);
+        senseMark(print, view.answer, s, view.left, view.timed, view.age, view.broken);
+        if (view.broken < 0) {
+            // The arrowhead beyond the ring, pointing to him.
+            const float fx = dot(way, r), fy = dot(way, u), f = std::sqrt(fx * fx + fy * fy);
+            const Flat ahead{fx / std::max(f, 1e-4f), fy / std::max(f, 1e-4f)}, side{-ahead.y, ahead.x};
+            const Landing land = landing(view.age);
+            print.place(land.scale, 0);
+            print.layers(.035f * s, .055f * s, plate::ink, 0, [&] {
+                print.triangle(ahead * (1.95f * s) + side * (.5f * s), ahead * (2.75f * s),
+                               ahead * (1.95f * s) - side * (.5f * s), senseColor(view.answer));
+            });
+        }
+    }
+    if (view.broken >= 0)
+        return;
+    // The rim's lines: three, wavy, out toward him, boiling.
+    const Vec3 centre = at(config.rim), facing = normalized(head.position - centre);
+    const Vec3 radial = normalized(way - facing * dot(way, facing));
+    const Vec3 tangent = normalized(cross(radial, facing));
+    if (!finite(radial) || !finite(tangent))
+        return;
+    Print print(out, centre, tangent, radial, facing, pixelAngle * distance);
+    const SenseBoil boil = senseBoil(static_cast<int>(view.age / plate::pose));
+    const Landing land = landing(view.age);
+    print.place(land.scale, boil.turn * plate::degree, boil.shift * .02f);
+    const Vec3 color = senseColor(view.answer);
+    print.layers(.004f, .006f, plate::ink, 0, [&] {
+        for (int i = -1; i <= 1; ++i) {
+            const float tilt = static_cast<float>(i) * 14 * plate::degree;
+            const Flat dir{std::sin(tilt), std::cos(tilt)}, side{dir.y, -dir.x};
+            const Flat base{static_cast<float>(i) * .06f, -.04f};
+            Flat before = base;
+            for (int k = 1; k <= 6; ++k) {
+                const float t = static_cast<float>(k) / 6;
+                const Flat p = base + dir * (.085f * t) + side * (.009f * std::sin(t * 3 * pi));
+                print.line(before, p, .0055f, color, k == 1);
+                before = p;
+            }
+        }
+    });
 }
 void AimMarkerMotion::reset() {
     *this = {};

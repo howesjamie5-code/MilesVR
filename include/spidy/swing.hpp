@@ -156,6 +156,21 @@ struct SwingConfig {
     // limit ("throw me too much", "the wind is too strong", "i want the near
     // misses"). 0: none.
     float groundClearance = 0, groundTurn = 15;
+    // Arcade webs (the VR settings' WEB STYLE: ARCADE): a web goes through
+    // thin things - lamp posts, signs, railings, a roof's parapet - and
+    // through whatever is not fixed (cars, props), both as it is shot and as
+    // it swings: it neither sticks to one, nor bends round it, nor is cut off
+    // by it, and what is beyond takes the shot. Thin: a ray from thinDepth
+    // behind the face a web met, back out to it, meets the thing's far face
+    // (Swing::thin). Buildings hold webs and bend them as before. And a swing
+    // comes down to the ground no nearer than arcadeClearance instead of
+    // groundClearance. The player, October 19: "webs get tangled over
+    // lightpoles and other small geometry, also they pull you down too much
+    // to the street" - that day's sessions bent 12 to 21 webs each round
+    // edges, some 3-7 m over the street, and took them off again 0 to 3
+    // times.
+    bool arcade = false;
+    float thinDepth = 1.5f, arcadeClearance = 6;
 };
 // The edges one web bends round at most (SwingConfig::physical).
 constexpr int maxBends = 6;
@@ -233,6 +248,8 @@ struct Web {
 struct WebShot {
     std::optional<Web> web;
     std::optional<RayHit> hit;
+    // Thin or loose things the ray went through before `hit` (SwingConfig::arcade).
+    int passed{};
 };
 // The wall the body is on (SwingConfig's walls).
 struct WallHold {
@@ -257,6 +274,7 @@ enum class EventKind {
     Unwrap,   // it came off its last one
     Leap,     // a charged leap left the ground; strength: its charge
     Join,     // a hand took hold of the other hand's web
+    Pass,     // an arcade web went through a thin or loose thing: shot past one, or swung past one
 };
 struct Event {
     EventKind kind;
@@ -374,6 +392,9 @@ class Swing {
     // Whether webs are ropes from now on (SwingConfig::physical). Off, a web
     // that bends round an edge hangs from that edge as if it had stuck there.
     void allowPhysical(bool allowed);
+    // Whether webs are arcade webs from now on (SwingConfig::arcade). A web
+    // already bent round something keeps its bends until it comes off them.
+    void allowArcade(bool allowed);
     // The body, at `position`, stands or moves some other way than this
     // swing moves it (the game walks it): each physical web is long enough
     // to reach it with `slack` to spare, so an arm that moves does not lift a
@@ -451,6 +472,8 @@ class Swing {
         // The slack this hand made reaching toward its web's end, which a
         // taut web keeps (SwingConfig::taut).
         float slack{};
+        // Its web's line goes through a thin or loose thing now (arcade webs).
+        bool passing{};
     };
     void inputs(float dt, const Input&, const WorldQueries&);
     void step(float dt, const Input&, const WorldQueries&, const World* collision);
@@ -469,6 +492,13 @@ class Swing {
     // Whether a hit on the line from `from` to `anchor` is a real wall between
     // them; `bend`: the anchor is an edge the web bends round.
     bool blocks(const RayHit& hit, Vec3 from, Vec3 anchor, bool bend = false) const;
+    // Arcade webs: whether what a ray met at `hit` is a thin thing.
+    bool thin(const RayHit& hit, const WorldQueries&) const;
+    // The first hit from `from` along unit `way` within `reach`; with arcade
+    // webs the first that is fixed and not thin, the others it went through
+    // counted into `passed`.
+    std::optional<RayHit> solid(Vec3 from, Vec3 way, float reach, const WorldQueries&,
+                                int* passed = nullptr) const;
     // What hand `i`'s rope holds the body's centre to: its web's anchor, less
     // the hand's offset with physical webs.
     Vec3 hold(int i) const;

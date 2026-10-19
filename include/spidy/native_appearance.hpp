@@ -15,7 +15,7 @@ enum HeroState : uint32_t {
     heroBadTransform = 4,
 };
 struct Data {
-    uint32_t magic = 0x53415044, version = 5, bytes = sizeof(Data), heroState{};
+    uint32_t magic = 0x53415044, version = 6, bytes = sizeof(Data), heroState{};
     int64_t sequence{};
     uint64_t hiddenAvatar[2]{}, srgbOverlay[2]{}, playerActor{};
     // Frames rendered with the hero's native visibility switched off for
@@ -64,6 +64,17 @@ struct Data {
     // hero position other than the eyes', and that distance in metres.
     uint64_t activeLagFrames{};
     float activeLagLast{}, activeLagMax{};
+    // The eyes' distances (stereo_probe.cpp, matchDistances): the engine's
+    // distance scale for the left eye's lens (native_view::distanceScale), the
+    // multiplier its view got (+1cc8), and in how many frames; eye model jobs
+    // whose texture requests were sized for the eye's image instead of its
+    // smaller rendered scene, and how many times stronger the last one asked.
+    float eyeScale{}, eyeDetail{};
+    uint64_t detailFrames{}, requestJobs{};
+    float requestRaise{};
+    // Frames the left eye stood in for the resting game view in choosing
+    // which far buildings draw their full models (isActiveView).
+    uint32_t impostorFrames{};
 };
-static_assert(sizeof(Data) == 328);
+static_assert(sizeof(Data) == 360);
 } // namespace spidy::native_appearance

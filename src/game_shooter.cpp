@@ -43,15 +43,21 @@ constexpr uint32_t collisionEvent = 0xd930bcb2, hitActorField = 0x21eb297b, hitP
 // table; a loaded weapon by its id (21633c0); a weapon's charges and the most
 // it holds, for a trigger (vtable +0x188 and +0x190, every gadget's own:
 // float (weapon, index)). Every gadget's weapon class by its table, in the
-// order of spidy::Gadget.
+// order of spidy::Gadget. The Impact Web is WeaponWebBlast: the game's own
+// text has "the Web Blast gadget (aka Impact Web)" (Spider-Man.exe 3abd870).
+// WeaponImpactWeb, for all its name, is the gadget the game calls the Web
+// Shooter - its charged web ball, its HUD's "Web Shooter" once equipped
+// (reports/grab-probe/gadget-impact_web.png, October 15) - and the wheel
+// does not list it: its top place is the web shooter already. Until October
+// 18 the two were the other way round, so IMPACT WEB fired web balls.
 constexpr uintptr_t findInTableRva = 0x1b844b0, findInListRva = 0x1b85650, weaponManagerType = 0x78446a0,
                     weaponManagerTable = 0x3e160d8, weaponByIdRva = 0x266feb0, ammoNowRva = 0x10759f0,
                     ammoMostRva = 0x1075a70;
-constexpr uintptr_t gadgetTables[] = {0x3eec7b8, 0x3ee8ff0, 0x3eebe38, 0x3ee81e0, 0x3eea6e0,
-                                      0x3eeb030, 0x3eeb4e0, 0x3ee7698, 0x3eeb990};
+constexpr uintptr_t gadgetTables[] = {0x3eec7b8, 0x3eeb990, 0x3eebe38, 0x3ee81e0, 0x3eea6e0,
+                                      0x3eeb030, 0x3eeb4e0, 0x3ee7698, 0x3ee8ff0};
 // Each gadget's own part of its fire event (vtable +0x100), in that order.
-constexpr uintptr_t gadgetFills[] = {0x10967d0, 0x108d340, 0x1094a90, 0x108bb90, 0x1090f50,
-                                     0x1093560, 0x1093b90, 0x10869e0, 0x1094370};
+constexpr uintptr_t gadgetFills[] = {0x10967d0, 0x1094370, 0x1094a90, 0x108bb90, 0x1090f50,
+                                     0x1093560, 0x1093b90, 0x10869e0, 0x108d340};
 // Equipping one, as the game's own wheel does (791c20, 793320): the hero's
 // GameInventoryManager (by its type), its GameEquipInventory (bbfba0), whose
 // items (its vtable +0x3a0 the count, +0x1b0 one by index) are weapons at
@@ -616,7 +622,8 @@ uint16_t equipNow(uint16_t wanted) {
 // The player's gadgets: the weapons the game's wheel offers, one of each
 // gadget, at its place round the wheel in their order. The weapon manager's
 // own list (+0x1a8) has more: the built-in web shooter, which no wheel item
-// names, and a suit power's weapon (in the game, October 15: Web Blossom).
+// names. The game's charged Web Shooter gadget (gadgetTables' last) is not
+// listed: the wheel's top place gives web balls already.
 void listGadgets() {
     const auto record = heroRecord.load(std::memory_order_relaxed);
     Owned found[8]{};

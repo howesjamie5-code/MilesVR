@@ -1,5 +1,6 @@
 #pragma once
 #include "slow_motion.hpp"
+#include "spider_sense.hpp"
 #include "vertex.hpp"
 #include "web_strike.hpp"
 #include <cstdint>
@@ -320,4 +321,39 @@ struct VenomBurstView {
     float scale = 1, ring = 0;
 };
 void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle);
+// Spider-Sense (spider_sense.hpp): the warning of an attack about to land,
+// printed over the attacker's head, facing the viewer. The comic's lines:
+// five jagged strokes fanned up from his head, in what the warning asks for
+// (cyan: a fist at him counters; red: dodge; yellow: jump, under a paper
+// chevron), keyed in ink on a hard drop. Around them a paper ring closes in a
+// notch at a time as the blow comes; in its last notch the ring is a yellow
+// burst's edge: now. It pops in out of register, then boils as a held
+// drawing does. A counter breaks it: a pose of paper flash, a pose of its
+// strokes thrown wide and thin, a pose small, and it is gone.
+struct SenseView {
+    static constexpr float brokenSeconds = 3.f / 12; // three poses
+    Vec3 point{};                                    // the top of his head: the mark stands over it
+    SenseAnswer answer = SenseAnswer::Counter;
+    float left = 1;    // 1..0 of the warning's time left (senseLeft)
+    bool timed{};      // false: the game set no time, no ring
+    float age{};       // seconds since it showed
+    float broken = -1; // seconds since a counter broke it; below 0: not
+};
+// pixelAngle as for appendWeb.
+void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle);
+// The warning of an attacker out of view, in the player's sightline (Arkham
+// Shadow's icon there): the same mark, small, on the circle
+// SenseSightConfig::angle round the middle of the view on his side, an
+// arrowhead beyond it pointing to him, and three of the comic's wavy lines at
+// the rim of the view on that side (SenseSightConfig::rim). `head`: the
+// middle of the eyes and their orientation, in the world.
+struct SenseSightView {
+    SenseAnswer answer = SenseAnswer::Counter;
+    SenseSight sight{}; // its `shown`: drawn at all
+    float left = 1;
+    bool timed{};
+    float age{}, broken = -1;
+};
+void appendSenseSight(std::vector<Vertex>& out, const SenseSightView& view, Pose head, float pixelAngle,
+                      const SenseSightConfig& config = {});
 } // namespace spidy

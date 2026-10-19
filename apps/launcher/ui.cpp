@@ -78,6 +78,8 @@ constexpr const char* kScreenDepths[] = {"Off", "Low", "Medium", "High"};
 constexpr const char* kWebButtons[] = {"Grip", "Trigger"};
 // The venom punch's hand (SessionOptions::venomLeftHand: the second).
 constexpr const char* kVenomHands[] = {"Right hand", "Left hand"};
+// How webs behave (SessionOptions::arcadeWebs: the second).
+constexpr const char* kWebStyles[] = {"Realistic", "Arcade"};
 constexpr const char* kWeights[] = {"40%", "60%", "80%", "100%", "125%", "150%", "200%", "250%", "300%"};
 constexpr int kWeightValues[] = {40, 60, 80, 100, 125, 150, 200, 250, 300};
 constexpr const char* kFlipSpeeds[] = {"90\xC2\xB0/s",  "120\xC2\xB0/s", "150\xC2\xB0/s", "180\xC2\xB0/s",
@@ -181,6 +183,9 @@ void App::poll() {
     const bool sessionRuns = session_.running();
     if (sessionRan_ && !sessionRuns && session_.exitCode() == spidy::launcher::kNeedsAdministratorExit)
         wantAdministrator_ = true;
+    // A running game that already holds Spidy: ask once, as the session ends, whether to close it.
+    if (sessionRan_ && !sessionRuns && session_.exitCode() == spidy::launcher::kCloseGameExit)
+        wantCloseGame_ = true;
     sessionRan_ = sessionRuns;
     update_ = updater_.status();
     // The new files are in place: this launcher closes, and main.cpp starts the new one.
@@ -242,13 +247,13 @@ std::vector<std::string> App::blockers() {
     return reasons;
 }
 
-void App::start() {
+void App::start(bool closeGame) {
     startError_.clear();
     administratorError_.clear();
     const auto report = newReportPath(scan_.root);
     const auto* chosen = runtime();
     const auto args = spidy::launcher::sessionArguments(settings_.options, report, chosen ? chosen->manifest : L"",
-                                                        newStopEventName());
+                                                        newStopEventName(), closeGame);
     log_.clear();
     logCount_ = 0;
     if (!session_.start(scan_.python, scan_.root, args, report, startError_))
@@ -1104,6 +1109,13 @@ void App::optionsCard(ImVec2 size) {
         }
         ImGui::PopFont();
     };
+    option("Web style", "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.",
+           S(150), [&] {
+               static constexpr int styles[] = {0, 1};
+               int arcade = o.arcadeWebs ? 1 : 0;
+               stepCombo("##webStyle", kWebStyles, styles, 2, &arcade);
+               o.arcadeWebs = arcade != 0;
+           });
     option("Web button", "Which button shoots and holds a web; the other reels in and shoots web balls.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
@@ -1262,7 +1274,7 @@ void App::startBlock(ImVec2 size) {
     // What is happening, in two lines.
     std::string title, detail;
     Rgb tint = kText;
-    bool offerAdministrator = false;
+    bool offerAdministrator = false, offerCloseGame = false;
     const auto lastLine = [&](auto&& match) -> std::string {
         for (auto it = log_.rbegin(); it != log_.rend(); ++it)
             if (match(*it))
@@ -1285,6 +1297,9 @@ void App::startBlock(ImVec2 size) {
         } else if (seen("Starting Spider-Man") || seen("Using the running game")) {
             title = seen("Using the running game") ? "Attaching to the running game" : "Starting the game";
             detail = "Its menus appear on a screen in the headset. Pick your save with the controllers.";
+        } else if (seen("Closing Spider-Man")) {
+            title = "Closing the game";
+            detail = "It saves as it quits; then MilesVR starts it again.";
         } else {
             title = "Checking the headset";
             detail = "Put the headset on and keep it connected.";
@@ -1304,6 +1319,11 @@ void App::startBlock(ImVec2 size) {
                                                  : administratorError_;
             tint = kError;
             offerAdministrator = true;
+        } else if (*code == spidy::launcher::kCloseGameExit) {
+            title = "Close the game first";
+            detail = error.rfind("Spidy VR unavailable: ", 0) == 0 ? error.substr(22) : error;
+            tint = kAmber;
+            offerCloseGame = true;
         } else {
             title = *code == 2 ? "VR could not start" : format("VR stopped (code %lu)", *code);
             detail = error.rfind("Spidy VR unavailable: ", 0) == 0 ? error.substr(22) : error;
@@ -1346,6 +1366,19 @@ void App::startBlock(ImVec2 size) {
         ImGui::PopFont();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Windows asks you to allow it. MilesVR then opens again; close the game and press START VR.");
+    }
+    // The same for a game that already holds Spidy, after "Not now" (while nothing else keeps VR from
+    // starting).
+    if (offerCloseGame && reasons.empty()) {
+        const float detailHeight = measure(fonts_.body, S(13), detail.c_str(), size.x - S(8)).y;
+        ImGui::SetCursorScreenPos(ImVec2(at.x + S(4), y + S(22) + detailHeight + S(3)));
+        ImGui::PushFont(fonts_.semibold, 13.5f);
+        if (link("Close the game and start VR"))
+            start(true);
+        ImGui::PopFont();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("MilesVR closes the game as its close button does (it saves as it quits), then "
+                              "starts it and VR again.");
     }
     ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + size.y));
     ImGui::Dummy(ImVec2(size.x, 0));
@@ -1460,30 +1493,46 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                      "down from above, at arm's reach or at the marked thug across the room. It hits "
                                      "harder and throws him that way; the yellow arrow into a jagged red ring calls "
                                      "the finisher"},
+          {"Spider-Sense lines over a thug", "He is about to hit you, as the game itself warns you. The ring closes "
+                                             "on the blow; the yellow burst is now. Out of view his mark shows near "
+                                             "the middle of your view, its arrowhead pointing to him"},
+          {"Blue lines: throw a fist at him", "The counter: his attack breaks, he is your target, and you fly to "
+                                              "him if he is out of reach. The blow sends him flying"},
+          {"Red lines / yellow lines", "Dodge (B) / jump (A): no counter breaks this attack"},
           {"Yank a thug while you are in the air", "He flies to you and floats in front of you; time slows as he "
                                                    "arrives and you hang there. Hit him"},
           {"Slow motion by itself", "Time slows for a moment at a finisher, a called blow, a thug who arrives in "
                                     "front of you in the air, and a perfect dodge"}}},
+        {"PHONE",
+         {{"Grip behind a hip, bring it up", "Draw the phone from your back pocket: squeeze a grip with the hand "
+                                             "behind your hip and bring it up in front of you, still squeezed"},
+          {"Stick  /  A  /  B", "Pick an app or button  /  press it  /  put the phone away"},
+          {"Triggers", "Music volume: left down, right up"},
+          {"Apps", "Music (the files in the Music folder beside the launcher), map, and GEAR: your gadgets"}}},
         {"MOVING",
          {{"Left stick", "Walk and run"},
           {"A", "Jump. Hold it on the ground to charge a leap and let go: the longer you hold, the higher; with "
                 "the left stick, forward too"},
           {"B", "Dodge, the way the left stick points: the game's B"},
-          {"Y", "Interact with what you look at: the game's Y (backpacks, doors, prompts); web strike in a fight. "
-                "Hold it and you step up to the thing, until the game takes it"},
+          {"Y", "Interact with what you look at: the game's Y (backpacks, doors, prompts); web strike in a "
+                "fight, while you swing too (a car in a chase). Hold it and you step up to the thing, until "
+                "the game takes it"},
           {"Click the right stick", "The game's LB + RB: pull a door or a grate where the game shows the two "
                                     "(with the venom meter full it lets the venom go: see VENOM POWERS)"},
           {"Right stick down", "Heal: the game's D-pad down. Push it right down and hold it a moment"},
-          {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the two"},
+          {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the "
+                             "two; while you swing too. No point? Keep holding (time slows as the game "
+                             "aims), look at a point and let go to zip there"},
           {"Hand to your temple, trigger", "Scan your surroundings: the game's R3"},
           {"Menu button", "Pause; there SWITCH TO GAME SCREEN plays the game as it is, on a 3D screen, and VR "
                           "settings are in Settings > MILES VR"},
+          {"Both sticks held in", "Pause too: under SteamVR a Quest's menu button opens SteamVR's dashboard"},
           {"X", "Game menu: map, suits, skills"}}},
         {"MENUS AND CUTSCENES",
          {{"Left stick", "Move through menus (they show on a screen in the headset)"},
           {"A  /  B", "Select  /  Back"},
           {"Grips", "Switch menu tabs"},
-          {"Menu button", "Start"}}},
+          {"Menu button  /  both sticks held in", "Start"}}},
         {"STEAM FRAME CONTROLLERS",
          {{"A, B, X, Y", "All four are on the right controller, each the button of that name above: jump, dodge, "
                          "game menu, interact"},
@@ -1754,6 +1803,10 @@ void App::modals() {
         ImGui::OpenPopup("Administrator rights needed");
         wantAdministrator_ = false;
     }
+    if (wantCloseGame_) {
+        ImGui::OpenPopup("Close the game?");
+        wantCloseGame_ = false;
+    }
     const ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     const auto dialog = [&](const char* name, const std::string& message, const char* yes, const char* no) -> int {
         int answer = -1;
@@ -1804,6 +1857,18 @@ void App::modals() {
                    reason + "MilesVR can start again as administrator now; Windows asks you to allow it.",
                    "Restart as administrator", "Not now") == 1)
             restartElevated();
+    }
+    if (ImGui::IsPopupOpen("Close the game?")) {
+        // The session's own words: VR already ran in that game, or another Spidy build is in it.
+        std::string reason;
+        for (auto it = log_.rbegin(); it != log_.rend() && reason.empty(); ++it)
+            if (it->text.rfind("Spidy VR unavailable: ", 0) == 0)
+                reason = it->text.substr(22) + "\n\n";
+        if (dialog("Close the game?",
+                   reason + "MilesVR can close it now, as its close button does (the game saves as it quits), "
+                            "then start the game and VR again.",
+                   "Close and start VR", "Not now") == 1)
+            start(true);
     }
 }
 

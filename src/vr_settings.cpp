@@ -18,6 +18,8 @@ constexpr const char* screenChoices[] = {"SMALL", "MEDIUM", "LARGE"};
 constexpr const char* calibrateChoices[] = {"NO", "ON RESUME"};
 // WEB BUTTON, a switch named by the button that webs: TRIGGER swaps it with the grip.
 constexpr const char* webButtonChoices[] = {"GRIP", "TRIGGER"};
+// WEB STYLE, a switch named by how webs behave: ARCADE passes thin things by.
+constexpr const char* webStyleChoices[] = {"REALISTIC", "ARCADE"};
 // VIEW, a switch named by what the headset shows: GAME SCREEN is the game as
 // it is, its own picture on the screen ahead, as menus are, in 3D.
 constexpr const char* viewChoices[] = {"VR", "GAME SCREEN"};
@@ -98,6 +100,8 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.flips;
     case Item::webButton:
         return &v.triggerWebs;
+    case Item::webStyle:
+        return &v.arcadeWebs;
     case Item::standOnWalls:
         return &v.standOnWalls;
     case Item::view:
@@ -122,15 +126,18 @@ Values sanitized(Values v) {
     v.screenDepth = std::clamp(v.screenDepth, 0, 3);
     return v;
 }
-const std::array<Row, 21>& rows() {
+const std::array<Row, 24>& rows() {
     // The help fits the game's description column beside the rows.
-    static const std::array<Row, 21> all{{
+    static const std::array<Row, 24> all{{
         {Item::none, "WEBS", nullptr, {}},
+        {Item::webStyle, "WEB STYLE",
+         "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.", webStyleChoices},
         {Item::webButton, "WEB BUTTON",
          "Which button shoots and holds a web; the other reels in and shoots web balls.", webButtonChoices},
         {Item::aimMarkers, "AIM MARKERS", "Show where each web would land.", {}},
         {Item::airWebs, "WEBS HOLD IN OPEN AIR",
          "With nothing in reach, a web still holds in open air, 100 m out.", {}},
+        {Item::none, "SWINGING", nullptr, {}},
         {Item::swingSpeed, "SWING SPEED LIMIT", "How fast a swing can carry you.", swingChoices},
         {Item::weight, "WEIGHT", "How heavy you are while swinging and after letting go. 100% is real gravity.",
          weightChoices},
@@ -138,9 +145,6 @@ const std::array<Row, 21>& rows() {
         {Item::venomHand, "VENOM HAND",
          "The hand Miles's venom charges in: hold its grip, then punch, smash or blast.",
          venomHandChoices},
-        {Item::none, "BODY", nullptr, {}},
-        {Item::calibrate, "CALIBRATE BODY", "Fit Miles to you: pick ON RESUME, then hold both triggers in a T-pose.",
-         calibrateChoices},
         {Item::none, "COMFORT", nullptr, {}},
         {Item::snapTurn, "SNAP TURN", "How far a flick of the right stick turns you. Off: no snap turning.",
          snapChoices},
@@ -148,6 +152,7 @@ const std::array<Row, 21>& rows() {
          smoothChoices},
         {Item::haptics, "CONTROLLER VIBRATION", "How strongly webs, grabs and punches buzz in your hands.",
          hapticChoices},
+        {Item::none, "DISPLAY", nullptr, {}},
         {Item::view, "VR VIEW", "Play in VR, or the game as it is on a 3D screen, with pad controls.", viewChoices,
          true},
         {Item::screenSize, "GAME SCREEN SIZE", "The screen that shows menus, cutscenes and flat mode.",
@@ -156,6 +161,9 @@ const std::array<Row, 21>& rows() {
          "Cutscenes and VIEW: GAME SCREEN get depth. Higher brings them nearer. Off: flat.",
          depthChoices},
         {Item::hud, "HUD", "How large the game's HUD shows in front of you. Off: no HUD in VR.", hudChoices},
+        {Item::none, "BODY", nullptr, {}},
+        {Item::calibrate, "CALIBRATE BODY", "Fit Miles to you: pick ON RESUME, then hold both triggers in a T-pose.",
+         calibrateChoices},
         {Item::none, "EXPERIMENTAL", nullptr, {}},
         {Item::flips, "FLIPS", "In the air the left stick turns you over; tap A for one flip, hold A to stay.", {}},
         {Item::flipSpeed, "FLIP SPEED", "How fast a flip turns you over, at full tilt of the left stick.",

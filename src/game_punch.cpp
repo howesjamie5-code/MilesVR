@@ -3,10 +3,12 @@
 // room, the web strike and the flow (game_punch.hpp).
 #include "spidy/game_punch.hpp"
 #include "spidy/game_grab.hpp"
+#include "spidy/game_sense.hpp"
 #include "spidy/game_targets.hpp"
 #include "spidy/game_time.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/venom_punch.hpp"
+#include "spidy/spider_sense.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -115,6 +117,34 @@ bool venomArmed() {
     const uint32_t charge = venomCharge.load();
     return charge && charge != venomUsed;
 }
+// Spider-Sense (spider_sense.hpp): the attacks the game warned the hero of
+// at the latest sample, the counters made at them, and what the session
+// report and the headset read of them (game_sense::Data). A counter's
+// attacker is the strike's mark for a moment after the fist goes out, so the
+// strike it opens flies to him whomever the player was locked onto.
+SpiderSense sense{SpiderSenseConfig{}};
+std::vector<SenseThreat> threats;
+std::vector<uint32_t> threatStates; // each one's state in the manager
+game_sense::Attack attacksRead[game_sense::attackSlots];
+uint64_t senseManager{};
+game_sense::Data senseTally;
+uint64_t counterWish{};
+float counterWishLeft{};
+constexpr float counterWishSeconds = .15f;
+// The warnings seen go off, by attacker and when the game warned: each
+// counted once.
+struct Warned {
+    uint64_t attacker{};
+    double at{};
+};
+std::array<Warned, 16> warnedLately{};
+size_t nextWarned{};
+// A thug's head is this high (above his feet, carried over to other bots
+// by their size), his middle this.
+constexpr float headHeight = 1.75f, middleHeight = 1;
+// A counter's blow sends him off along it this fast (real m/s; a heavy
+// blow's 9-14, DeliveryConfig) and this fast up, and hits this much harder.
+constexpr float counterSpeed = 11, counterLift = 3, counterDamage = 1.25f;
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)
@@ -221,6 +251,153 @@ void resetFight() {
     nearby.clear();
     launches.clear();
     fighter = {};
+    sense.reset();
+    threats.clear();
+    threatStates.clear();
+    senseManager = 0;
+    counterWish = 0;
+    counterWishLeft = 0;
+}
+// The warnings the game's HeroDodgeManager holds for the player now, with
+// where each attacker is: a bot's feet and size from the target watch, else
+// his actor record's place. A new one goes into the census.
+void readSense(const Vec3& chest) {
+    threats.clear();
+    threatStates.clear();
+    ++senseTally.samples;
+    uint32_t n{};
+    double now{};
+    if (!fighter.record || !game_sense::read(base, fighter.record, senseManager, attacksRead, n, now)) {
+        senseTally.faults += fighter.record != 0;
+        senseTally.manager = 0;
+        senseTally.attacks = 0;
+        return;
+    }
+    if (senseManager != senseTally.manager)
+        ++senseTally.managers;
+    senseTally.manager = senseManager;
+    ++senseTally.read;
+    senseTally.now = now;
+    senseTally.attacks = n;
+    senseTally.mostAttacks = std::max(senseTally.mostAttacks, n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const auto& a = attacksRead[i];
+        if (!(a.state & game_sense::warnedState) || !std::isfinite(a.warnAt))
+            continue;
+        const uint64_t record = game_sense::actorOf(base, a.handle);
+        Vec3 feet{};
+        game_targets::Size size{};
+        bool placed{};
+        for (const auto& b : bots)
+            if (record && b.record == record) {
+                placed = game_targets::position(b, feet);
+                size = b.size;
+                break;
+            }
+        if (!record || (!placed && !game_sense::positionOf(record, feet))) {
+            ++senseTally.unknown;
+            continue;
+        }
+        SenseThreat t;
+        t.attacker = record;
+        t.head = feet + Vec3{0, size.height(headHeight), 0};
+        t.middle = feet + Vec3{0, size.height(middleHeight), 0};
+        t.timed = std::isfinite(a.impactAt) && a.impactAt >= 0;
+        t.toImpact = t.timed ? static_cast<float>(a.impactAt - now) : 0.f;
+        t.warned = std::max(static_cast<float>(now - a.warnAt), 0.f);
+        t.flags = a.flags;
+        // Nothing the manager would hold for long: a minute-old warning or
+        // one whose blow is a minute off is something else.
+        if (t.warned > 60 || (t.timed && std::abs(t.toImpact) > 60)) {
+            ++senseTally.unknown;
+            continue;
+        }
+        threats.push_back(t);
+        threatStates.push_back(a.state);
+        // A warning not seen go off before: counted, by what it asks for,
+        // and into the census with how long it gave the player.
+        const bool known = std::any_of(warnedLately.begin(), warnedLately.end(), [&](const Warned& w) {
+            return w.attacker == record && std::abs(w.at - a.warnAt) < 1e-3;
+        });
+        if (!known) {
+            warnedLately[nextWarned++ % warnedLately.size()] = {record, a.warnAt};
+            ++senseTally.warnings;
+            const auto asked = answerOf(t.flags, length(t.middle - chest), sense.config());
+            ++senseTally.asked[static_cast<size_t>(asked) & 3];
+            const float lead = t.timed ? t.warned + std::max(t.toImpact, 0.f) : -1.f;
+            size_t slot = 8;
+            for (size_t c = 0; c < 8; ++c)
+                if (senseTally.censusCounts[c] && senseTally.censusFlags[c] == t.flags) {
+                    slot = c;
+                    break;
+                } else if (!senseTally.censusCounts[c] && slot == 8) {
+                    slot = c;
+                }
+            if (slot < 8) {
+                senseTally.censusFlags[slot] = t.flags;
+                ++senseTally.censusCounts[slot];
+                senseTally.censusLead[slot] = std::max(senseTally.censusLead[slot], lead);
+            }
+        }
+    }
+}
+// A counter's break: the game's flinch for the attacker the moment the fist
+// goes out at him, so his blow never comes; the blow that lands on him next
+// is the counter's (land()).
+void breakAttack(const SpiderSense::Counter& c, Vec3 head) {
+    native_bodies::Damage request;
+    request.victim = c.attacker;
+    request.damager = fighter.record;
+    request.point = c.point;
+    Vec3 way = c.point - head;
+    way.y = 0;
+    request.direction = length(way) > 1e-3f ? normalized(way) : Vec3{0, 0, -1};
+    request.normal = request.direction * -1.f;
+    request.amount = 1;
+    request.type = 1; // kMelee
+    request.knockback = static_cast<int32_t>(Knockback::Knockback);
+    request.knockbackAmount = 3;
+    if (native_bodies::damage(request))
+        ++senseTally.breaks;
+}
+void noteCounter(const SpiderSense::Counter& c, bool thrown) {
+    (thrown ? senseTally.thrown : senseTally.landed) += 1;
+    senseTally.perfect += c.perfect;
+    senseTally.lastCounter = c.attacker;
+    senseTally.lastPoint = c.point;
+    senseTally.lastLeft = c.left;
+    senseTally.lastHand = c.hand >= 0 ? static_cast<uint32_t>(c.hand) : 2u;
+}
+// The warnings standing now, the soonest blow first, for the headset.
+void publishSense(uint32_t status, Vec3 chest) {
+    senseTally.status = status;
+    std::vector<const SenseThreat*> shown;
+    for (const auto& t : threats)
+        if (standing(t, sense.config()))
+            shown.push_back(&t);
+    std::sort(shown.begin(), shown.end(), [](const SenseThreat* a, const SenseThreat* b) {
+        return (a->timed ? a->toImpact : 1e3f) < (b->timed ? b->toImpact : 1e3f);
+    });
+    senseTally.count = static_cast<uint32_t>(std::min<size_t>(shown.size(), std::size(senseTally.threats)));
+    for (uint32_t i = 0; i < std::size(senseTally.threats); ++i) {
+        auto& out = senseTally.threats[i];
+        out = {};
+        if (i >= senseTally.count)
+            continue;
+        const auto& t = *shown[i];
+        out.attacker = t.attacker;
+        out.head = t.head;
+        out.middle = t.middle;
+        out.toImpact = t.toImpact;
+        out.warned = t.warned;
+        out.flags = t.flags;
+        out.state = threatStates[static_cast<size_t>(&t - threats.data())];
+        out.answer = static_cast<uint8_t>(answerOf(t.flags, length(t.middle - chest), sense.config()));
+        out.timed = t.timed;
+        out.countered = sense.countered(t.attacker);
+        out.left = senseLeft(t);
+    }
+    game_sense::publish(senseTally);
 }
 // The thugs' flights that wait for a blow's velocity.
 void steerFlights(float seconds) {
@@ -383,6 +560,25 @@ void land(PunchEvent e, bool byStrike) {
         d.knockback = Knockback::Knockback;
         d.velocity = {};
     }
+    // A counter's blow (spider_sense.hpp): the one after a fist thrown at him
+    // while his warning stood, or one that lands while it stands and so
+    // counters him itself. It sends him flying, whatever the flow says.
+    std::optional<SpiderSense::Counter> made;
+    if (sense.blow(e.target, threats, fighter.feet + Vec3{0, strike.config().chest, 0}, made)) {
+        if (made)
+            noteCounter(*made, false);
+        ++senseTally.counterBlows;
+        if (d.kind == BlowKind::Hit) {
+            Vec3 along = e.direction;
+            along.y = 0;
+            along = length(along) > 1e-3f ? normalized(along) : Vec3{0, 0, -1};
+            d.kind = BlowKind::Heavy;
+            d.kinetic = d.fly = true;
+            d.knockback = Knockback::FlyBack;
+            d.velocity = along * counterSpeed + Vec3{0, counterLift, 0};
+        }
+        d.damage *= counterDamage;
+    }
     // The flow's next call: the one that stands, or after an answer another way.
     tally.calls += cues.call(flow.count(), flow.finisher(flow.count() + 1), called,
                              static_cast<uint32_t>((tally.blows + 1) * 2654435761u >> 13));
@@ -479,6 +675,8 @@ uint32_t game_punch::start(uintptr_t gameBase) {
             AcquireSRWLockExclusive(&updating);
             resetFight();
             tally = {};
+            senseTally = {};
+            warnedLately = {};
             ReleaseSRWLockExclusive(&updating);
             watch.start(base, 1u << static_cast<unsigned>(game_targets::Kind::bot));
             enabled = true;
@@ -491,6 +689,7 @@ uint32_t game_punch::start(uintptr_t gameBase) {
             d.error = result;
         });
         publishStrikes(result ? 3 : 1);
+        publishSense(result ? 3 : 1, {});
     }
     ReleaseSRWLockExclusive(&lifecycle);
     return result;
@@ -502,6 +701,7 @@ uint32_t game_punch::stop() {
     AcquireSRWLockExclusive(&updating);
     resetFight();
     publishStrikes(0);
+    publishSense(0, {});
     ReleaseSRWLockExclusive(&updating);
     watch.stop();
     publish([](Data& d) { d.status = 0; });
@@ -531,9 +731,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     watch.current(bots);
     fighter = player;
     // The fist: the knuckles, fistAhead along the hand from its web shooter
-    // (the swing input's aim, webShooter); its motion relative to the player
-    // is the grip relative to the head, turned from tracking space.
-    constexpr float fistAhead = .13f;
+    // (the swing input's aim, webShooter: the nozzle, 2.5 cm further back
+    // since October 18, which this keeps the fist clear of); its motion
+    // relative to the player is the grip relative to the head, turned from
+    // tracking space.
+    constexpr float fistAhead = .155f;
     std::array<PunchHand, 2> hands{};
     const Quat toWorld = trackingTurn(in);
     // A snap or smooth turn, or a flip, since the last sample turned the
@@ -566,8 +768,10 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     for (const auto& b : bots) {
         Vec3 feet{};
         // Nor a thug of a later wave, waiting unseen where he will appear,
-        // nor one knocked out.
-        if ((b.traits & game_targets::neutral) || !game_targets::up(base, b) || !game_targets::position(b, feet))
+        // nor one knocked out, nor one something else moves (a car's seat, a
+        // cinematic: game_targets::held).
+        if ((b.traits & game_targets::neutral) || !game_targets::up(base, b) || game_targets::held(base, b) ||
+            !game_targets::position(b, feet))
             continue;
         const float bottom = b.size.height(0), top = b.size.height(botHeight);
         const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
@@ -587,6 +791,9 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
             enemies.push_back({target.id, target.feet, target.height, target.radius,
                                b.machine && native_bodies::flung(b.machine)});
     }
+    // The attacks the game has warned the player of, before any blow of this
+    // sample lands: a blow during a warning counters it.
+    readSense(chest);
     // The enemy the next punch goes to: the one a blow locked the player
     // onto, else the one he looks at. A web that holds an enemy makes him
     // the one. And of those his blows landed on, the ones knocked out.
@@ -678,10 +885,32 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         fists[i] = {hands[i].tracked, hands[i].fist, punches.velocity(i), !hands[i].busy, player.holds[i],
                     in.hands[i].grip};
     const bool flying = strike.phase() == WebStrike::Phase::Flying;
+    // Spider-Sense's counter: a fist thrown at an attacker whose warning asks
+    // for one breaks his attack now (the game's flinch, unless the fist
+    // already landed on him), and he is the one from here: the strike it
+    // opens flies to him, whomever the player was locked onto. Arkham
+    // Shadow's: "Batman instantly abandons his current target in favor of
+    // countering the incoming punch".
+    std::array<SenseFist, 2> senseFists{};
+    for (int i = 0; i < 2; ++i)
+        senseFists[i] = {hands[i].tracked && !hands[i].busy, hands[i].fist, punches.velocity(i)};
+    counterWishLeft = std::max(counterWishLeft - seconds, 0.f);
+    if (const auto c = sense.update(seconds, threats, senseFists, head, chest)) {
+        noteCounter(*c, true);
+        const auto struck = [&](const PunchEvent& e) { return e.target == c->attacker; };
+        if (std::none_of(events.begin(), events.end(), struck))
+            breakAttack(*c, head);
+        lock.take(c->attacker);
+        counterWish = c->attacker;
+        counterWishLeft = counterWishSeconds;
+    }
     // A strike goes to the marked enemy alone; a fist swung the way the flow
     // calls opens one at him too.
     StrikeWish wish;
     wish.target = lock.target();
+    if (counterWishLeft > 0 && std::any_of(enemies.begin(), enemies.end(),
+                                           [&](const FightTarget& e) { return e.id == counterWish; }))
+        wish.target = counterWish;
     for (const auto& e : enemies)
         if (e.id == wish.target)
             wish.called = Cues::direction(cues.cue().way, e.middle() - head);
@@ -725,6 +954,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         }
     });
     publishStrikes(2);
+    publishSense(2, chest);
     return opened;
 }
 bool game_punch::lifting(Vec3 feet) {

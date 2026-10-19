@@ -1,8 +1,10 @@
-// Draws the combat marks (web_visual.hpp's appendCue, appendImpact and
-// appendKnockout) over a
+// Draws the combat marks (web_visual.hpp's appendCue, appendImpact,
+// appendKnockout, and Spider-Sense's appendSense and appendSenseSight) and the
+// gadget wheel (appendGadgetWheel) over a
 // headset's eye captures, without a headset: the overlay's own vertices, one
 // sample a pixel with its blending, at about the headset's pixel density.
-// It writes sheets of the marks' states and poses as BMP files.
+// It writes sheets of the marks' states and poses as BMP files; the wheel's
+// is the near capture's, at a hand's distance where its pixel is.
 // tools/preview-marks.ps1 feeds it captures and turns the sheets into PNG.
 //
 //   spidy_mark_preview <out folder> <scale> <far.bmp|-> <u> <v> <metres> <near.bmp|-> <u> <v> <metres>
@@ -11,8 +13,10 @@
 // (the captures are 512 pixels wide, about 235 pixels a unit of tangent),
 // with the capture pixel (u, v) of the enemy's chest and how far off he is;
 // "-" for a plain backdrop, dark to the left and pale to the right.
+#include "spidy/gadget_wheel.hpp"
 #include "spidy/overlay_text.hpp"
 #include "spidy/web_visual.hpp"
+#include "preview_image.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -23,27 +27,9 @@
 #include <string>
 #include <vector>
 using namespace spidy;
+using namespace spidy::preview;
 
 namespace {
-float decode(float c) {
-    return c <= .04045f ? c / 12.92f : std::pow((c + .055f) / 1.055f, 2.4f);
-}
-float encode(float c) {
-    c = std::clamp(c, 0.f, 1.f);
-    return c <= .0031308f ? c * 12.92f : 1.055f * std::pow(c, 1 / 2.4f) - .055f;
-}
-struct Image {
-    int w{}, h{};
-    std::vector<float> rgb; // linear, as the overlay blends
-    Image() = default;
-    Image(int width, int height) : w(width), h(height), rgb(static_cast<size_t>(width) * height * 3, 0.f) {}
-    float* at(int x, int y) {
-        return &rgb[(static_cast<size_t>(y) * w + x) * 3];
-    }
-    const float* at(int x, int y) const {
-        return &rgb[(static_cast<size_t>(y) * w + x) * 3];
-    }
-};
 Image plain(int w, int h) {
     Image image(w, h);
     for (int y = 0; y < h; ++y)
@@ -55,109 +41,6 @@ Image plain(int w, int h) {
             p[2] = pale ? .42f : .02f;
         }
     return image;
-}
-bool load(const std::string& path, Image& image) {
-    std::ifstream in(path, std::ios::binary);
-    const std::vector<unsigned char> d((std::istreambuf_iterator<char>(in)), {});
-    const auto word = [&](size_t o) {
-        return static_cast<uint32_t>(d[o] | d[o + 1] << 8 | d[o + 2] << 16 | static_cast<uint32_t>(d[o + 3]) << 24);
-    };
-    if (d.size() < 54 || d[0] != 'B' || d[1] != 'M' || (d[28] != 24 && d[28] != 32) || word(30))
-        return false;
-    const int w = static_cast<int>(word(18)), h = static_cast<int>(word(22)), bytes = d[28] / 8;
-    const size_t offset = word(10), stride = (static_cast<size_t>(w) * bytes + 3) & ~size_t{3};
-    if (w <= 0 || !h || offset + stride * static_cast<size_t>(std::abs(h)) > d.size())
-        return false;
-    image = Image(w, std::abs(h));
-    for (int y = 0; y < image.h; ++y) {
-        const unsigned char* row = &d[offset + stride * (h > 0 ? image.h - 1 - y : y)];
-        for (int x = 0; x < w; ++x) {
-            const unsigned char* p = row + x * bytes;
-            float* o = image.at(x, y);
-            o[0] = decode(p[2] / 255.f);
-            o[1] = decode(p[1] / 255.f);
-            o[2] = decode(p[0] / 255.f);
-        }
-    }
-    return true;
-}
-bool save(const Image& image, const std::string& path) {
-    const size_t stride = (static_cast<size_t>(image.w) * 3 + 3) & ~size_t{3};
-    std::vector<unsigned char> d(54 + stride * image.h, 0);
-    const auto put = [&](size_t o, uint32_t v) {
-        for (int i = 0; i < 4; ++i)
-            d[o + i] = static_cast<unsigned char>(v >> (8 * i));
-    };
-    d[0] = 'B';
-    d[1] = 'M';
-    put(2, static_cast<uint32_t>(d.size()));
-    put(10, 54);
-    put(14, 40);
-    put(18, static_cast<uint32_t>(image.w));
-    put(22, static_cast<uint32_t>(image.h));
-    d[26] = 1;
-    d[28] = 24;
-    put(34, static_cast<uint32_t>(stride * image.h));
-    for (int y = 0; y < image.h; ++y) {
-        unsigned char* row = &d[54 + stride * (image.h - 1 - y)];
-        for (int x = 0; x < image.w; ++x) {
-            const float* p = image.at(x, y);
-            for (int k = 0; k < 3; ++k)
-                row[x * 3 + k] = static_cast<unsigned char>(std::lround(encode(p[2 - k]) * 255));
-        }
-    }
-    std::ofstream file(path, std::ios::binary);
-    file.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()));
-    std::printf("%s %dx%d\n", path.c_str(), image.w, image.h);
-    return file.good();
-}
-// The eye: at the origin, looking along -z, `f` pixels a unit of tangent
-// about (cx, cy).
-struct Camera {
-    float f, cx, cy;
-    Vec3 ray(float u, float v) const {
-        return normalized({(u - cx) / f, -(v - cy) / f, -1});
-    }
-};
-// Draws the vertices into the cell (x0, y0, w, h) of `image`, camera pixel
-// (u0, v0) at the cell's corner: a sample at each pixel's centre, blended by
-// the vertices' opacity as the overlay's translucent pass blends.
-void draw(Image& image, const std::vector<Vertex>& vertices, const Camera& camera, float u0, float v0, int x0,
-          int y0, int w, int h) {
-    for (size_t i = 0; i + 2 < vertices.size(); i += 3) {
-        float x[3], y[3];
-        bool ahead = true;
-        for (int k = 0; k < 3 && ahead; ++k) {
-            const Vec3 p = vertices[i + k].position;
-            ahead = p.z < -.01f;
-            x[k] = camera.cx + camera.f * p.x / -p.z - u0 + static_cast<float>(x0);
-            y[k] = camera.cy - camera.f * p.y / -p.z - v0 + static_cast<float>(y0);
-        }
-        const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
-        if (!ahead || std::abs(area) < 1e-9f)
-            continue;
-        const int left = std::max(x0, static_cast<int>(std::floor(std::min({x[0], x[1], x[2]}))));
-        const int right = std::min(x0 + w - 1, static_cast<int>(std::ceil(std::max({x[0], x[1], x[2]}))));
-        const int top = std::max(y0, static_cast<int>(std::floor(std::min({y[0], y[1], y[2]}))));
-        const int bottom = std::min(y0 + h - 1, static_cast<int>(std::ceil(std::max({y[0], y[1], y[2]}))));
-        for (int py = top; py <= bottom; ++py)
-            for (int px = left; px <= right; ++px) {
-                const float sx = static_cast<float>(px) + .5f, sy = static_cast<float>(py) + .5f;
-                const float b0 = ((x[1] - sx) * (y[2] - sy) - (x[2] - sx) * (y[1] - sy)) / area;
-                const float b1 = ((x[2] - sx) * (y[0] - sy) - (x[0] - sx) * (y[2] - sy)) / area;
-                const float b2 = 1 - b0 - b1;
-                // (A centre on an edge two triangles share belongs to one of them, as on the GPU.)
-                if (b0 < -1e-4f || b1 < -1e-4f || b2 < -1e-4f)
-                    continue;
-                const float a = std::clamp(
-                    vertices[i].alpha * b0 + vertices[i + 1].alpha * b1 + vertices[i + 2].alpha * b2, 0.f, 1.f);
-                const Vec3 c = vertices[i].color * b0 + vertices[i + 1].color * b1 + vertices[i + 2].color * b2;
-                float* o = image.at(px, py);
-                o[0] = c.x * a + o[0] * (1 - a);
-                o[1] = c.y * a + o[1] * (1 - a);
-                o[2] = c.z * a + o[2] * (1 - a);
-            }
-    }
 }
 void label(Image& image, const std::string& text, int x, int y) {
     constexpr float height = 15;
@@ -306,6 +189,57 @@ int main(int argc, char** argv) {
                      {"VENOM BURST 0.2 S", venomBurst(.2f)},
                      {"VENOM BURST 0.35 S", venomBurst(.35f)},
                      {"VENOM BURST 0.45 S", venomBurst(.45f)}});
+        // Spider-Sense (spider_sense.hpp): the warning over his head as it lands, as its ring closes on the
+        // blow, as each answer, with no time set, and as a counter breaks it. The cells are about the mark's
+        // own centre, which stands over his head.
+        const Vec3 headTop = p + Vec3{0, .55f, 0};
+        const auto sense = [&](SenseAnswer answer, float left, float age, float broken = -1,
+                               bool timed = true) {
+            std::vector<Vertex> v;
+            appendSense(v, {headTop, answer, left, timed, age, broken}, viewer, pixelAngle);
+            return v;
+        };
+        const float markSize = .055f * std::clamp(length(headTop) / .9f, 1.4f, 9.f);
+        const Vec3 markCentre = headTop + Vec3{0, .14f + .5f * markSize, 0};
+        const float markU = camera.cx + camera.f * markCentre.x / -markCentre.z;
+        const float markV = camera.cy - camera.f * markCentre.y / -markCentre.z;
+        const int senseSide = static_cast<int>((i ? 230 : 150) * scale);
+        ok &= sheet(name + "sense.bmp", scene.backdrop, camera, markU, markV, senseSide, 5,
+                    {{"COUNTER POSE 1", sense(SenseAnswer::Counter, 1, at(0))},
+                     {"COUNTER POSE 2", sense(SenseAnswer::Counter, 1, at(1))},
+                     {"COUNTER", sense(SenseAnswer::Counter, 1, 1)},
+                     {"COUNTER 50%", sense(SenseAnswer::Counter, .5f, 1.17f)},
+                     {"COUNTER NOW", sense(SenseAnswer::Counter, .125f, 1.34f)},
+                     {"DODGE", sense(SenseAnswer::Dodge, .75f, 1)},
+                     {"DODGE NOW", sense(SenseAnswer::Dodge, .125f, 1.17f)},
+                     {"JUMP", sense(SenseAnswer::Jump, .625f, 1)},
+                     {"NO TIME SET", sense(SenseAnswer::Counter, 1, 1, -1, false)},
+                     {"BOILING", sense(SenseAnswer::Counter, .75f, at(5))},
+                     {"COUNTERED 1", sense(SenseAnswer::Counter, .5f, 1, at(0))},
+                     {"COUNTERED 2", sense(SenseAnswer::Counter, .5f, 1, at(1))},
+                     {"COUNTERED 3", sense(SenseAnswer::Counter, .5f, 1, at(2))}});
+        // The whole eye image: a counter's mark over him, and in the sightline a dodge for an attacker to
+        // the right and a counter for one up to the left, both out of view.
+        {
+            Image senseEye = scene.backdrop;
+            std::vector<Vertex> v = sense(SenseAnswer::Counter, .5f, 1.17f);
+            const Pose eyes{viewer, {}};
+            SenseSightView right, upLeft;
+            right.answer = SenseAnswer::Dodge;
+            right.sight = {true, 1, 0};
+            right.timed = true;
+            right.left = .75f;
+            right.age = 1;
+            upLeft.answer = SenseAnswer::Counter;
+            upLeft.sight = {true, -.8f, .6f};
+            upLeft.timed = true;
+            upLeft.left = .375f;
+            upLeft.age = 1.17f;
+            appendSenseSight(v, right, eyes, pixelAngle);
+            appendSenseSight(v, upLeft, eyes, pixelAngle);
+            draw(senseEye, v, camera, 0, 0, 0, 0, senseEye.w, senseEye.h);
+            ok &= save(senseEye, name + "sense-eye.bmp");
+        }
         // The whole eye image with a call on him.
         Image whole = scene.backdrop;
         draw(whole, cue(CueWay::Left, false, .7f, 1), camera, 0, 0, 0, 0, whole.w, whole.h);

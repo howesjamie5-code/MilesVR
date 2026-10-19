@@ -3,7 +3,432 @@
 Every build, newest first, with what changed, why, and what was measured.
 Per-check results are in [VALIDATION.md](VALIDATION.md).
 
-**Latest build (October 15, late night): one line round an edge, and the
+**Latest build (October 19, fourth): arcade webs, and the SPIDY VR tab in
+sections.** You: "the current web swinging is hard - webs get tangled over
+lightpoles and other small geometry, also they pull you down too much to the
+street. lets make an optional second set for arcady webs where they don't
+collide with those things, all sort the options in spidy vr settings ingame
+into nice sections".
+
+- **What your sessions showed.** Today's three sessions bent 12, 21 and 18
+  webs round edges and took them off again 0, 3 and 1 times: a bend stayed
+  until the web was let go. Several bends sat 3-7 m over the street with
+  the body 1-3 m up, a 100 m web cut down to a 7 m rope round a post (session
+  13:08 at 547, 2.4, -1548).
+- **WEB STYLE, the first row under WEBS: REALISTIC (as before, the default)
+  or ARCADE.** Arcade webs go through thin things - lamp posts, signs,
+  railings, a roof's parapet - and through anything that is not fixed (cars,
+  props), as they are shot and as they swing: no sticking to them, no bending
+  round them, no cutting off. The shot goes on to the building behind; with
+  nothing behind it, the web holds in open air (or misses, with that off).
+  Buildings still hold webs and bend them round their corners. And a swing
+  comes down to the street no nearer than 6 m (the body's centre; feet
+  about 5 m up, over buses) instead of 1.4 m: the fall is turned along the
+  street from higher up, its speed kept, as the near misses were. Let go to
+  come down.
+- **Thin, by the game's own rays.** Where a web meets a face, a ray from
+  1.5 m behind that face back out to it either starts in the open and meets
+  the thing's far face (a post, a sign: thin), or starts inside a building
+  and meets that face from within or nothing (the game's rays meet faces
+  from either side). One rule for every object, no list of props. A post
+  less than 1.5 m in front of a wall counts as the wall's (that ray starts
+  inside the wall), as before.
+- **The tab's sections:** WEBS (web style, web button, aim markers, webs in
+  open air), SWINGING (swing speed limit, weight), COMFORT (snap turn, smooth
+  turn, vibration), DISPLAY (game screen size, its 3D, the HUD), BODY
+  (calibrate body), EXPERIMENTAL (flips, flip speed). The launcher has "Web
+  style" above "Web button".
+- **Protocol:** the swing's settings version 7 (`arcade`; the probes' 3-6
+  still taken); XrConfig option bit 21 (`--arcade-webs`); XrData settings bit
+  512 and the report's `vr_settings.arcade_webs`; rope data version 3, whose
+  spare word is now `passed` (the report's `ropes.passed`: shots past a thin
+  or loose thing, and swings' lines coming onto one); menu probe flag 2048.
+  launcher.ini `arcade_webs`. The DLLs, run_game_vr.py and the launcher go
+  together.
+- **Checked:** 361 core tests (new: a lamp post a realistic web bends round
+  and an arcade web goes through; a shot through a post or a car on to the
+  building; a building's corner still bending an arcade web, with rays that
+  meet faces from either side; arcade swings held 6 m off the street), the
+  launcher's tests, all six protocol suites, the graphics test.
+  `tools/probe_menu.py` follows the new rows (24 changes); it was not run in
+  the game, and nothing of this has been in the game or a headset yet.
+
+**Earlier build (October 19, third): full buildings half as far again.** You,
+after the second build in the headset: "can we increase the distance a
+bit?"
+
+- **The distance.** A far building draws its full model within 145 m of the
+  view that asks (the impostor queries' result `+88`, from `7a89170`, which
+  region changes rewrite; the game's lens of 65 degrees gets exactly that, a
+  narrower one more). The eyes now ask with 150% of it, 218 m
+  (`impostorQueries`, a hook on `16faf10` that raises the result for both
+  eyes while the left eye stands in; the game's own setting is left alone).
+  `--building-reach` (50-400%, default 150) sets it for a session, through
+  the module's new `SpidyImpostorReach`; the report's `eyes` has
+  `building_reach`.
+- **Measured, in the game without a headset** (your save, the eyes 40 m up,
+  `tools/probe_streaming.py --modes rest@100,rest@150,...`): fine detail 2.74
+  at 100%, 2.89 at 150%, 2.75 at 100% again; a tower beside the view went
+  from its card's painted windows to its model's. 200% and 300% added
+  nothing more from that spot. Frames a second with 3072 x 3264 eyes
+  (`tools/probe_vr_load.py`, phases `vr_r100` to `vr_r200` in one game):
+  64.4 at 100% (two runs, 65.7 and 63.0), 64.7 at 150%, 63.7 at 200%;
+  turning 73.2, 73.1, 73.6. Render commands 2 to 5% more, video memory 20 MB.
+- **Checked:** 357 core tests, all six protocol suites, the graphics test.
+  The module checks the queries' entry, their 145 m first write and their
+  last write of the distance; where any of it differs, no eye stands in.
+
+**Earlier build (October 19, second): far buildings light up again.** You,
+after the first build in the headset: "nope, I feel like its the culling or
+lod of some shader (windows, fake cube scenes etc). I did notice that
+entering menu refreshes it", with two pictures of the same view: the
+buildings in the middle distance dark slabs in one, full of lit windows in
+the other; then "we had a similiar looking problem in the past where vr
+camera would be offset from the culling controlling camera".
+
+- **The cause.** Far buildings are impostors: cards that stand in for the
+  model. Which of them draw their full model, with the lit windows and the
+  rooms behind them, the game decides for one view only, its active view
+  (`189daa0`: the view at ViewContextManager `+f8`, the game's own camera):
+  `ImpostorHQModelRegJob` (`16fb630`, `16fb750`) applies that view's wanted
+  state for each impostor, from its visibility queries (`16faf10`), and the
+  impostor submit job (`16f8afa`) marks it too. Since 0.2.12 that view does
+  not render while you play in VR (`restGameView`), so it submitted nothing
+  and no far building drew in full. A menu renders it again, which lit them
+  until it went back to rest. The eyes run the same impostor code but are
+  never the active view. This is the culling camera you remembered: the
+  game's view sits on your head since October 5, and still did the culling,
+  but stopped doing this part of it.
+- **What changed.** While the game's view rests, the left eye stands in for
+  it at exactly those five checks (`isActiveView`, a hook on `189daa0` that
+  answers yes for the left eye only when called from those five places).
+  One view only: the registration applies a view's wanted states over the
+  last ones, and two views would undo each other's every frame. When the
+  game's view renders (menus, cutscenes, the flat screen, Ray-Traced
+  Reflections on) it decides again, as before.
+- **Shown, in the game without a headset** (your save, the eyes 40 m up,
+  `tools/probe_streaming.py`, each in a fresh game): the game's view resting
+  gave the eyes dark buildings (fine detail 1.81), rendering gave lit ones
+  (2.21), and resting again went dark within seconds. Rendering it without
+  its impostor work (flag 0x100 masked out of the game's views, `609d708`)
+  stayed dark (1.81): the impostor work is the whole difference. Taking away
+  its stale occlusion, or giving the eyes that flag (they have it: 0x37ff),
+  changed nothing. With this build, resting: 2.19, every frame stood in for
+  (`impostor_frames`); the picture matches yours after a menu.
+- **Not covered: the right eye's outer edge.** The left eye's view decides,
+  so buildings only the right eye sees (its outer 10 degrees) can stay dark
+  until you look toward them. Covering both needs the left eye's impostor
+  queries built from the lens over both eyes (`189fea0`, `189b820`), not
+  done.
+- **Seen elsewhere, not changed:** the same active-view-only rule hides two
+  more things in VR. Pedestrians ask "drawn in any view" (`18a1890`), which
+  reads only the game's views (possibly kinxy0.0's "people just randomly
+  spawn"), and animated models get their joints updated only from the
+  game's view (model job `+342`, `1781df0`). About 15 other callers of
+  `189daa0` (shadows, post-processing, decals) were not looked at.
+- **Protocol:** `SpidyAppearanceData` stays version 6; its last field is
+  `impostor_frames` now (unused before). Deploy the whole package.
+- **Checked:** 357 core tests, all six protocol suites (`impostor_frames`
+  decoded), the graphics test. The module checks `189daa0` and the five calls
+  to it before hooking; where they differ, no eye stands in.
+
+**Earlier build (October 19): the city at the flat game's distances.** You,
+about a #spidy-bugs topic: "review and try to fix this (some other topics
+mention it imo)". The topic, "Building textures load late while swinging
+(pop-in)": Keith (Valve Index, RTX 4090, Spidy 0.3.6, Render resolution
+200%, Upscaling 75%, Texture Quality Very High) sees the buildings' textures
+come in only once he is close, and "Flat game does not have the issue. I can
+see far out into the city". HaNToP (RTX 4090, Very High) sees the same and
+says 0.2.11 looked sharper and loaded at once. In "Recording problem",
+kinxy0.0 (0.3.6, Quest Link): "my view distance is bad", "textures people
+just randomly spawn". In Keith's clip a row of buildings across the street
+gets its windows in one frame, a fifth of a second apart, as he swings at it.
+
+- **The cause.** The game judges every distance a model is drawn by against
+  a number it takes from the view's lens (`189e4b0`: 0.6745 over the tangent
+  of half its width, 1 for a 68-degree 16:9 lens): which detail level a model
+  draws, how far away it is drawn at all (people, props) and up to where its
+  textures are asked for (16 times its size times the number), and many other
+  systems read it too. The game's own camera, 65 degrees wide, has 1.06; a
+  headset eye, 98 degrees (Quest 3 through Virtual Desktop), had 0.59. So in
+  VR all of that happened at about half the distance it happens on the
+  monitor. The game's Level of Detail setting multiplies in on top, in both.
+- **And since 0.2.12** the eyes render their scene smaller and upscale it
+  (Upscaling, 67% by default): the game sizes a view's texture requests by
+  the pixels it renders, so the eyes asked for two thirds of the detail the
+  headset shows, half at Performance. 0.2.11 had no upscaling.
+- **Not the cause:** the game's own view not being rendered in VR (since
+  0.2.12). Rendering it again changed nothing the texture streamer was asked
+  for: its lens covers both eyes, so it asks for less than they do.
+- **What changed.** Each eye now gets the game's 68-degree lens's distances:
+  1.71 times its own for that Quest 3 eye, never less than its own, at most
+  three times (`matchDistances`, view `+1cc8`, which only cutscenes set).
+  Each eye's texture requests are sized for its image, not for the smaller
+  scene it renders (`setupModels` on the model job setup `1796d20`: 1.49
+  times at 67%), as upscalers are meant to have it. The game's Level of
+  Detail and Texture Quality settings apply as before. The report's
+  `appearance` has `eye_detail` and `texture_request_raise`;
+  `-EyeLensDistances` (`--eye-lens-distances`) is the old way.
+- **Protocol:** `SpidyAppearanceData` version 6 (360 bytes), read by
+  `run_game_vr.py`. Deploy the whole package.
+- **Measured, in the game without a headset** (this PC's RTX 4080 Laptop GPU,
+  your save, the eyes 120 m over the city flying 300 m back and forth at 25
+  m/s for three minutes, `tools/probe_streaming.py`, a fresh game each):
+  - the module gave each eye 1.7055 in every frame and raised 412,468 model
+    jobs' texture requests 1.49 times; held still at that spot, the streamer
+    was asked for 28% more textures and 33% more materials;
+  - Texture Quality High: the game's texture memory rose from 2,252 to 2,317
+    MB of its 3,000 (your own sessions on this PC: 2,028 to 2,755 MB);
+  - Texture Quality Very High, which Keith and HaNToP play at: the budget
+    (3,874 MB) held 3,803 to 3,813 MB without, and was full with (3,869 to
+    3,871). A lens like the game's own camera (65 by 39 degrees, 1920 x 1080,
+    no upscaling) on the same flight filled it too (3,870 to 3,872): at Very
+    High the flat game runs its budget full over the city as well, and what
+    stays loaded is what is asked for most. Without the change the eyes never
+    asked for anything beyond about half the flat game's distance, so that
+    went first, and came back as you got close;
+  - frames a second: 2% fewer at street level (64.2 to 62.9 looking ahead,
+    69.0 to 67.8 turning, `tools/probe_vr_load.py` in one game, the eyes'
+    multiplier set from outside between phases). The flights gave 4% (High,
+    68.7 to 66.0 a minute on average) and 5% (Very High, 67.7 to 64.3), but
+    each pair ran one after the other on a laptop that slows as it warms
+    (every run lost 5 to 10% from its first minute to its third), so that is
+    the most it costs, not what it costs.
+- **Left as it is: the budget.** A headset sees more of the city at once than
+  the monitor, so a full budget is spread over more textures than in the flat
+  game. The budget is the game's own (`TextureAllocUltra` and the rest, the
+  global at `7a793c0`), an account the streamer evicts by (`19b50b0`, free =
+  budget - the texture heap's use, `19b2d90`), not memory set aside: raising
+  it in VR on cards with video memory to spare looks possible, and is not
+  done here.
+- **Not shown: the picture.** Captured at the same moments of two flights,
+  with and without, the eye images hold the same detail (0.999), at night and
+  at half resolution, and an eye held still shows every building's windows
+  either way. Whether windows and people now come in as far out as on the
+  monitor needs a headset; Keith's clip is the one to compare with.
+- **Checked:** 357 core tests (new: the lens's number for the game's camera,
+  a Quest 3 eye, a lens wider than 16:9 and one with flag 2; the multiplier's
+  1.71, its floor of 1 and its cap of 3; the request size of 67% and 100%),
+  all six protocol suites (`appearance` version 6 decoded, the old size
+  refused), the graphics test. The module checks the code it relies on
+  (`1796d20`, its reads of `+1cc8`, `+1cc4`, `+448` to `+424` and its stores
+  to `+2fc` and `+300`, `189e4b0`'s and its two constants and 16:9) and keeps
+  the eye lenses' own distances where any of it differs.
+
+**Earlier build (October 18, evening): Spider-Sense, and Arkham Shadow's
+counter.** You: "design a vr version of the alert/spidey senses for combat
+(make it arkham shadow style)". The October 11 combat left out exactly this:
+"the counter (Spidy cannot tell yet when an attack is coming)". Now it can.
+
+- **When the game warns, you are warned.** Every enemy attack you can dodge
+  registers itself with the hero's dodge manager (`Hero::HeroDodgeManager`):
+  the attacker, when you are to be warned, when the blow lands and the
+  attack's own flags. At that moment the game plays its Spider-Sense sound
+  and lights the lines on Spider-Man's mask, which in VR you are inside of
+  and never see. Spidy reads that list at every input sample
+  (`src/game_sense.cpp`), so every enemy the game warns of is warned of
+  here, at the game's moment, by its data: no list of enemies.
+- **What you see.** Over the attacker's head, the comic's Spider-Sense lines,
+  printed like the KO! and the called blows: blue (cyan) asks for a counter,
+  red for the dodge (B), yellow, under a paper chevron, for the jump (A). A
+  white ring closes on them a notch at a time as the blow comes; its last
+  notch is a yellow burst: now. An attacker more than 31 degrees off your
+  look gets Arkham Shadow's icon in your sightline: his mark, small, 21
+  degrees from the middle of your view on his side, an arrowhead pointing
+  to him, and his lines at the rim of your sight on that side. The
+  controller on his side tingles as the warning goes off (both for one
+  ahead or behind), a dodge's harder.
+- **The counter.** Throw a fist at a blue-marked attacker while his lines
+  show (2.2 m/s or faster, within 40 degrees of him, out from your guard):
+  his attack breaks at once (the game's own flinch), and he is your target,
+  whoever the ring was on, as Arkham Shadow's "Batman instantly abandons his
+  current target in favor of countering". Within reach the fist lands; out
+  of it the web strike flies you to him (10 m at most). The blow that lands
+  is a heavy one (he flies off along it at 11 m/s, a quarter harder), it
+  counts in your combo, his mark breaks (a paper flash, its lines thrown
+  wide), time slows for a moment and both hands feel it. A punch that lands
+  on him while his lines show is a counter by itself. One thrown in the
+  warning's last fifth of a second is counted as perfect; nothing more comes
+  of that yet.
+- **Red and yellow come from the game's flags.** An attack whose
+  kIsCounterable is clear ("Hero dodging can interrupt the attack") asks for
+  your dodge; one with kUsesJumpButton for your jump; a blue one from beyond
+  a strike's reach for your dodge too.
+- **What the session report shows.** `sense`: the warnings that went off and
+  what they asked for, the counters (thrown, landed, perfect, their blows,
+  the breaks sent), the warnings standing at the end, and a census of what
+  the game's warnings were made of (each set of flags, how often, the
+  longest warning it gave). `sense_samples`: a row per warning and counter.
+  In each sample's `sense_headset`: marks shown and drawn, sightline frames,
+  tingles, marks broken, and B pressed during a warning.
+- **Protocol:** XrData version 39 (1176 bytes, six Spider-Sense counts at the
+  end) and the ray module's new `SpidySenseData` (632 bytes), both read by
+  `run_game_vr.py`. Deploy the whole package.
+- **Checked:** 350 core tests (new: what each set of flags asks for; a fist
+  thrown at a warned attacker counters once after 30 ms and his next blow is
+  the counter's; a slow fist, one thrown away, one at a dodge's attacker and
+  a hand at the chest counter nothing; a blow landing in the warning counters
+  by itself; the sightline's 31 and 26 degrees and the side kept behind you;
+  the printed marks' plates, ring, burst, pops and breaks, and their size at
+  1.5 to 9 m), all six protocol suites (new: `sense` decoded, a torn read
+  refused, another build's struct reported without ending the session), the
+  modules' exports loaded outside the game, and every mark over two of your
+  eye captures (`tools\preview-marks.ps1`: `far-sense.png`, `near-sense.png`
+  and the whole eye with sightline marks in `far-sense-eye.png`). The first
+  sheets put the ring across the thug's face and the sightline mark on his
+  belt; both moved. **In the game without a headset** (your OK, profile 1's
+  Continue, `tools/probe_sense.py`): the hero's dodge manager is found and
+  read at 409 of 409 input samples with no fault, and the game's clock runs
+  with real time (1.06). No enemy was anywhere near, so **no warning has been
+  seen yet, and nothing was tried in a headset.** Which of the game's attacks
+  are counterable, how long its warnings are, and that the flinch breaks an
+  attack before it lands are in your next session's `sense`, or in
+  `tools/probe_sense.py --provoke --counter` next to an enemy.
+
+**Earlier build (October 18, afternoon): the zip out of the game's aim, and a
+printed gadget wheel.** You, after the 14:08 session: "lets make it so that
+when holding up (zip) and it enters the slowmo aiming mode, on release we will
+zip also lets make the gadget selection screen look like other better designed
+ingame ui".
+
+- **Let go of the stick to zip from the game's aim.** The right stick held up
+  is the game's LT + RT: where the game has a point, it zips at once, as
+  before. Where it has none, LT held on is its aim mode (its L2), which
+  slows the game's time after a moment and snaps its aim to the points it
+  can zip to. In your session that is what happened eight times: time went
+  down to 20% 0.6 s into the hold, for up to 3 s, and letting go zipped
+  nowhere. Now, once the game slows its time during a hold, LT stays down
+  alone (the aim stays) and letting go of the stick presses RT again beside
+  it for 0.2 s: the game's LT + RT in its aim, the zip to the point the aim
+  holds. The right controller ticks as it goes; while you swing, the swing
+  lets the game have you once its zip begins, as this morning. A hold let go
+  before the time slows is the zip it was (`game_pad::ZipPress`).
+- **The gadget wheel is printed, as the KO!, the bursts and the called
+  blows' arrows are.** Each gadget is a paper badge keyed in ink with a
+  picture of what it does (a web, the Impact Web's burst, a bomb, a bolt, a
+  mine and its line, a blast, a spider, an orb in its orbits), on a ring
+  with a bead where a place is empty. The one you have is yellow, one out
+  of charges grey, and the dots beside each are its charges, yellow while
+  left. The one you point at turns red and larger and its name is lettered
+  in a yellow caption across the middle; the names round the ring are gone,
+  as on the game's own wheel. The wheel lands in three poses as it opens,
+  and the lit badge snaps on, out of register for a pose, then boils as a
+  held drawing does.
+- **Protocol:** XrData version 38, same size (`zip_releases`, the zips sent
+  as a hold was let go, in a spare word). Deploy the whole package.
+- **Checked:** 345 core tests (new: `ZipPress` - a zip in normal time as it
+  was, the aim keeping LT down alone, one zip as it is let go and RT up
+  before it, a moment out of play, a hold dropped by a menu; the printed
+  wheel - a picture for each gadget, the caption only for the lit one, the
+  snap and the landing, the grey and the yellow badges, under 60,000
+  vertices), the launcher's, all six protocol suites, the GPU test (the
+  wheel at about a headset's pixel density: 37,605 vertices) and the wheel's
+  poses over one of your eye captures (`tools\preview-marks.ps1`, its new
+  `near-wheel.png`). **Not run in the game, not tried in a headset.** That RT
+  pressed in the game's aim zips to the point it holds is the game's LT + RT
+  as its controls have it; nothing here measured it.
+
+**Earlier build (October 18): eight reports from Discord.** You: "lets fix
+these issues - more info on discord".
+
+- **The eyes stay out of buildings.** Nothing kept them out: they go where
+  the headset is, over the feet as the game has them, and on Spidy's own
+  wall the body runs 0.9 m off the facade, so a lean toward it, or a cornice
+  at head height, put them inside the building ("I do a wall run on some
+  buildings and i get a full pov of the inside of the building"); on the
+  ground a step toward a wall did too. Now the five rays from the head
+  (from inside the body to past the eyes, and from the eyes ahead, to each
+  side and up), and the wall that holds you, hold the eyes 20 cm off any
+  surface the world is built of, at once, sliding along it; the hands and
+  the body go with them. Once the head is clear the push lets go over a
+  sixth of a second (`HeadClearance`). Those five rays only read the room
+  for the report before ("indoors", which decided nothing since October
+  15). Cars and other things that move are not walls to it.
+- **After a break the head is over the body again.** A break longer than
+  half a second (a menu, a load, the headset losing its picture as you walk
+  out of your play area) puts the head back over the feet, as at the start:
+  the walk you made meanwhile was left as a lean away from the body ("i
+  left my playspace and came back in ... then desyncs"). A recenter still
+  keeps the head where it was.
+- **Zip to a point and web strike while you swing (car chases).** Until now
+  the right stick up (the game's LT + RT) and Y were held back while a web
+  carried you: handing you to the game in mid-flight dropped players at the
+  game's own fall speed. Now both go to the game while you swing (the zip
+  from Spidy's own wall too), and the
+  swing lets the game have you once the game has begun its move, and not
+  before: through Spidy's flight the game's air handler runs about twice a
+  step (never once missing from a driven step in your October 15 sessions),
+  and none of the game's moves is one of its air states, so the handler
+  going quiet within 0.4 s of your press is the game's zip or web strike
+  under way (`game_swing::AirYield`). Your webs let go then; the swing
+  takes you again once you land, the game has you back in the air, or 3 s
+  pass. A press the game does not take changes nothing.
+- **Pause under SteamVR with a Quest.** There the left menu button is
+  SteamVR's own: its Touch profile has no menu button, and SteamVR opens its
+  dashboard with it. Now holding both thumbsticks in for 0.7 s is the game's
+  Start everywhere (both hands buzz); the menu button stays it too. A click
+  of both sticks is still the pad layer, now as you let go. The session log
+  says how to pause under SteamVR. The heal reads the stick even while the
+  controller's pose is lost for a moment, and a push under way keeps
+  through a quarter second out of play.
+- **The hand.** Webs leave the suit's nozzle: the hero rig's own webStart
+  joint, 2.5 cm further back toward the elbow than before, which was on the
+  heel of the palm, where the web shooter's button is ("it comes out of the
+  button"). Web balls and gadgets leave 2 cm past it (8 cm, inside the
+  curled fingers, before); punches land where they did. The two middle
+  fingers of the web-shooting hand reach the palm (they stopped 2 cm short:
+  "the fingers ain't touching the button"), and a closing hand gathers its
+  fingers instead of keeping the rest pose's spread, which fanned the fist's
+  tips 4 cm apart ("when your hand closes your hand looks off"). The aim is
+  unchanged: along the hand, as you set it on October 15. One player aiming
+  along his wrist with the thumb up saw webs go low: Meta's aim ray is 30
+  degrees off the hand toward the thumb, low with the thumb up, inward with
+  the palm down.
+- **IMPACT WEB fires the Impact Web.** The wheel's IMPACT WEB was the game's
+  charged Web Shooter gadget: the class named WeaponImpactWeb is what the
+  game's HUD calls "Web Shooter" (your October 15 probe's screenshot), and
+  the Impact Web is WeaponWebBlast (the game's text: "the Web Blast gadget
+  (aka Impact Web)"), which the wheel never listed. Now IMPACT WEB is the
+  Impact Web, and the charged web ball is not on the wheel (its top gives
+  web balls already).
+- **Pulls take only enemies who are free to fight.** A web dragged thugs out
+  of a car in a chase (the game's takedown never finished, the crime never
+  ended and the car drove on by itself), and pulled hurt police officers
+  sitting in a burning car around the street. A bot in one of the game's
+  states in which something else moves him (attached to an actor - a car's
+  seat -, carried, a cinematic's, another's synced animation as its guest,
+  a slotted interaction, frozen, waiting for the game's own takedown yank)
+  is not taken by webs, web balls, web strikes, thrown bodies or fists.
+- **"Different bridge build is resident."** That was a game still holding
+  another Spidy build (left running across an update, or VR started from
+  another Spidy folder). The session now says so plainly before anything
+  starts, the launcher offers to close the game (as its close button does:
+  it saves as it quits) and start VR again, and the other folder's saved
+  game settings go back first. The render memory warning says it is the
+  graphics card's memory, not the PC's.
+- **The display driver error as VR starts (RTX 4070 SUPER, 0x887A002B).**
+  The cause is not known. The game lost its graphics device within the
+  first 19 eye pictures, every session, on Virtual Desktop and SteamVR
+  alike; its game log lists the one card twice. VR sessions now turn
+  NVIDIA Reflex off (back after the game closes): the headset paces the
+  game, and Spidy holds back the window's presents beyond the monitor's
+  rate since October 11, which Reflex was never run with. When the game's
+  log says the device was lost, the session log names the code and what to
+  try (the launcher's "Normal camera on the monitor", which keeps the game's
+  own view and its window as they were; the game on the main display; the
+  newest driver), and the report lists the adapters the game saw.
+- **Protocol:** XrData version 37, same size (the head clearance in the
+  slots of the room around the player); the swing command's spare field is
+  `asks`. Deploy the whole package.
+- **Checked:** 343 core tests (new: the clearance alone, the rays, leaning
+  into Spidy's wall, the head after a break; the game's own move taking the
+  hero; the pause hold, the pad layer on release, the game screen's L3 + R3,
+  the heal through a moment out of play; the fist's and the shooting hand's
+  fingers side by side, which fail without the gather; held bots), the
+  launcher's, the GPU test, all six protocol suites. **Not run in the game,
+  not tried in a headset.**
+
+**Earlier build (October 15, late night): one line round an edge, and the
 crash.** You: "game crashed. also when web goes around edges a second line is
 drawn from the original edge and the hand".
 

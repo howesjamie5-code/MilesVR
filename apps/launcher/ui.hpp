@@ -85,7 +85,8 @@ private:
     std::array<uint32_t, 2> eyeSize();
     const Runtime* runtime();
     void chooseDefaultRuntime();
-    void start();
+    // closeGame: the session first closes a running game that already holds Spidy (kCloseGameExit).
+    void start(bool closeGame = false);
     void restartElevated();
     void rescan();
     void save() { saveSettings(settings_); }
@@ -109,6 +110,8 @@ private:
     // again as administrator, and why that did not work.
     bool sessionRan_{}, wantAdministrator_{};
     std::string administratorError_;
+    // A session ended because the running game already holds Spidy: the offer to close it and start again.
+    bool wantCloseGame_{};
     Outcome lastInstall_ = Outcome::idle;
     std::string shortcutMessage_;
     // Updates: the player's copy of Spidy (empty in a checkout), and the banner's state.

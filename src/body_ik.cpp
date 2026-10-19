@@ -660,19 +660,55 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
                 pose.turn(rig.below[static_cast<size_t>(chain[k])], axisAngle(hinge, (angle - now) * share),
                           pose.position(chain[k]));
         };
+        // A closing finger gathers in: its first bone turns `share` of the
+        // way into the plane its knuckle bends in, about the knuckle. The rest
+        // pose spreads the fingers (the index 9 degrees one way, the ring and
+        // the little finger 12 and 16 the other), and a bend about each one's
+        // own hinge kept that spread: closed, their tips stood 4 cm apart where
+        // the knuckles are 2.3, a fanned claw ("when your hand closes your
+        // hand looks off", October 16). Gathered, the tips are as far apart
+        // as the knuckles.
+        const auto gather = [&](const std::vector<int16_t>& chain, Vec3 local, float share) {
+            if (share <= 0 || chain.size() < 3)
+                return;
+            const Vec3 hinge = normalized(pose.direction(chain[0], local));
+            const Vec3 bone = normalized(pose.position(chain[2]) - pose.position(chain[1]));
+            const Vec3 flat = bone - hinge * dot(bone, hinge);
+            if (length(hinge) < .5f || length(bone) < .5f || length(flat) < .17f)
+                return;
+            pose.turn(rig.below[static_cast<size_t>(chain[1])],
+                      partial(between(bone, normalized(flat)), share), pose.position(chain[1]));
+        };
         const auto& hinges = rig.fingerHinges[i];
         const size_t fingers = std::min(arm.fingers.size(), hinges.size());
+        // A finger's joints all bend about its knuckle's hinge, the one axis
+        // the rest pose gives all three (Rig::fingerHinges, across its bone in
+        // the palm and the palm's normal), so it curls in one plane: the
+        // knuckle's, once gathered too. About the hinges the joints past the
+        // knuckle carry, a gathered finger curled back out of it.
+        const auto bendFinger = [&](size_t f, size_t k, float angle, float share) {
+            const auto& chain = arm.fingers[f];
+            const Vec3 hinge = normalized(pose.direction(chain[0], hinges[f][0]));
+            const float now = length(hinge) > .5f
+                                  ? bendAbout(pose, chain[k - 1], chain[k], chain[k + 1], hinge)
+                                  : std::numeric_limits<float>::quiet_NaN();
+            if (std::isfinite(now))
+                pose.turn(rig.below[static_cast<size_t>(chain[k])], axisAngle(hinge, (angle - now) * share),
+                          pose.position(chain[k]));
+        };
         // Open, holding nothing; a fist or the shooting pose closes over it.
         for (size_t f = 0; f < fingers; ++f)
             for (size_t k = 1; k <= 3 && k + 1 < arm.fingers[f].size(); ++k)
-                bendTo(arm.fingers[f], k, hinges[f][k - 1], c.openBend[k - 1], own);
+                bendFinger(f, k, c.openBend[k - 1], own);
         if (arm.thumbChain.size() >= 4)
             for (size_t k = 1; k <= 2; ++k)
                 bendTo(arm.thumbChain, k, rig.thumbHinges[i][k - 1], c.openThumb, own);
         if (fist > 0)
-            for (size_t f = 0; f < fingers; ++f)
+            for (size_t f = 0; f < fingers; ++f) {
+                gather(arm.fingers[f], hinges[f][0], fist);
                 for (size_t k = 1; k <= 3 && k + 1 < arm.fingers[f].size(); ++k)
-                    bendTo(arm.fingers[f], k, hinges[f][k - 1], c.fistBend[k - 1], fist);
+                    bendFinger(f, k, c.fistBend[k - 1], fist);
+            }
         // The thumb lies across the curled fingers, its tip on the middle
         // bones of the first two, out of the fist: its last joint bends to a
         // set bend, the one before it as far as puts the tip as far from the
@@ -717,8 +753,10 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
         // side. All of the way at 1, however the hand was closed.
         for (size_t f = 0; f < fingers; ++f) {
             const bool out = fingers >= 3 && (f == 0 || f + 1 == fingers);
+            if (!out)
+                gather(arm.fingers[f], hinges[f][0], shoot);
             for (size_t k = 1; k <= 3 && k + 1 < arm.fingers[f].size(); ++k)
-                bendTo(arm.fingers[f], k, hinges[f][k - 1], (out ? c.shootOut : c.shootPress)[k - 1], shoot);
+                bendFinger(f, k, (out ? c.shootOut : c.shootPress)[k - 1], shoot);
         }
         if (thumb.size() >= 3 && length(rig.handThumb[i]) > .5f) {
             for (size_t k = 1; k <= 2 && k + 1 < thumb.size(); ++k)

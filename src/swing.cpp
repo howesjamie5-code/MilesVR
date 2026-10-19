@@ -44,7 +44,7 @@ Vec3 projectTwoWebs(Vec3 p, const Rope& a, const Rope& b) {
 Swing::Swing(SwingConfig c) : config_(c) {
     const float positive[] = {c.radius,    c.maxRange,     c.minRope,    c.maxSpeed,      c.yankSpeed,
                               c.yankDistance, c.yankWindow, c.fixedStep,  c.wallClearance, c.wallSlope,
-                              c.bendOut,   c.bendClearance, c.bendRope,  c.maxHandSpeed};
+                              c.bendOut,   c.bendClearance, c.bendRope,  c.maxHandSpeed,  c.thinDepth};
     for (float v : positive)
         if (!std::isfinite(v) || v <= 0)
             throw std::invalid_argument("Invalid swing configuration");
@@ -54,7 +54,7 @@ Swing::Swing(SwingConfig c) : config_(c) {
         c.anchorClearance,  c.wallStep,        c.wallCarry,       c.wallWalkSpeed,   c.wallAcceleration,   c.wallBrake,
         c.wallJumpOut,      c.wallJumpUp,      c.wallJumpPause,   c.wallGrace,          c.crestSeconds,
         c.crestPush,        c.crestHop,        c.strandReach,     c.handSlack,          c.groundClearance,
-        c.groundTurn};
+        c.groundTurn,       c.arcadeClearance};
     for (float v : nonnegative)
         if (!std::isfinite(v) || v < 0)
             throw std::invalid_argument("Invalid swing configuration");
@@ -71,11 +71,50 @@ Swing::Swing(SwingConfig c) : config_(c) {
         throw std::invalid_argument("Invalid wall mount");
     if (!std::isfinite(c.handHeight) || c.bendRope > c.minRope || c.strandReach > 1)
         throw std::invalid_argument("Invalid physical web");
-    if (c.groundClearance > 0 && !(c.groundTurn > 0))
+    if ((c.groundClearance > 0 || c.arcadeClearance > 0) && !(c.groundTurn > 0))
         throw std::invalid_argument("Invalid ground clearance");
 }
 void Swing::allowPhysical(bool allowed) {
     config_.physical = allowed;
+}
+void Swing::allowArcade(bool allowed) {
+    config_.arcade = allowed;
+}
+bool Swing::thin(const RayHit& hit, const WorldQueries& world) const {
+    const Vec3 face = finite(hit.normal) ? normalized(hit.normal) : Vec3{};
+    if (length(face) < .5f || !finite(hit.point))
+        return false;
+    // From thinDepth behind the face, back out to it: past a thin thing the
+    // ray starts in the open and meets its far face, turned away from this
+    // one. Inside a building it meets this face from within (the game's rays
+    // meet faces from either side), turned the same way, or nothing.
+    const auto back = world.raycast(hit.point - face * config_.thinDepth, face, config_.thinDepth - .02f);
+    return back && finite(back->normal) && dot(normalized(back->normal), face) < -.5f;
+}
+std::optional<RayHit> Swing::solid(Vec3 from, Vec3 way, float reach, const WorldQueries& world,
+                                   int* passed) const {
+    auto hit = world.raycast(from, way, reach);
+    if (!config_.arcade)
+        return hit;
+    // A few thin things at most; past them, what comes next holds as anything does.
+    Vec3 at = from;
+    float left = reach;
+    for (int through = 0; hit && finite(hit->point) && through < 6; ++through) {
+        // Inside a thin thing the ray goes out through its far face, which
+        // the game's rays meet too: turned along the ray.
+        const bool leaving = through > 0 && finite(hit->normal) && dot(hit->normal, way) > 0;
+        if (!leaving && hit->fixed && !thin(*hit, world))
+            return hit;
+        if (!leaving && passed)
+            ++*passed;
+        const float past = dot(hit->point - at, way) + .02f;
+        at += way * past;
+        left -= past;
+        if (left < .02f)
+            return {};
+        hit = world.raycast(at, way, left);
+    }
+    return hit;
 }
 Vec3 Swing::hold(int i) const {
     return config_.physical ? webs_[i].anchor - hands_[i].offset : webs_[i].anchor;
@@ -117,7 +156,7 @@ bool Swing::wrap(int i, Vec3 before, const RayHit& first, const WorldQueries& wo
         const float dist = length(d);
         if (dist < .2f)
             return {};
-        const auto hit = world.raycast(from, d / dist, std::max(0.f, dist - .1f));
+        const auto hit = solid(from, d / dist, std::max(0.f, dist - .1f), world);
         if (hit && finite(hit->point) && blocks(*hit, from, pivot, bend))
             return hit;
         return {};
@@ -181,7 +220,7 @@ void Swing::unwrap(int i, const WorldQueries& world) {
     if (dot(last.from + line * along - w.anchor, last.out) < config_.bendOut * .5f)
         return;
     // And of everything else.
-    const auto hit = world.raycast(body_.position, line * (-1 / span), std::max(0.f, span - .1f));
+    const auto hit = solid(body_.position, line * (-1 / span), std::max(0.f, span - .1f), world);
     if (hit && blocks(*hit, body_.position, last.from, w.bent > 1))
         return;
     w.anchor = last.from;
@@ -603,6 +642,7 @@ void Swing::release(int i, EventKind reason) {
     hands_[i].reeling = false;
     hands_[i].pullDistance = hands_[i].pullTime = hands_[i].obstructed = hands_[i].winch = 0;
     hands_[i].slack = 0;
+    hands_[i].passing = false;
 }
 bool Swing::blocks(const RayHit& hit, Vec3 from, Vec3 anchor, bool bend) const {
     const float clearance =
@@ -650,7 +690,8 @@ float Swing::follow(int i, Vec3 radial) const {
 }
 void Swing::skimGround(float dt, const WorldQueries& world) {
     const float falling = -body_.velocity.y;
-    if (!(config_.groundClearance > 0) || !(dt > 0) || !(falling > 0) || !finite(body_.position))
+    const float clearance = config_.arcade ? config_.arcadeClearance : config_.groundClearance;
+    if (!(clearance > 0) || !(dt > 0) || !(falling > 0) || !finite(body_.position))
         return;
     // Only a body a web holds from above: one on a web to the ground below
     // it goes down to it.
@@ -665,7 +706,7 @@ void Swing::skimGround(float dt, const WorldQueries& world) {
     const float turn = config_.groundTurn;
     // As far as the ground matters: the clearance, and what turning this
     // fall level takes.
-    const float reach = config_.groundClearance + falling * falling / (2 * turn) + falling * dt + .5f;
+    const float reach = clearance + falling * falling / (2 * turn) + falling * dt + .5f;
     const auto ground = world.raycast(body_.position, {0, -1, 0}, std::min(reach, config_.maxRange));
     if (!ground || !finite(ground->point) || !finite(ground->normal))
         return;
@@ -675,7 +716,7 @@ void Swing::skimGround(float dt, const WorldQueries& world) {
     // The fastest fall that still turns level at the clearance; and no more
     // turn in a step than three times the usual, behind as the body may be.
     const float height = body_.position.y - ground->point.y;
-    const float allowed = std::sqrt(2 * turn * std::max(0.f, height - config_.groundClearance));
+    const float allowed = std::sqrt(2 * turn * std::max(0.f, height - clearance));
     const float kept = std::max(allowed, falling - 3 * turn * dt);
     if (kept >= falling)
         return;
@@ -695,7 +736,7 @@ WebShot Swing::shot(Pose aim, Vec3 from, const WorldQueries& world) const {
     if (!finite(aim.position) || !finite(from) || !finite(forward) || length(forward) < .9f || length(forward) > 1.1f)
         return out;
     const Vec3 direction = normalized(forward);
-    out.hit = world.raycast(aim.position, direction, config_.maxRange);
+    out.hit = solid(aim.position, direction, config_.maxRange, world, &out.passed);
     const bool airAnchor = !out.hit && config_.airAnchors;
     if (!out.hit && !airAnchor)
         return out;
@@ -705,7 +746,7 @@ WebShot Swing::shot(Pose aim, Vec3 from, const WorldQueries& world) const {
     if (anchor.fixed && (airAnchor || world.exists(anchor.surface)) && finite(anchor.point)) {
         const Vec3 delta = anchor.point - from;
         const float dist = length(delta);
-        const auto obstacle = world.raycast(from, normalized(delta), std::max(0.0f, dist - .08f));
+        const auto obstacle = solid(from, normalized(delta), std::max(0.0f, dist - .08f), world);
         if (length(anchor.point - aim.position) <= config_.maxRange + .01f && dist >= config_.minRope &&
             !(obstacle && blocks(*obstacle, from, anchor.point)))
             out.web = Web{true, anchor.point, anchor.surface, dist, 0, airAnchor};
@@ -808,6 +849,8 @@ void Swing::inputs(float dt, const Input& in, const WorldQueries& world) {
                 s.zipUsed = false;
                 s.pullDistance = s.pullTime = s.obstructed = s.slack = 0;
                 events_.push_back({EventKind::Attach, i, .65f});
+                if (fired.passed)
+                    events_.push_back({EventKind::Pass, i, 0});
             } else {
                 events_.push_back({EventKind::Miss, i, .15f});
             }
@@ -971,7 +1014,12 @@ void Swing::step(float dt, const Input& in, const WorldQueries& world, const Wor
         }
         const Vec3 d = w.anchor - body_.position;
         const float dist = length(d);
-        const auto hit = world.raycast(body_.position, normalized(d), std::max(0.0f, dist - .1f));
+        int passed{};
+        const auto hit = solid(body_.position, normalized(d), std::max(0.0f, dist - .1f), world, &passed);
+        // Swung past a thin or loose thing (arcade webs): once as the line comes onto it.
+        if (passed && !hands_[i].passing)
+            events_.push_back({EventKind::Pass, i, 0});
+        hands_[i].passing = passed > 0;
         // Swinging along a facade, the line grazes ledges and sills near the
         // anchor every few frames. Only a wall that stays in the way releases:
         // one a physical web cannot bend round (no edge found, too many).

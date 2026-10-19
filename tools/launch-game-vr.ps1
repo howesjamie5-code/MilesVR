@@ -28,12 +28,14 @@ param(
     [switch]$NoCalibrationPrompt,
     [switch]$Flips,
     [switch]$TriggerWebs,
+    [switch]$ArcadeWebs,
     [switch]$NoStandOnWalls,
     [switch]$NoWallRun,
     [switch]$NoEyeOcclusion,
     [switch]$NoEyeAntialiasing,
     [switch]$GameMonitorView,
     [switch]$OwnShadows,
+    [switch]$EyeLensDistances,
     [switch]$NoEyeReflections,
     [switch]$StockMonitorView,
     [switch]$FullDesktopView,
@@ -97,6 +99,7 @@ $report=Join-Path $projectRoot "reports\game-vr-$stamp.json"
 $captureArgs=@()
 if($CaptureImages) { $captureArgs=@('--capture-images') }
 if($TriggerWebs) { $captureArgs+=@('--trigger-webs') }
+if($ArcadeWebs) { $captureArgs+=@('--arcade-webs'); Write-Host 'Web style: arcade (webs go through lamp posts, signs and cars; swings stay above the street).' }
 if($NoStandOnWalls) { $captureArgs+=@('--no-stand-on-walls'); Write-Host 'Stand on walls off: on a wall your view stays upright.' }
 if($NoWallRun) { $captureArgs+=@('--no-wall-run'); Write-Host "Wall running off: the game's own wall crawl takes you at a wall." }
 if($OverlayWebs) { $captureArgs+=@('--overlay-webs'); Write-Host 'Webs: Spidy overlay strands.' }
@@ -172,6 +175,10 @@ if($NoEyeReflections) { $captureArgs+=@('--no-eye-reflections') }
 if($OwnShadows) {
     $captureArgs+=@('--own-shadows')
     Write-Host "Shadows: each eye makes its own sun shadow maps, as before October 11 (more work for the processor)."
+}
+if($EyeLensDistances) {
+    $captureArgs+=@('--eye-lens-distances')
+    Write-Host "Distances: the eyes' own wide lenses, as before October 19 (detail and textures load at about half the flat game's distance)."
 }
 if($FullDesktopView) {
     $captureArgs+=@('--full-desktop-view')

@@ -235,6 +235,11 @@ int main() {
         options.venomLeftHand = true;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--venom-left-hand", "the venom punch on the left hand");
+        options.venomLeftHand = false;
+        check(!options.arcadeWebs, "arcade webs in a new launcher");
+        options.arcadeWebs = true;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 8 && args[7] == L"--arcade-webs", "arcade webs chosen");
         // The view turning onto a wall is no option of its own and is never passed: it turns whoever holds
         // the player there, the swing or the game's own crawl, which is the whole point of giving the crawl
         // the view (the player, October 14: "i like how it feel to walk on building and stand on their side",
@@ -311,13 +316,13 @@ int main() {
         check(headsetSettings("VR settings from the headset: aim_markers=0 web_grab=1 air_webs=0 web_shooter=0 "
                               "punch=0 body=1 swing_speed=48 weight=150 snap_turn=45 smooth_turn=90 haptics=50 "
                               "flips=1 flip_speed=300 trigger_webs=1 hud=0 stand_on_walls=0 screen_depth=3 "
-                              "screen_size=2\r",
+                              "arcade_webs=1 screen_size=2\r",
                               options),
               "the line changed nothing");
         check(!options.aimMarkers && !options.airWebs && options.swingSpeed == 48 && options.weight == 150 &&
                   options.snapTurn == 45 && options.smoothTurn == 90 && options.haptics == 50 && options.flips &&
                   options.flipSpeed == 300 && options.triggerWebs && options.hud == 0 &&
-                  options.screenDepth == 3 && options.screenSize == 2,
+                  options.screenDepth == 3 && options.arcadeWebs && options.screenSize == 2,
               "every value, the last one before a carriage return");
         // ... and `stand_on_walls` in that line is no longer one of them.
         check(options.standOnWalls, "the view on walls was taken from a headset line");
@@ -395,6 +400,18 @@ int main() {
                            "out of such a game.") == LineKind::error, "error line");
         // tools/vr_launcher.py's NEEDS_ADMINISTRATOR_EXIT (tests/launcher_protocol_tests.py holds it to 5 too).
         check(kNeedsAdministratorExit == 5, "exit code");
+    });
+    test("a game that already holds Spidy can be closed and VR started again", [] {
+        // tools/vr_launcher.py's CLOSE_GAME_EXIT (tests/launcher_protocol_tests.py holds it to 6 too).
+        check(kCloseGameExit == 6 && kCloseGameExit != kNeedsAdministratorExit, "exit code");
+        check(classifyLine("Spidy VR unavailable: Spider-Man is still running with an older Spidy build in it: it "
+                           "was open while Spidy was updated.") == LineKind::error,
+              "error line");
+        const SessionOptions options;
+        const auto plain = sessionArguments(options, L"r.json", L"", L"");
+        const auto closing = sessionArguments(options, L"r.json", L"", L"", true);
+        check(std::find(plain.begin(), plain.end(), L"--close-game") == plain.end(), "asked without the player");
+        check(closing.size() == plain.size() + 1 && closing.back() == L"--close-game", "the agreed close");
     });
     test("runtime versions compare field by field", [] {
         check(parseVersion("14.44.35211.0") >= std::array<int, 4>{14, 40, 0, 0}, "newer");

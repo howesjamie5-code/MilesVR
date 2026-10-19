@@ -10,7 +10,7 @@ import os
 import pathlib
 import subprocess
 import time
-from bridge_game import prepare as load_module
+from bridge_game import GameNeedsRestart, prepare as load_module
 from capture_game_state import Game, LIVE_VTABLES, find_game, open_process, close, process_ids
 from observe_game import call_remote
 
@@ -28,6 +28,9 @@ REFUSAL_PATIENCE=5
 # The session's exit code for NeedsAdministrator: the launcher's window then offers to start again as
 # administrator (kNeedsAdministratorExit in include/spidy/launcher_text.hpp).
 NEEDS_ADMINISTRATOR_EXIT=5
+# The session's exit code for GameNeedsRestart (bridge_game.py): the launcher's window then offers to close the
+# game and start VR again, with --close-game (kCloseGameExit in include/spidy/launcher_text.hpp).
+CLOSE_GAME_EXIT=6
 RUN_AS_ADMINISTRATOR='start Spidy as administrator too (right-click MilesVR Launcher > Run as administrator)'
 STEAM_AS_ADMINISTRATOR=('Steam runs as administrator on this PC, so the game it starts does too, and Windows keeps '
                         f'Spidy out of such a game. Either {RUN_AS_ADMINISTRATOR}, or have Steam start without '
@@ -40,6 +43,9 @@ _exit_code.argtypes=[w.HANDLE,c.POINTER(w.DWORD)]
 _exit_code.restype=w.BOOL
 _current_process=_kernel32.GetCurrentProcess
 _current_process.restype=w.HANDLE
+_wait=_kernel32.WaitForSingleObject
+_wait.argtypes=[w.HANDLE,w.DWORD]
+_wait.restype=w.DWORD
 _advapi32=c.WinDLL('advapi32',use_last_error=True)
 _open_token=_advapi32.OpenProcessToken
 _open_token.restype,_open_token.argtypes=w.BOOL,(w.HANDLE,w.DWORD,c.POINTER(w.HANDLE))
@@ -50,8 +56,10 @@ for _function,_result,_arguments in (
         (_user32.GetForegroundWindow,w.HWND,()),(_user32.SetForegroundWindow,w.BOOL,(w.HWND,)),
         (_user32.ShowWindow,w.BOOL,(w.HWND,c.c_int)),(_user32.IsIconic,w.BOOL,(w.HWND,)),
         (_user32.IsWindowVisible,w.BOOL,(w.HWND,)),(_user32.GetWindowTextLengthW,c.c_int,(w.HWND,)),
-        (_user32.GetWindowThreadProcessId,w.DWORD,(w.HWND,c.POINTER(w.DWORD)))):
+        (_user32.GetWindowThreadProcessId,w.DWORD,(w.HWND,c.POINTER(w.DWORD))),
+        (_user32.PostMessageW,w.BOOL,(w.HWND,w.UINT,w.WPARAM,w.LPARAM))):
     _function.restype,_function.argtypes=_result,_arguments
+WM_CLOSE=0x0010
 
 
 class _KeyInput(c.Structure):
@@ -111,12 +119,9 @@ def refusal(pid,error):
         'close the game, then press START VR.')
 
 
-def bring_to_front(pid,wait=.5):
-    """Put the game's window in front of the others; True once it is.
-
-    The game pauses while another window is in front: on October 5 its intro sat still for three
-    minutes behind the window that launched it, which is where Windows keeps a game Steam starts.
-    """
+def game_windows(pid):
+    """The process's visible top-level windows that have a title: the game's own window, and a message box
+    it shows (its display driver error is one)."""
     found=[]
 
     def visit(hwnd,_):
@@ -126,6 +131,34 @@ def bring_to_front(pid,wait=.5):
             found.append(hwnd)
         return True
     _user32.EnumWindows(c.WINFUNCTYPE(w.BOOL,w.HWND,w.LPARAM)(visit),0)
+    return found
+
+
+def close_game(pid,timeout=30,settle=3,windows_of=game_windows):
+    """Close the game as its window's close button does and wait for its process to end; True once it has.
+
+    The game saves as it quits that way (about two seconds, no question asked). It is never forced: a
+    killed game can lose that save. `settle`: seconds more for Steam, which drops a launch made while the
+    previous game process is still leaving it.
+    """
+    process=open_process(0x00100000,False,pid)  # SYNCHRONIZE
+    if not process: return True  # gone already
+    try:
+        windows=windows_of(pid)
+        for hwnd in windows: _user32.PostMessageW(hwnd,WM_CLOSE,0,0)
+        if not windows or _wait(process,int(timeout*1000))!=0: return False
+    finally: close(process)
+    time.sleep(settle)
+    return True
+
+
+def bring_to_front(pid,wait=.5):
+    """Put the game's window in front of the others; True once it is.
+
+    The game pauses while another window is in front: on October 5 its intro sat still for three
+    minutes behind the window that launched it, which is where Windows keeps a game Steam starts.
+    """
+    found=game_windows(pid)
     if not found: return False
     hwnd=found[0]
     if _user32.GetForegroundWindow()==hwnd: return True
@@ -237,6 +270,8 @@ def enlarge_render_memory(pid,megabytes=RENDER_RING_MB,patience=2.5):
             exports,_=load_module(pid,process,RENDER_MEMORY_DLL,ROOT/'reports/render-memory-modules',
                                   ('SpidyRenderMemoryStart','SpidyRenderMemoryStop','SpidyRenderMemoryData'))
             code=call_remote(process,exports['SpidyRenderMemoryStart'],megabytes)
+        except GameNeedsRestart:
+            raise  # another build's module in the game: only a new game process changes that
         except (OSError,RuntimeError,StopIteration) as error:
             if time.monotonic()-started>=patience:
                 if isinstance(error,StopIteration): raise RuntimeError('The game process lists no modules yet.') from error

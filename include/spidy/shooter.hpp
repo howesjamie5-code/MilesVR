@@ -19,9 +19,11 @@ struct ShooterConfig {
     float press = .65f, release = .35f;
     // One hand shoots at most once in this long (seconds).
     float interval = .12f;
-    // The ball leaves this far ahead of the aim pose (the knuckles), clear of
-    // the hand.
-    float muzzle = .08f;
+    // The ball leaves this far ahead of the aim pose, the web shooter's
+    // nozzle (webShooter). Until October 18, 8 cm: the aim pose was on the
+    // knuckles until October 15, and since then that put the ball inside the
+    // curled middle fingers.
+    float muzzle = .02f;
     // Without a character to take it: the first surface on the hand's line
     // within `range`, aimed `beyond` it (a shot ends at its aim point, so it
     // must reach the surface to strike it), else open air at `range`. The

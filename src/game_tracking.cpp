@@ -283,10 +283,20 @@ GameMotionFrame GameTrackingRig::update(const XrFrame& f, Vec3 feet, Vec3 gameFo
             surfaceTurn_ = {};
             surfaceShift_ = {};
             standing_ = false;
+            // Where the surfaces were is another place after a load or a scene.
+            clearance_.reset();
         }
         return out;
     }
     const bool resumed = !wasActive_;
+    // A break longer than a blip puts the head back over the feet, as at the
+    // start: a walk in the room meanwhile - out of the headset's play area and
+    // back, its picture held - is no lean of the body's. Kept, it left the eyes
+    // as far from the body as he had walked, through whatever stood there ("i
+    // left my playspace and came back in ... then desyncs", October 15).
+    const bool rested =
+        resumed && lastTime_ &&
+        f.predictedDisplayTime - lastTime_ > static_cast<std::int64_t>(blipSeconds * 1'000'000'000.f);
     // A stutter (a game frame over 100 ms closes the gameplay gate) keeps the
     // webs; after a longer break each hand squeezes again.
     const bool longBreak =
@@ -303,7 +313,12 @@ GameMotionFrame GameTrackingRig::update(const XrFrame& f, Vec3 feet, Vec3 gameFo
         const Vec3 travel = feet - lastFeet_;
         rig_.origin += travel;
         lastHead_.position += travel;
-        if (pendingRecenter_) {
+        if (rested) {
+            // After a break: over the feet again, facing as before.
+            rig_.origin = feet - Quat::yaw(rig_.yaw).rotate({f.head.position.x, 0, f.head.position.z});
+            flip_.reset();
+            rig_.tilt = {};
+        } else if (pendingRecenter_) {
             // A recenter ends a flip: level, the head kept where it was.
             flip_.reset();
             rig_.tilt = {};
@@ -447,6 +462,13 @@ GameMotionFrame GameTrackingRig::update(const XrFrame& f, Vec3 feet, Vec3 gameFo
         placed.origin = feet + surfaceShift_ + surfaceTurn_.rotate(placed.origin - feet + yaw.rotate(pivot));
         placed.tilt = unit(yaw.conjugate() * surfaceTurn_ * yaw * rig_.tilt);
         placed.pivot = {};
+    }
+    // The eyes out of what the world is built of (HeadClearance), and the
+    // hands, the webs and the body with them: they stay where the eyes see
+    // them.
+    if (finite(bodyCentre_)) {
+        out.headPush = clearance_.update(f.seconds, bodyCentre_, placed.toWorld(f.head).position);
+        placed.origin += out.headPush;
     }
     out.standing = standing_;
     out.viewTilt = std::acos(std::clamp(surfaceTurn_.rotate({0, 1, 0}).y, -1.f, 1.f));

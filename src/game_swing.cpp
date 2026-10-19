@@ -40,6 +40,8 @@ Command command;
 Swing solver;
 InputSampleClock inputClock, grabInputClock;
 InputHold inputHold;
+// The game's own move out of the swing's flight, asked for (Command::asks).
+AirYield airYield;
 InFlightStep inFlight;
 SRWLOCK lifecycle = SRWLOCK_INIT, control = SRWLOCK_INIT, output = SRWLOCK_INIT, simulation = SRWLOCK_INIT;
 std::atomic<bool> enabled{};
@@ -90,6 +92,8 @@ int64_t strikeQpc{};
 // command; the latest was made at aimMadeMs.
 std::atomic<uint64_t> aimDeadline{};
 uint64_t aimSerial{}, aimMadeMs{};
+// The hands whose motion lands no blow (Settings::noBlows).
+std::atomic<uint32_t> noBlows{};
 bool copy(void* destination, const void* source, size_t bytes) {
     __try {
         if (reinterpret_cast<uintptr_t>(source) < 0x10000 ||
@@ -309,6 +313,7 @@ void visit(const native_rays::QueryContext& world) {
             fighter.record = config.record;
             fighter.feet = at;
             fighter.grounded = motion.grounded != 0;
+            fighter.busy = noBlows.load(std::memory_order_relaxed);
             for (unsigned i = 0; i < 2; ++i) {
                 const bool carried = solver.webs()[i].attached && (owned || !motion.grounded);
                 fighter.swinging |= carried;
@@ -654,8 +659,21 @@ void visit(const native_rays::QueryContext& world) {
     steppedView = (crawlHeld ? 1u : 0u) | (body.grounded ? 4u : 0u) | (length(crawl) > .5f ? 8u : 0u) |
                   (owned ? 16u : 0u) | (gameRun ? 32u : 0u) | (resting ? 64u : 0u) | (handing ? 128u : 0u);
     game_warp::observe(steppedView | (focused ? 2u : 0u), true);
+    // The game's own move the player asked for (its zip to a point, its web
+    // strike, a prompt's) once the game has begun it out of the swing's
+    // flight (AirYield): hands off, its webs and its wall let go - the move
+    // has its own - until it is done.
+    const bool yielding = airYield.update(tick, live && (c.asks & 1u), owned, !body.grounded,
+                                          (motion.moverFlags & 0x80u) != 0, motion.steps, motion.airEvents);
+    if (airYield.began()) {
+        solver.releaseAll();
+        solver.leaveWall();
+        game_punch::cancelStrike();
+        takeoffTransition.reset();
+        mountTakeoff.reset();
+    }
     // Nor does the swing take the body the game runs up its wall (gameRun).
-    const bool drive = !grasped && !handing && !gameRun &&
+    const bool drive = !grasped && !handing && !gameRun && !yielding &&
                        (striking || (collidable && !body.grounded && !transition.waiting &&
                                      (attached || owned || transition.resumed || wall.on)));
     if (drive) {
@@ -696,6 +714,7 @@ void visit(const native_rays::QueryContext& world) {
             r.unwraps += event.kind == EventKind::Unwrap;
             r.cut += event.kind == EventKind::Obstructed;
             r.joins += event.kind == EventKind::Join;
+            r.passed += event.kind == EventKind::Pass;
         }
         r.shared = solver.shared();
         for (unsigned i = 0; i < 2; ++i) {
@@ -890,18 +909,21 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingRetarget(void* input) {
     return result;
 }
 // The VR settings during play: the speed limit, whether webs catch props and
-// thugs, whether they hold in open air, the gravity (weight), and whether
-// walls are the swing's own. All apply from the next step; the visit holds
-// `simulation`.
+// thugs, whether they hold in open air, the gravity (weight), whether walls
+// are the swing's own, and the webs' style. All apply from the next step; the
+// visit holds `simulation`.
 extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingSettings(void* input) {
-    // Version 3 and 4 settings (the probes') are shorter: read as many bytes as they say.
+    // Version 3 to 6 settings (the probes') are shorter: read as many bytes as they say.
     Settings s;
     uint32_t header[3]{};
     if (!copy(header, input, sizeof(header)) ||
-        (header[2] != settingsBytesV3 && header[2] != settingsBytesV4 && header[2] != sizeof(s)) ||
+        (header[2] != settingsBytesV3 && header[2] != settingsBytesV4 && header[2] != settingsBytesV5 &&
+         header[2] != settingsBytesV6 && header[2] != sizeof(s)) ||
         !copy(&s, input, header[2]) || s.magic != 0x53575354 ||
         !((s.version == 3 && s.bytes == settingsBytesV3) || (s.version == 4 && s.bytes == settingsBytesV4) ||
-          (s.version == 5 && s.bytes == sizeof(s))) ||
+          (s.version == 5 && s.bytes == settingsBytesV5) || (s.version == 6 && s.bytes == settingsBytesV6) ||
+          (s.version == 7 && s.bytes == sizeof(s))) ||
+        s.noBlows > 3 || s.arcade > 1 ||
         s.grab > 1 || !std::isfinite(s.maxSpeed) || s.maxSpeed <= 0 || s.maxSpeed > motionSpeedLimit ||
         s.airWebs > 1 || !std::isfinite(s.gravity) || s.gravity < 0 || s.gravity > maxGravity || s.walls > 4 ||
         s.physical > 1)
@@ -935,6 +957,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingSettings(void* input) {
         }
         if (s.version >= 5)
             solver.allowPhysical(s.physical != 0);
+        noBlows = s.version >= 6 ? s.noBlows : 0u;
+        if (s.version >= 7)
+            solver.allowArcade(s.arcade != 0);
         // A swing started without the grab (-NoWebGrab) offers it from now on.
         if (s.grab && !game_grab::offering() && driveMotion && sampleDriven) {
             config.grabKinds = game_grab::movableKinds;

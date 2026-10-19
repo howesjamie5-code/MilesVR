@@ -1,6 +1,84 @@
-# Validation — 2026-10-15
+# Validation — 2026-10-18
 
-## One line round an edge; the 17:43 crash (latest build)
+## Spider-Sense and the counter (latest build)
+
+The user: "design a vr version of the alert/spidey senses for combat (make it
+arkham shadow style)". Arkham Shadow, as its coverage tells it: a blue icon
+over an enemy about to strike, "an icon in your sightline" for one off
+screen, a hand thrown toward it counters ("Batman instantly abandons his
+current target in favor of countering the incoming punch"), a red one is
+dodged (Road to VR's hands-on, Destructoid's, Way Too Many Games' and
+UploadVR's reviews; UploadVR names its "Combat widget", blue or yellow).
+
+| | |
+| --- | --- |
+| Where a warning is | Read from Spider-Man.exe offline (docs/REFERENCE.md's table): each attack registers with the hero's `HeroDodgeManager` (16 slots of 0xa8 from +0x78, count +0xaf8): attacker handle +0x00, warn time +0x30, flags +0x5c, state +0x60 (0x10 warned), blow +0x80, on the game clock `0x7a7fbd0`; the warning (`0x926580`) plays the hero's Spider-Sense sound and sets 0x10. The flags' names and values from the game's reflection table `0x5df3d80` |
+| Reading it | `game_sense::read`: the manager by its type on the hero's actor record (the game's own lookup), kept while its vtable and owner hold; the attacks and the clock copied under SEH; an attacker's handle resolved as `0x15a0560` does, placed by the target watch's bot (feet, capsule) or his record's transform |
+| Core tests | 350 (new 5): what each set of flags asks for, a warning's standing and its notched time left; a fist thrown at a warned attacker counters once after its 30 ms, his next blow is the counter's, a slow fist / one thrown away / one at a dodge's attacker / a hand at the chest counter nothing, a counter in the last 0.2 s is perfect, a blow landing in a warning counters by itself, a counter's blow waits 1.2 s at most; the sightline's 31 and 26 degrees and the side kept behind; the printed mark's plates, keyline, colours, ring closing, last notch, pop-in, break and its 4-12 degrees at 1.5 to 9 m; the sightline mark at 21 degrees with its arrowhead and the rim's lines to 45 |
+| Protocol | all six Python suites: XrData 39 (1176), `sense_snapshot` (632 bytes) decoded, a torn read refused, another build's struct reported as `protocol_mismatch` without ending the session; the cross-check finds `game_sense::Data` and its reader agree |
+| Modules | `spidy_ray_bridge.dll` loaded outside the game: `SpidySenseSample` 0 and the struct's magic, version 1, 632; `spidy_stereo_probe.dll`'s `SpidyXrData` 39, 1176 |
+| The marks seen | `tools\preview-marks.ps1 -Scale 4` over `game-vr-20261012-140623-eyes\0013-view.png` (a thug 2.6 m off, chest 337,262) and `0027-view.png` (0.75 m, 300,400): `far-sense.png` / `near-sense.png` (landing poses, the ring at 100, 50 and the last notch, dodge, jump, no time set, boiling, the three break poses) and `*-sense-eye.png` (a counter over him, a dodge to the right and a counter up to the left in the sightline). The first sheets put the ring across his face and the sightline mark on his belt: the ring now starts at 1.57 of the lines' size, the mark stands 0.14 m + half its size over his head, and the sightline mark sits at 21 degrees, not 17 |
+
+**In the game, no headset** (with the user's OK; `tools/probe_menu_pad.py
+start`, `pad a --until-player`: profile 1's Continue, free roam on a roof at
+(-554, 51, 1491), player at 35 s; then `tools/probe_sense.py --seconds 20`;
+`reports/sense-probe.json`): the hero's `HeroDodgeManager` found by its type
+and kept (`managers` 1, at `0x19aa9170fa0`), read at 409 of 409 input samples
+with no fault, holding 0 attacks; the game's clock at `0x7a7fbd0` ran from
+80.85 to 100.80 in 18.9 s of real time (1.06). Modules stopped, every hook
+entry restored, game closed, Steam shut down, the 17 save files identical to
+the backup taken before. **No enemy was near** (`probe_combat.py --list`: 0
+bots; a fresh free-roam session has none until crimes spawn), so no warning
+was seen.
+
+**Not checked.** That the attacks the manager holds are what the disassembly
+says, which attacks the game marks counterable or jumpable, how long its
+warnings are, that the game's flinch breaks an attack in time and the player
+takes no blow, and how the marks, the tingle and the counter feel. They need
+a fight: `tools/probe_sense.py --provoke --counter` in a fresh game with an
+enemy within 40 m (it punches him to start the fight, throws a scripted
+counter at each blue warning and reads the player's health across its blow),
+or a headset session, whose report's `sense` census reads them in play.
+
+## The zip out of the game's aim; a printed gadget wheel (the build before)
+
+The user, after a session on the build below
+(`dist\Spidy-0.3.4\reports\game-vr-20261018-140811.json`, 7 minutes):
+"lets make it so that when holding up (zip) and it enters the slowmo aiming
+mode, on release we will zip also lets make the gadget selection screen look
+like other better designed ingame ui".
+
+| | |
+| --- | --- |
+| The zips in that session | 37 sent (XR `zips`). Six in the air with the swing holding the player were taken by the game: the swing let go 0.37-0.42 s after the zip went out (`game_swing::AirYield`), and the player rose up to 14 m or travelled up to 41 m in 1.5 s |
+| The slow-downs | the game's own time (`slow_motion.world_scale`, Spidy's slow motion off: `wanted` 1) went to 0.2 eight times, each 0.56-0.64 s after a zip went out: for 3.0, 1.7, 1.5, 1.3, 3.0, 1.3 and 0.8 s, and once for one sample (the stick let go then). No zip followed any of them; in the air the game's air handler ran through them (`air_events` advancing every step) and the swing kept the player |
+| The game's aim mode | the exe's strings: "Lock out the standard aim mode functionality (L2) while the photo gadget is equipped", "If true, we'll snap to zip-to-perch targets", "How long to delay at the start of aim-mode before triggering time-scale", "How long in real time to allow player driven time-scale to persist", "How long between player driven time-scale requests"; RTTI `HeroStateAimModeIdle` `0x38d1cf8`, `HeroStateAirFire` `0x38c14a8` (its table holds the air handler `0xa7b3a0`, as the jump and fall states' do) |
+| Core tests | 345 (new: `ZipPress` - a zip in normal time unchanged, the aim keeping LT down alone, one zip as the stick is let go and RT up before it, a moment out of play, a hold a menu drops, bad frame times, the pad's LT alone for the aim; the printed wheel - a picture for each gadget, the caption only for the lit one, the lit badge's snap, the wheel's landing, the grey and the yellow badges, under 60,000 vertices; the lit gadget's time) |
+| Launcher and protocol | the launcher's 24; all six Python suites (XrData 38, `zip_releases`) |
+| GPU test | passes at 1536 x 1536 and 2400 x 1800; the wheel 33,771 and 37,605 vertices (the overlay's buffer is made for some 80,000) |
+| The wheel seen | the GPU test's `gadget-wheel.bmp` at 2400 x 1800, and `tools\preview-marks.ps1 -Near <that session's 0066-view.png> -Scale 3`: `near-wheel.png`, the wheel landing, at rest, lit (its snap and its boil), equipped and lit, empty and lit |
+
+**Not checked.** That RT pressed in the game's aim zips to the point the aim
+holds (the game's LT + RT as its controls have it), what RT does there with no
+point held, and the aim on the ground (the game slowed its time once with the
+player standing). Nothing ran in the game or a headset.
+
+## Eight Discord reports (October 18, morning)
+
+The user: "lets fix these issues - more info on discord". What the evidence
+was, and what was checked; nothing of it ran in the game or a headset.
+
+| | |
+| --- | --- |
+| Air events in flight | the user's October 15 sessions (`dist\Spidy-0.3.4\reports\game-vr-20261015-*.json`): in driven airborne motion samples the game's air handler ran 2 a step (`(steps, air_events)` deltas (3, 6) 306 times, (2, 4) 112, (4, 8) 95 in the 19:12 session); no driven airborne sample advanced without it. Airborne steps without it were the game's wall grasp (mover flags `0x80a0`, `0x82a0`), not owned |
+| Impact Web | `reports\grab-probe\gadget-impact_web.png` (October 15 15:20): the game's HUD reads "Web Shooter" with WeaponImpactWeb (`3919a80`) equipped; the exe's text at `3abd870`: "When a bot is hit by the Web Blast gadget (aka Impact Web)"; the player's clip (16 s) shows IMPACT WEB 8/8 to 1/8 hitting as web balls |
+| The crash (RTX 4070 SUPER) | the player's report `game-vr-20261016-140542`: VR play began at 12.72 s, XR frames stopped at 914 (13 tracked) by 12.92 s, `gpu.completed` 18446744073709551615, `left_begins` 19, the game log's `Device removed detected (0x887A002B)` 0.4 s after the virtual pad's disconnect; adapters 0 and 1 both "NVIDIA GeForce RTX 4070 SUPER" (none of the 84 game logs on this laptop lists a card twice); `Reflex: Low Latency with Boost` (the only other Reflex session, October 10, Low Latency, played 7600 tracked frames on 0.2.11) |
+| SteamVR and the Quest's menu button | SteamVR's `drivers/oculus/resources/input/touch_profile.json` (GameTracking-SteamVR mirror): the left `/input/system`, no menu; `vrcompositor_bindings_touch.json`: its single press toggles the dashboard |
+| Core tests | 343 (new: `HeadClearance` alone and its rays; the rig keeping the eyes out of Spidy's wall; the head back over the feet after a break; `AirYield`; `PausePress`, the pad layer on release, the game screen's L3 + R3 on release, the heal's push through a moment out of play; held bots; the fist's and the web-shooting hand's fingertips side by side, which fail with the gather off; the pressing fingers as deep as a fist's) |
+| Launcher and protocol | the launcher's tests (`kCloseGameExit`, `--close-game`); all six Python suites (new: Reflex off for a session, the lost device named from the game log, the adapters, another build named and the game closed for the player, `close_game` never kills, the SteamVR pause line) |
+| GPU test | passes (1536 x 1536) |
+
+## One line round an edge; the 17:43 crash
 
 The user: "game crashed. also when web goes around edges a second line is
 drawn from the original edge and the hand". The session:

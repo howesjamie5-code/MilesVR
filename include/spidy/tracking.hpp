@@ -61,8 +61,16 @@ inline bool validTrackedPose(Pose p) {
 // (and Virtual Desktop's, calibrated to it) turns 30 degrees from the hand
 // toward the thumb: with the palm down, as a web is shot, 30 degrees inward
 // of where the hand pointed ("it feels off to the side a bit").
+//
+// Where: the suit's own nozzle, the hero rig's webStart joint (on the end of
+// the forearm, 1.5 cm back from the wrist joint toward the elbow and 3 cm out
+// on the palm's side, reports/body-probe-f3-hands.json): 10.5 cm from the grip
+// toward the forearm, 1 cm toward the palm. From October 15 to 18 it was 2.5
+// cm further on toward the fingers, on the heel of the palm, where the web
+// shooter's button is ("it comes out of the button instead of the webshooter
+// part", October 16).
 inline Pose webShooter(Pose grip, unsigned hand) {
-    const float palm = hand == 0 ? .008f : -.008f;
-    return compose(grip, {{palm, .08f, 0}, {-.70710678f, 0, 0, .70710678f}});
+    const float palm = hand == 0 ? .01f : -.01f;
+    return compose(grip, {{palm, .105f, 0}, {-.70710678f, 0, 0, .70710678f}});
 }
 } // namespace spidy

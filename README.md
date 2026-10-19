@@ -221,14 +221,14 @@ Spidy changes nothing in the game's folder.
 | Flip (experimental, off by default: FLIPS and FLIP SPEED in VR settings or the launcher) | **Left stick** in the air: turns you over, as fast as you tilt it; let go to come back level. Tap **A** in the air: one flip toward where the stick points. Hold **A**: you stay turned while the stick rests |
 | Turn | **Right stick**: snap 30° (adjustable or off), or hold to turn smoothly with SMOOTH TURN on in VR settings |
 | Dodge (the game's B) | **B**, the way the **left stick** points; not while a web carries you |
-| Interact (the game's Y) | **Y**, looking at the thing from within about a metre of it; hold **Y** and you step up to what you look at until the game takes it. On a wall, point a hand at a vent or a door (a turning ring in that hand's colour) and press **Y** |
+| Interact (the game's Y) | **Y**, looking at the thing from within about a metre of it; hold **Y** and you step up to what you look at until the game takes it. On a wall, point a hand at a vent or a door (a turning ring in that hand's colour) and press **Y**. Swinging, **Y** is the game's web strike too (onto a car in a chase) |
 | Any button the game asks for | Look at the thing and press **Y**, whichever button the prompt shows |
 | Pull a door or a grate (the game's LB + RB) | Click the **right stick**, or hold it; not while a web carries you |
 | Heal (the game's D-pad down) | Push the **right stick** straight down and hold it a moment |
-| Zip to a point, enter a vent (the game's LT + RT) | Push the **right stick** straight up and hold it; not while a web carries you |
-| Pause (VR settings: Settings > SPIDY VR) | **Menu** button |
+| Zip to a point, enter a vent (the game's LT + RT) | Push the **right stick** straight up and hold it, swinging too: the game takes you from your webs once its zip begins. No point to zip to? Keep holding: time slows as the game aims; look at a point and let go to zip there |
+| Pause (VR settings: Settings > SPIDY VR) | **Menu** button, or hold both sticks in for a moment (under SteamVR a Quest's menu button opens SteamVR's dashboard) |
 | Game menu (map, suits, skills) | **X** |
-| The whole gamepad, for a moment | Click both sticks: the grips are the game's LB and RB, the triggers its LT and RT, the right stick its D-pad; your webs are off meanwhile. Click both again, or press nothing for 20 seconds, to leave |
+| The whole gamepad, for a moment | Click both sticks (and let go): the grips are the game's LB and RB, the triggers its LT and RT, the right stick its D-pad; your webs are off meanwhile. Click both again, or press nothing for 20 seconds, to leave |
 | Play the game as it is | Pause, **SWITCH TO GAME SCREEN** (under RESUME): the game on a 3D screen in the headset, the controllers an Xbox controller. **SWITCH TO VR** goes back |
 
 **Aim markers** show where each free hand's web would go, blue for the left

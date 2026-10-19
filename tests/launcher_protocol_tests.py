@@ -201,6 +201,34 @@ class DesktopViewTests(unittest.TestCase):
         self.assertTrue(display.restore(fresh,self.backup))
         self.assertEqual(fresh.values,USER)
 
+    def test_every_session_turns_off_nvidia_reflex(self):
+        # October 16: a player's game with Reflex On + Boost (ReflexMode counts the choices from Off) lost its
+        # graphics device by the 19th eye picture, every session. Off for the session, back after it, and the
+        # session can say what it changed.
+        graphics={**USER,'ReflexMode':2}
+        registry=FakeRegistry(graphics)
+        display.prepare_launch(registry=registry,backup=self.backup,screen=(1920,1080))
+        self.assertEqual(registry.values['ReflexMode'],0)
+        self.assertEqual(display.session_changes(self.backup),dict(ReflexMode=2,EnableWindowsGamingInput=None))
+        self.assertTrue(display.restore(registry,self.backup))
+        self.assertEqual(registry.values,graphics)
+        # Off already, or never saved by the game: nothing to say, and nothing made.
+        off=FakeRegistry({**USER,'ReflexMode':0})
+        display.prepare_launch(registry=off,backup=self.backup,screen=(1920,1080))
+        self.assertFalse(display.session_changes(self.backup).get('ReflexMode'))
+        self.assertTrue(display.restore(off,self.backup))
+        fresh=FakeRegistry(USER)
+        display.prepare_launch(registry=fresh,backup=self.backup,screen=(1920,1080))
+        self.assertNotIn('ReflexMode',fresh.values)
+        self.assertTrue(display.restore(fresh,self.backup))
+        self.assertEqual(fresh.values,USER)
+        # A backup made before the setting joined the session still restores.
+        old=FakeRegistry({**USER,'ReflexMode':2,'VSync':0})
+        self.backup.write_text(json.dumps(dict(key=display.KEY,values={},session=[
+            dict(key=display.KEY,values=dict(VSync=1)),dict(key=display.INPUT_KEY,values={})])))
+        self.assertTrue(display.restore(old,self.backup))
+        self.assertEqual(old.values,{**USER,'ReflexMode':2,'VSync':1})
+
     def test_every_session_turns_off_vertical_sync(self):
         # The October 10 session started with the game's VSync on at 120 Hz: frames of 36-45 ms, whole
         # numbers of the monitor's 8.3 ms. It comes back afterwards; a value the game never saved stays unsaved.
@@ -492,6 +520,43 @@ class LauncherTests(unittest.TestCase):
                          launcher.NEEDS_ADMINISTRATOR_EXIT)
         self.assertEqual((launcher.NEEDS_ADMINISTRATOR_EXIT,run_game_vr.exit_code(RuntimeError('no headset')),
                           run_game_vr.exit_code(PermissionError(13,'Access is denied'))),(5,2,2))
+
+    def test_a_game_that_holds_spidy_already_offers_to_close_it(self):
+        import run_game_vr
+        from bridge_game import GameNeedsRestart,OtherBuild
+        self.assertEqual((launcher.CLOSE_GAME_EXIT,run_game_vr.exit_code(GameNeedsRestart('VR already ran')),
+                          run_game_vr.exit_code(OtherBuild('older build'))),(6,6,6))
+        # Another build's render memory module is a refusal no second ask changes.
+        with patch.object(launcher,'open_process',return_value=5),patch.object(launcher,'close'), \
+             patch.object(launcher,'load_module',side_effect=OtherBuild('older build')) as load, \
+             patch.object(launcher.time,'sleep') as slept:
+            with self.assertRaises(OtherBuild): launcher.enlarge_render_memory(42)
+        load.assert_called_once()
+        slept.assert_not_called()
+
+    def test_closing_the_game_is_its_close_button_and_never_a_kill(self):
+        posted=[]
+        with patch.object(launcher,'open_process',return_value=9),patch.object(launcher,'close') as closed, \
+             patch.object(launcher._user32,'PostMessageW',side_effect=lambda *args: posted.append(args) or 1), \
+             patch.object(launcher,'_wait',return_value=0) as waited,patch.object(launcher.time,'sleep') as slept:
+            self.assertTrue(launcher.close_game(42,windows_of=lambda pid: [0x111,0x222]))
+        self.assertEqual(posted,[(0x111,launcher.WM_CLOSE,0,0),(0x222,launcher.WM_CLOSE,0,0)])
+        waited.assert_called_once_with(9,30000)
+        slept.assert_called_once_with(3)  # for Steam
+        closed.assert_called_once_with(9)
+        # Still running after the wait: False, and nothing forced.
+        with patch.object(launcher,'open_process',return_value=9),patch.object(launcher,'close'), \
+             patch.object(launcher._user32,'PostMessageW',return_value=1), \
+             patch.object(launcher,'_wait',return_value=0x102),patch.object(launcher.time,'sleep') as slept:
+            self.assertFalse(launcher.close_game(42,windows_of=lambda pid: [0x111]))
+        slept.assert_not_called()
+        # No window to close (still starting) is no close either; a process that is gone is closed.
+        with patch.object(launcher,'open_process',return_value=9),patch.object(launcher,'close'), \
+             patch.object(launcher,'_wait') as waited:
+            self.assertFalse(launcher.close_game(42,windows_of=lambda pid: []))
+        waited.assert_not_called()
+        with patch.object(launcher,'open_process',return_value=0):
+            self.assertTrue(launcher.close_game(42,windows_of=lambda pid: [0x111]))
 
     def test_render_memory_module_retries_a_starting_process_but_not_its_own_refusal(self):
         exports=dict(SpidyRenderMemoryStart=0x1000,SpidyRenderMemoryStop=0x2000,SpidyRenderMemoryData=0x3000)

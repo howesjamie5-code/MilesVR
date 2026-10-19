@@ -190,9 +190,17 @@ gives the eyes as they were before October 10's eighth build and
 `--game-monitor-view` has the game render its own view while immersive;
 `--monitor-rate 0`..`240` is how often the window gets the left eye, 30 a
 second by default and 0 every frame; `--own-shadows` gives each eye its own
-sun shadow maps, as before October 11; the
+sun shadow maps, as before October 11; `--eye-lens-distances` leaves the eyes
+the detail, draw and texture distances their own wide lenses give, as before
+October 19; `--building-reach 50`..`400` is how far away the far buildings draw
+their full models, in percent of the game's 145 m (150 by default); the
 report's `eyes` has `upscale`, `antialiased`, `game_monitor_view`,
-`monitor_rate`, `shared_shadows` and `render_size`; `stand_on_walls` is in `vr_settings`, off with `--no-stand-on-walls`,
+`monitor_rate`, `shared_shadows`, `game_distances`, `building_reach` and
+`render_size`, and its
+`appearance` has `eye_distance_scale`, `eye_detail` (the left eye's lens scale
+and the multiplier it got), `texture_request_raise` and `impostor_frames`
+(frames the left eye chose which far buildings draw in full for the resting
+game view); `stand_on_walls` is in `vr_settings`, off with `--no-stand-on-walls`,
 and `surface.view_tilt_deg` is how far the view leans now, 90 standing on a
 wall; `--no-wall-run` leaves walls to the game's crawl; swing samples carry
 `wall` (0 none, 1 the swing's wall, 2 the game's crawl), `wall_normal`,
@@ -652,12 +660,32 @@ builds before October 10's eighth, and `--upscale 100` anti-aliasing alone.
 `--eye-shadows 0` and `--monitor-rate 0` are a session's `--own-shadows` and
 `--monitor-rate 0`; a phase named `vr_s0` (or `vr_s1`, `turn_s0`, ...) runs
 with that `--eye-shadows` value and `vr_m0` or `vr_m9` with every present or
-one a second, so one game compares them. Each VR phase also reports
+one a second, so one game compares them; with `--views 125` (the eyes' own
+lens distances) `vr_lod` and `turn_lod` run with the eyes' level-of-detail
+multiplier at `--eye-lod`. Each VR phase also reports
 `pose_age_ms` (how old the pose in the newest pair handed to the GPU is),
 `pairs_waiting_on_gpu`, `presents_held` and `shadows` (`SpidyShadowData`:
 each eye's cascades, and whether it took the other's).
 Measure from about 40 s after a save has loaded: until then the game is
 still streaming the city in, and frame rates read low.
+`tools/probe_streaming.py` reads the game's texture streamer while the eyes
+render: what each view's model jobs ask it for (its request tables), each
+view's distance numbers, and the game's own texture memory lines from its
+log. Its `fly` mode moves the eyes along a heading at swinging speed (`--lift`
+above the player, `--loop` back and forth) and saves the left eye on the
+way; `--views 125` against 61 compares the eyes' own lens distances with a
+session's, `--lens 32.5,32.5,19.7 --width 1920 --height 1080 --upscale 100`
+stands in for the game's own camera. Its held modes also switch what the
+game's own view does: `render` renders it again, `render_noimp` renders it
+without its impostor work (flag 0x100 masked out of the game's views),
+`noocc` takes its occlusion object away; `--views 189` starts the eyes
+without the left eye standing in for its impostors. A mode named `rest@200`
+runs with the far buildings' full models out to 200% of the game's distance
+(`SpidyImpostorReach`; `--reach` for the rest, 150 as in a session), `far`
+rewrites the game's own distance instead, and `--both` saves the right eye
+too. `--trace` counts each mode's render commands by view
+(`SpidyCommandTrace`). In `tools/probe_vr_load.py`, a phase named `vr_r200`
+(`turn_`, `narrow_` too) measures the same reach.
 
 The 1536-square test `game-vr-20261004-133248.json` confirmed VSync Off but still
 spent 29.76 ms of its 31.92 ms mean frame in the matching-pair wait. The staged

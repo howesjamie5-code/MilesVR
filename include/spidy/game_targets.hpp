@@ -115,12 +115,24 @@ bool inPlay(const Candidate&);
 // day with 0 hit points; BotStateWallStuck; the classes derived from them).
 // A fist lands on such a bot alone: a body on the floor is nobody to hit.
 bool up(uintptr_t base, const Candidate&);
-// An enemy in the fight: an enemy who is up. What a punch across the room,
-// a web, a web ball and the blow of a thrown thug take. The user, October 12,
-// with webs still taking the knocked out: "bodies are still targetable by
-// hands (for webbing i guess), they shouldnt be".
+// A bot whom something else moves, not his own legs: in one of the game's
+// states for that (BotStateAttachToActor, a car's seat among them;
+// BotStateCarried; a cinematic's; BotStateNull; the guest of another's
+// synced animation; a slotted interaction;
+// BotStateFrozen; BotStateRequestTakedownYank). Pulled out of that, the scene
+// he was in breaks: on October 18 a web took the thugs out of a car in a
+// chase, the game's own takedown never finished, the crime never ended and
+// the car drove on by itself; on October 15 one pulled hurt police officers
+// sitting in a burning car around the street.
+bool held(uintptr_t base, const Candidate&);
+// An enemy in the fight: an enemy who is up and free to fight - his own AI
+// moves him (not held). What a punch across the room, a web, a web ball and
+// the blow of a thrown thug take. The user, October 12, with webs still
+// taking the knocked out: "bodies are still targetable by hands (for webbing
+// i guess), they shouldnt be"; and since October 18 one rule for the car and
+// the police: only enemies who are free to fight.
 inline bool fighting(uintptr_t base, const Candidate& c) {
-    return enemy(c) && up(base, c);
+    return enemy(c) && up(base, c) && !held(base, c);
 }
 // A device that still stands: one with hit points left, where it has any
 // (a turret torn off and thrown has none).
