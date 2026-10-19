@@ -1147,21 +1147,23 @@ void App::optionsCard(ImVec2 size) {
         // What the venom hand's two buttons do with venom full, for the choice above, where no one can miss
         // it (the user, October 20: "i want this specified in the launcher to avoid confusion make it be
         // seen"). venom_punch::VenomButtons does it.
-        const char* hand = o.venomLeftHand ? "LEFT" : "RIGHT";
-        const char* venomButton = o.venomTrigger ? "TRIGGER" : "GRIP";
-        const char* webButton = o.venomTrigger ? "GRIP" : "TRIGGER";
-        const std::string heading = format("WITH VENOM FULL, YOUR %s HAND:", hand);
+        // The two ways round, as the user worded them; the one chosen above shows bright.
+        const std::string heading =
+            format("VENOM CONTROLS - YOUR %s HAND, WITH A VENOM BAR FULL", o.venomLeftHand ? "LEFT" : "RIGHT");
         const std::string lines[] = {
-            format("%s  -  hold: charge the venom fist. With a web attached: reel in.", venomButton),
-            format("%s  -  hold: shoot a web and swing. Tap: a web ball.", webButton),
+            "If Web button is on Grip and Venom button is on Trigger: tap the grip to web up enemies, hold the grip "
+            "to web-swing, and hold the trigger to charge your venom fist.",
+            "If Web button is on Trigger and Venom button is on Grip, it is the other way round: tap the trigger to "
+            "web up enemies, hold the trigger to web-swing, and hold the grip to charge your venom fist.",
             "Until a venom bar is full, the grip and trigger work as normal.",
         };
+        const size_t chosen = o.venomTrigger ? 0 : 1;
         auto* draw = ImGui::GetWindowDrawList();
         const ImVec2 at = ImGui::GetCursorScreenPos();
         const float width = ImGui::GetContentRegionAvail().x, inner = width - S(28);
         float height = S(12) + measure(fonts_.bold, S(13.5f), heading.c_str(), inner).y + S(6);
         for (const auto& line : lines)
-            height += measure(fonts_.semibold, S(13.5f), line.c_str(), inner).y + S(4);
+            height += measure(fonts_.semibold, S(13.5f), line.c_str(), inner).y + S(6);
         height += S(8);
         draw->AddRectFilled(ImVec2(at.x - S(10), at.y - S(4)), ImVec2(at.x + width + S(4), at.y + height),
                             col(kVenom, 0.16f), S(8));
@@ -1171,10 +1173,12 @@ void App::optionsCard(ImVec2 size) {
         draw->AddText(fonts_.bold, S(13.5f), ImVec2(at.x + S(4), y), col(kVenom), heading.c_str(), nullptr, inner);
         y += measure(fonts_.bold, S(13.5f), heading.c_str(), inner).y + S(6);
         for (size_t i = 0; i < std::size(lines); ++i) {
-            const bool last = i + 1 == std::size(lines);
-            draw->AddText(last ? fonts_.body : fonts_.semibold, S(13.5f), ImVec2(at.x + S(4), y),
-                          col(last ? kVenomBright : kText, last ? 0.8f : 1.f), lines[i].c_str(), nullptr, inner);
-            y += measure(last ? fonts_.body : fonts_.semibold, S(13.5f), lines[i].c_str(), inner).y + S(4);
+            const bool last = i + 1 == std::size(lines), bright = i == chosen;
+            ImFont* font = bright ? fonts_.semibold : fonts_.body;
+            draw->AddText(font, S(13.5f), ImVec2(at.x + S(4), y),
+                          col(bright ? kText : kVenomBright, bright ? 1.f : last ? 0.8f : 0.6f), lines[i].c_str(),
+                          nullptr, inner);
+            y += measure(font, S(13.5f), lines[i].c_str(), inner).y + S(6);
         }
         ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + height + S(14)));
         ImGui::Dummy(ImVec2(width, 0));

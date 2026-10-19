@@ -1,5 +1,17 @@
-MilesVR 0.1.42 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.43 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.42: THE VENOM CONTROLS BOX, REWORDED
+--------------------------------------------------
+The orange box under Venom button on the launcher's Play tab now reads:
+  If Web button is on Grip and Venom button is on Trigger: tap the grip
+  to web up enemies, hold the grip to web-swing, and hold the trigger to
+  charge your venom fist.
+  If Web button is on Trigger and Venom button is on Grip, it is the
+  other way round: tap the trigger to web up enemies, hold the trigger to
+  web-swing, and hold the grip to charge your venom fist.
+The sentence for your Venom button choice shows bright. Nothing else
+changed.
 
 What changed since 0.1.41: WEBS AND WEB BALLS WITH VENOM FULL, EITHER SETTING
 --------------------------------------------------
