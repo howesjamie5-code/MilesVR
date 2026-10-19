@@ -8,3 +8,4 @@ __pycache__/
 /dist/
 # The phone's songs, in a checkout the launcher's folder (phone_music.hpp).
 /Music/
+/.claude/settings.local.json
