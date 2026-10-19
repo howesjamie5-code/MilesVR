@@ -14,9 +14,9 @@ namespace text = spidy::launcher;
 namespace launcher {
 namespace {
 
-// Spidy's own releases are for Spider-Man Remastered; this port has no release feed yet, so it
-// checks none (an empty URL) rather than offer the Remastered build as an update.
-constexpr wchar_t kLatestUrl[] = L"";
+// MilesVR's own releases (0.1.37, the user's GitHub). Never Spidy's: those are for Spider-Man
+// Remastered, and installing one would replace MilesVR with it.
+constexpr wchar_t kLatestUrl[] = L"https://api.github.com/repos/howesjamie5-code/MilesVR/releases/latest";
 // Where an update works in Spidy's folder: the download, the new files, and the old files they replaced
 // (the running launcher among them). The next start clears it.
 constexpr wchar_t kWorkFolder[] = L".spidy-update";
@@ -93,7 +93,7 @@ bool get(const std::wstring& url, const wchar_t* headers, const std::function<bo
     if (status != 200) {
         error = status == 403 || status == 429
                     ? "GitHub turned the check away for now (too many from this network). Try again later."
-                : status == 404 ? "GitHub has no release of Spidy to offer."
+                : status == 404 ? "GitHub has no release of MilesVR to offer."
                                 : "GitHub answered with error " + std::to_string(status) + ".";
         return false;
     }
@@ -190,7 +190,7 @@ bool listFiles(const fs::path& folder, std::initializer_list<const wchar_t*> ski
         }
     }
     if (code)
-        error = "Spidy could not list " + narrow(folder.wstring()) + " (" + code.message() + ").";
+        error = "MilesVR could not list " + narrow(folder.wstring()) + " (" + code.message() + ").";
     return !code;
 }
 
@@ -212,7 +212,7 @@ bool move(const fs::path& from, const fs::path& to, std::vector<Move>& done, std
         if (attempt == 20 ||
             (code != ERROR_SHARING_VIOLATION && code != ERROR_ACCESS_DENIED && code != ERROR_LOCK_VIOLATION)) {
             error = "Windows kept " + narrow(from.filename().wstring()) + " in use (error " + std::to_string(code) +
-                    "): close what uses Spidy's files and try again.";
+                    "): close what uses MilesVR's files and try again.";
             return false;
         }
         Sleep(150);
@@ -328,7 +328,7 @@ void Updater::update(Release release) {
         status_.message = std::move(message);
     };
     if (const auto name = holder(folder_); !name.empty())
-        return fail("Close " + name + " first: it still uses Spidy's files.");
+        return fail("Close " + name + " first: it still uses MilesVR's files.");
     std::error_code ignored;
     fs::remove_all(work, ignored);
     fs::create_directories(work, ignored);
@@ -337,7 +337,7 @@ void Updater::update(Release release) {
     const fs::path zip = work / widen(release.zipName);
     const HANDLE file = CreateFileW(zip.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
-        return fail("Spidy could not write in its folder.");
+        return fail("MilesVR could not write in its folder.");
     uint64_t received = 0;
     std::string stopped, error;
     const bool downloaded = get(widen(release.zipUrl), L"Accept: application/octet-stream",
@@ -349,7 +349,7 @@ void Updater::update(Release release) {
                                         stopped = "The download is larger than the release says.";
                                     else if (!WriteFile(file, data, static_cast<DWORD>(size), &written, nullptr) ||
                                              written != size)
-                                        stopped = "Spidy could not save the download (is the drive full?).";
+                                        stopped = "MilesVR could not save the download (is the drive full?).";
                                     if (!stopped.empty())
                                         return false;
                                     received += size;
@@ -396,7 +396,7 @@ void Updater::update(Release release) {
             output.pop_back();
         return fail("The zip could not be unpacked" + (output.empty() ? std::string(".") : ": " + output));
     }
-    const fs::path package = unpacked / widen("Spidy-" + release.version);
+    const fs::path package = unpacked / widen("MilesVR-" + release.version);
     for (const auto* required : kRequired)
         if (!fs::is_regular_file(package / required, ignored))
             return fail("The release's zip lacks " + narrow(fs::path(required).make_preferred().wstring()) + ".");
@@ -407,7 +407,7 @@ void Updater::update(Release release) {
     const auto plan = text::updatePlan(installed, shipped);
     // The download took a while.
     if (const auto name = holder(folder_); !name.empty())
-        return fail("Close " + name + " first: it still uses Spidy's files.");
+        return fail("Close " + name + " first: it still uses MilesVR's files.");
 
     // Old files go to previous\ and the package's take their place. A failure puts everything back.
     const fs::path previous = work / L"previous";
@@ -454,7 +454,7 @@ bool restartLauncher(const std::wstring& folder, std::string& error) {
     PROCESS_INFORMATION info{};
     if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup,
                         &info)) {
-        error = "Spidy is updated, but Windows did not start its launcher (error " + std::to_string(GetLastError()) +
+        error = "MilesVR is updated, but Windows did not start its launcher (error " + std::to_string(GetLastError()) +
                 "). Start MilesVR Launcher from the MilesVR folder.";
         return false;
     }

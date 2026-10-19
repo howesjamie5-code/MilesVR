@@ -471,17 +471,17 @@ int main() {
 "author":{"login":"github-actions[bot]","id":41898282,"type":"Bot","site_admin":false},
 "tag_name":"v0.2.6","target_commitish":"main","name":"Spidy 0.2.6","draft":false,"immutable":false,
 "prerelease":false,"created_at":"2026-10-08T19:13:59Z","assets":[{"url":"https://api.github.com/x/622754987",
-"id":622754987,"name":"Spidy-0.2.6-win64.zip","label":"","uploader":{"login":"github-actions[bot]","id":41898282},
+"id":622754987,"name":"MilesVR-0.2.6-win64.zip","label":"","uploader":{"login":"github-actions[bot]","id":41898282},
 "content_type":"application/zip","state":"uploaded","size":12780581,
 "digest":"sha256:53d31980e78e2334b7274f2c3c07f627b2afbe7b76961a68bf5e565ef3ae9031","download_count":390,
-"browser_download_url":"https://github.com/IlyaMez/SpidyVR/releases/download/v0.2.6/Spidy-0.2.6-win64.zip"}],
-"body":"Extract the zip anywhere you can write and start **Spidy Launcher.exe**.\r\n\r\nSHA-256 of Spidy-0.2.6-win64.zip: `53D31980E78E2334B7274F2C3C07F627B2AFBE7B76961A68BF5E565EF3AE9031`\r\n\r\n## Changes since v0.2.5\r\n\r\n- Implement slow motion\r\n- Keep A pressed in the air\r\n"})";
+"browser_download_url":"https://github.com/IlyaMez/SpidyVR/releases/download/v0.2.6/MilesVR-0.2.6-win64.zip"}],
+"body":"Extract the zip anywhere you can write and start **Spidy Launcher.exe**.\r\n\r\nSHA-256 of MilesVR-0.2.6-win64.zip: `53D31980E78E2334B7274F2C3C07F627B2AFBE7B76961A68BF5E565EF3AE9031`\r\n\r\n## Changes since v0.2.5\r\n\r\n- Implement slow motion\r\n- Keep A pressed in the air\r\n"})";
     test("the newest release: its zip, size, SHA-256 and changes", [&] {
         std::string error;
         const auto release = parseRelease(latest, error);
         check(release.has_value(), error.c_str());
-        check(release->version == "0.2.6" && release->zipName == "Spidy-0.2.6-win64.zip", "version and zip");
-        check(release->zipUrl == "https://github.com/IlyaMez/SpidyVR/releases/download/v0.2.6/Spidy-0.2.6-win64.zip",
+        check(release->version == "0.2.6" && release->zipName == "MilesVR-0.2.6-win64.zip", "version and zip");
+        check(release->zipUrl == "https://github.com/IlyaMez/SpidyVR/releases/download/v0.2.6/MilesVR-0.2.6-win64.zip",
               "download address");
         check(release->zipSize == 12780581, "size");
         check(release->sha256 == "53d31980e78e2334b7274f2c3c07f627b2afbe7b76961a68bf5e565ef3ae9031", "digest");
@@ -500,8 +500,8 @@ int main() {
               "from the notes, in lower case");
         const std::string unchecked = replace(replace(latest, digest, "null"), "SHA-256 of", "Hash of");
         check(!parseRelease(unchecked, error) && error.find("no SHA-256") != std::string::npos, error.c_str());
-        check(!parseRelease(replace(latest, "\"name\":\"Spidy-0.2.6-win64.zip\"", "\"name\":\"other.zip\""), error) &&
-                  error == "Spidy 0.2.6 has no Spidy-0.2.6-win64.zip to download.",
+        check(!parseRelease(replace(latest, "\"name\":\"MilesVR-0.2.6-win64.zip\"", "\"name\":\"other.zip\""), error) &&
+                  error == "MilesVR 0.2.6 has no MilesVR-0.2.6-win64.zip to download.",
               "another asset only");
         check(!parseRelease(replace(latest, "\"https://github.com/IlyaMez/SpidyVR/releases/download",
                                     "\"http://github.com/IlyaMez/SpidyVR/releases/download"),

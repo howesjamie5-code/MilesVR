@@ -39,7 +39,7 @@ inline bool newerVersion(std::string_view candidate, std::string_view current) {
 struct Release {
     std::string version;              // "0.2.7"
     std::string page;                 // its page on GitHub
-    std::string zipName, zipUrl;      // the player zip, Spidy-<version>-win64.zip
+    std::string zipName, zipUrl;      // the player zip, MilesVR-<version>-win64.zip
     uint64_t zipSize{};
     std::string sha256;               // the zip's, 64 lower-case hex digits
     std::vector<std::string> changes; // its notes' list of changes
@@ -62,7 +62,7 @@ inline std::optional<Release> parseRelease(std::string_view answer, std::string&
         return std::nullopt;
     }
     release.page = root->text("html_url");
-    release.zipName = "Spidy-" + release.version + "-win64.zip";
+    release.zipName = "MilesVR-" + release.version + "-win64.zip";
     const auto hex = [](std::string text) -> std::string {
         for (char& c : text)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -80,7 +80,7 @@ inline std::optional<Release> parseRelease(std::string_view answer, std::string&
                 release.sha256 = hex(digest.substr(7));
         }
     if (release.zipUrl.rfind("https://", 0) != 0 || !release.zipSize) {
-        error = "Spidy " + release.version + " has no " + release.zipName + " to download.";
+        error = "MilesVR " + release.version + " has no " + release.zipName + " to download.";
         return std::nullopt;
     }
     const std::string body = root->text("body");
@@ -90,7 +90,7 @@ inline std::optional<Release> parseRelease(std::string_view answer, std::string&
             release.sha256 = hex(body.substr(at + label.size(), 64));
     }
     if (release.sha256.empty()) {
-        error = "Spidy " + release.version + " gives no SHA-256 for its zip, so it cannot be checked.";
+        error = "MilesVR " + release.version + " gives no SHA-256 for its zip, so it cannot be checked.";
         return std::nullopt;
     }
     for (size_t at = 0; at < body.size();) {

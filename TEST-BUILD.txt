@@ -1,5 +1,18 @@
-MilesVR 0.1.36 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.37 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.36: UPDATES FROM GITHUB
+--------------------------------------------------
+The launcher checks MilesVR's own GitHub releases again
+(github.com/howesjamie5-code/MilesVR) as it starts, and offers a newer
+build with an "Update now" button on the Play tab. It only ever looks at
+MilesVR's releases, never Spidy's. The About tab's UPDATES card shows the
+check, has "Check now" and "All releases", and a switch to turn the check
+at start off. Your settings, reports and Music folder stay when it updates.
+
+What to try:
+1. Start the launcher: the Play tab should offer the newest MilesVR on
+   GitHub. Press "Update now": it downloads, installs and starts again.
 
 What changed since 0.1.35: VENOM DASH SCRAPPED
 --------------------------------------------------

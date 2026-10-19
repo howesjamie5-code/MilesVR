@@ -1,5 +1,5 @@
 #pragma once
-// Spidy's own updates: the newest release on GitHub, and, when the player asks, its zip
+// MilesVR's own updates: the newest release on GitHub, and, when the player asks, its zip
 // downloaded, checked against its SHA-256 and put in place of this folder's files. The
 // launcher then starts again from the new files (restartLauncher).
 #include <spidy/launcher_update.hpp>
@@ -14,7 +14,7 @@
 namespace launcher {
 using spidy::launcher::Release;
 
-inline constexpr const char* kReleasesUrl = "https://github.com/IlyaMez/SpidyVR/releases";
+inline constexpr const char* kReleasesUrl = "https://github.com/howesjamie5-code/MilesVR/releases";
 
 enum class UpdateState { idle, checking, current, available, checkFailed, downloading, installing, installed, installFailed };
 

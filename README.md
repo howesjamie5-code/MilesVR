@@ -55,6 +55,9 @@ New for Miles:
 
 Keep the game window in front on the desktop: the game pauses behind other windows.
 
+From 0.1.37 the launcher checks this page's releases as it starts and offers each new MilesVR
+with an **Update now** button: your settings, reports and songs stay.
+
 For the phone's music, put mp3, wav, wma, m4a or aac files in the `Music` folder next to
 `MilesVR Launcher.exe`.
 

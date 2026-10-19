@@ -138,9 +138,9 @@ App::App(HWND window, Fonts fonts, std::string updatedFrom)
     : window_(window), fonts_(fonts), settings_(loadSettings()), installFolder_(installFolder()),
       updatedFrom_(std::move(updatedFrom)) {
     scanner_.start(settings_);
-    // MilesVR never asks for updates: the updater only knows Spidy's releases, and installing one would
-    // replace MilesVR with Spidy. New MilesVR builds come as their own zip.
-    updater_.start(installFolder_, false);
+    // A player's copy asks GitHub for a newer MilesVR as it starts (update.cpp's kLatestUrl: MilesVR's own
+    // releases, never Spidy's), unless the player turned that off.
+    updater_.start(installFolder_, !installFolder_.empty() && settings_.updateCheck);
 }
 
 App::~App() {
@@ -673,7 +673,7 @@ void App::shortcutBanner(float width) {
 
 std::string App::updateBlocker() {
     if (installFolder_.empty())
-        return "This launcher runs from a Spidy checkout, which git updates.";
+        return "This launcher runs from a MilesVR checkout, which git updates.";
     if (session_.running())
         return "Stop VR first.";
     if (!scan_.done || scanner_.busy() || headset_.state() == Outcome::running ||
@@ -706,12 +706,12 @@ float App::updateBanner(float width) {
         const char* version = release->version.c_str();
         if (state == UpdateState::downloading) {
             const double total = static_cast<double>(std::max<uint64_t>(update_.total, 1));
-            message = format("Downloading Spidy %s...  %.0f%%  (%.1f of %.1f MB)", version,
+            message = format("Downloading MilesVR %s...  %.0f%%  (%.1f of %.1f MB)", version,
                              100.0 * update_.received / total, update_.received / 1048576.0, total / 1048576.0);
             buttons.push_back({"Cancel", false, true, "", [&] { updater_.cancel(); }});
         } else {
-            message = format(state == UpdateState::installing ? "Installing Spidy %s..."
-                                                              : "Spidy %s is installed. Starting it...",
+            message = format(state == UpdateState::installing ? "Installing MilesVR %s..."
+                                                              : "MilesVR %s is installed. Starting it...",
                              version);
         }
     } else if (offer) {
@@ -720,8 +720,8 @@ float App::updateBanner(float width) {
             changes += (changes.empty() ? "\xE2\x80\xA2  " : "\n\xE2\x80\xA2  ") + release->changes[i];
         const std::string page = release->page.empty() ? kReleasesUrl : release->page;
         const std::string blocker = updateBlocker();
-        message = failed ? format("Updating to Spidy %s failed: %s", release->version.c_str(), update_.message.c_str())
-                         : format("Spidy %s is out: you have %s. Updating takes a few seconds; your settings and "
+        message = failed ? format("Updating to MilesVR %s failed: %s", release->version.c_str(), update_.message.c_str())
+                         : format("MilesVR %s is out: you have %s. Updating takes a few seconds; your settings and "
                                   "reports stay.",
                                   release->version.c_str(), kVersion);
         buttons.push_back({"What's new", false, true, changes, [page] { openUrl(page.c_str()); }});
@@ -729,7 +729,7 @@ float App::updateBanner(float width) {
                            [&] { updater_.install(); }});
         buttons.push_back({"Later", false, true, "", [&] { updateLater_ = true; }});
     } else {
-        message = format("Spidy is updated: %s to %s.", updatedFrom_.c_str(), kVersion);
+        message = format("MilesVR is updated: %s to %s.", updatedFrom_.c_str(), kVersion);
         const std::string page = std::string(kReleasesUrl) + "/tag/v" + kVersion;
         buttons.push_back({"What's new", false, true, "", [page] { openUrl(page.c_str()); }});
         buttons.push_back({"OK", false, true, "", [&] { updatedFrom_.clear(); }});
@@ -1792,11 +1792,66 @@ void App::updatesCard(float width) {
         return endCard();
     cardTitle("UPDATES");
     ImGui::Dummy(ImVec2(0, S(4)));
+    const auto& release = update_.release;
+    const bool available = release && (update_.state == UpdateState::available ||
+                                       update_.state == UpdateState::installFailed);
+    std::string status;
+    switch (update_.state) {
+    case UpdateState::idle:
+        status = installFolder_.empty() ? "This launcher runs from a MilesVR checkout, which git updates."
+                                        : "Not checked yet.";
+        break;
+    case UpdateState::checking: status = "Asking GitHub for the newest MilesVR..."; break;
+    case UpdateState::current:
+        status = format("MilesVR %s is the newest version (checked at %s).", kVersion, update_.checkedAt.c_str());
+        break;
+    case UpdateState::available:
+        status = format("MilesVR %s is out: you have %s.", release->version.c_str(), kVersion);
+        break;
+    case UpdateState::checkFailed: status = "The check failed. " + update_.message; break;
+    case UpdateState::downloading:
+    case UpdateState::installing:
+    case UpdateState::installed: status = format("Updating to MilesVR %s.", release->version.c_str()); break;
+    case UpdateState::installFailed: status = "The update failed. " + update_.message; break;
+    }
     ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
-    ImGui::TextWrapped("MilesVR %s. It does not check for updates, and a new Spidy release never replaces it: "
-                       "new MilesVR builds come as their own zip.",
-                       kVersion);
+    ImGui::TextWrapped("%s", status.c_str());
     ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, S(10)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(10), 0));
+    option("Check when MilesVR starts", "Asks GitHub for a newer MilesVR. Updating waits for your click.", S(40), [&] {
+        if (toggle("##updateCheck", &settings_.updateCheck))
+            save();
+    });
+    ImGui::PopStyleVar();
+    const float half = (ImGui::GetContentRegionAvail().x - S(8)) * 0.5f;
+    if (available && !installFolder_.empty()) {
+        // The Play tab's banner shows how it goes.
+        const std::string blocker = updateBlocker();
+        ImGui::BeginDisabled(!blocker.empty());
+        ImGui::PushStyleColor(ImGuiCol_Button, vec(kRed));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(kRedHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({190, 20, 42}));
+        if (secondaryButton("Update now", half)) {
+            updateLater_ = false;
+            tab_ = Tab::play;
+            updater_.install();
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
+        if (!blocker.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", blocker.c_str());
+    } else {
+        ImGui::BeginDisabled(updater_.busy() || update_.state == UpdateState::installed);
+        if (secondaryButton(fonts_.icons ? (std::string(kRefresh) + "  Check now").c_str() : "Check now", half)) {
+            updateLater_ = false;
+            updater_.check();
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine(0, S(8));
+    if (secondaryButton(fonts_.icons ? (std::string(kOpen) + "  All releases").c_str() : "All releases", half))
+        openUrl(kReleasesUrl);
     ImGui::Dummy(ImVec2(0, S(2)));
     endCard();
 }
