@@ -136,8 +136,9 @@ App::App(HWND window, Fonts fonts, std::string updatedFrom)
     : window_(window), fonts_(fonts), settings_(loadSettings()), installFolder_(installFolder()),
       updatedFrom_(std::move(updatedFrom)) {
     scanner_.start(settings_);
-    // A player's copy asks GitHub for a newer Spidy as it starts, unless the player turned that off.
-    updater_.start(installFolder_, !installFolder_.empty() && settings_.updateCheck);
+    // MilesVR never asks for updates: the updater only knows Spidy's releases, and installing one would
+    // replace MilesVR with Spidy. New MilesVR builds come as their own zip.
+    updater_.start(installFolder_, false);
 }
 
 App::~App() {
@@ -1735,64 +1736,11 @@ void App::updatesCard(float width) {
         return endCard();
     cardTitle("UPDATES");
     ImGui::Dummy(ImVec2(0, S(4)));
-    const auto& release = update_.release;
-    const bool available = release && (update_.state == UpdateState::available ||
-                                       update_.state == UpdateState::installFailed);
-    std::string status;
-    switch (update_.state) {
-    case UpdateState::idle:
-        status = installFolder_.empty() ? "This launcher runs from a Spidy checkout, which git updates."
-                                        : "Not checked yet.";
-        break;
-    case UpdateState::checking: status = "Asking GitHub for the newest Spidy..."; break;
-    case UpdateState::current:
-        status = format("Spidy %s is the newest version (checked at %s).", kVersion, update_.checkedAt.c_str());
-        break;
-    case UpdateState::available: status = format("Spidy %s is out: you have %s.", release->version.c_str(), kVersion); break;
-    case UpdateState::checkFailed: status = "The check failed. " + update_.message; break;
-    case UpdateState::downloading:
-    case UpdateState::installing:
-    case UpdateState::installed: status = format("Updating to Spidy %s.", release->version.c_str()); break;
-    case UpdateState::installFailed: status = "The update failed. " + update_.message; break;
-    }
     ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
-    ImGui::TextWrapped("%s", status.c_str());
+    ImGui::TextWrapped("MilesVR %s. It does not check for updates, and a new Spidy release never replaces it: "
+                       "new MilesVR builds come as their own zip.",
+                       kVersion);
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, S(10)));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(10), 0));
-    option("Check when Spidy starts", "Asks GitHub for a newer Spidy. Updating waits for your click.", S(40), [&] {
-        if (toggle("##updateCheck", &settings_.updateCheck))
-            save();
-    });
-    ImGui::PopStyleVar();
-    const float half = (ImGui::GetContentRegionAvail().x - S(8)) * 0.5f;
-    if (available && !installFolder_.empty()) {
-        // The Play tab's banner shows how it goes.
-        const std::string blocker = updateBlocker();
-        ImGui::BeginDisabled(!blocker.empty());
-        ImGui::PushStyleColor(ImGuiCol_Button, vec(kRed));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(kRedHover));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({190, 20, 42}));
-        if (secondaryButton("Update now", half)) {
-            updateLater_ = false;
-            tab_ = Tab::play;
-            updater_.install();
-        }
-        ImGui::PopStyleColor(3);
-        ImGui::EndDisabled();
-        if (!blocker.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", blocker.c_str());
-    } else {
-        ImGui::BeginDisabled(updater_.busy() || update_.state == UpdateState::installed);
-        if (secondaryButton(fonts_.icons ? (std::string(kRefresh) + "  Check now").c_str() : "Check now", half)) {
-            updateLater_ = false;
-            updater_.check();
-        }
-        ImGui::EndDisabled();
-    }
-    ImGui::SameLine(0, S(8));
-    if (secondaryButton(fonts_.icons ? (std::string(kOpen) + "  All releases").c_str() : "All releases", half))
-        openUrl(kReleasesUrl);
     ImGui::Dummy(ImVec2(0, S(2)));
     endCard();
 }

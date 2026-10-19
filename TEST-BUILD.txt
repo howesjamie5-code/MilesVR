@@ -1,5 +1,17 @@
-MilesVR 0.1.26 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.27 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.26: NO MORE SPIDY UPDATES
+--------------------------------------------------
+The launcher came from Spidy, and it asked Spidy's GitHub page for new
+versions: a new Spidy release would have offered to "update" MilesVR,
+which would have replaced it with Spidy. The launcher no longer checks for
+updates at all. The About tab's UPDATES card now just says so; the
+"Check when Spidy starts" switch, Check now and All releases are gone.
+
+What to try:
+1. Open the launcher: no update banner, and the About tab's UPDATES card
+   shows the version only.
 
 What changed since 0.1.25: THE MILES MORALES LAUNCHER
 --------------------------------------------------
