@@ -66,11 +66,11 @@ struct XrConfig {
     // bit 4: no eye occlusion (each eye draws everything in its view, hidden or not);
     // bit 5: no body (the hero stays hidden in VR, the overlay draws gloves);
     // bit 6: no punching (fists pass through thugs);
-    // bit 7: aim markers start hidden (the SPIDY VR tab shows them);
+    // bit 7: aim markers start hidden (the MILES VR tab shows them);
     // bit 8: no webs in open air (a web that meets nothing within reach misses);
     // bit 9: no web shooter (a free hand's trigger shoots nothing);
     // bit 10: no T-pose calibration at the first gameplay of a session without
-    // one (the player skipped it before; the SPIDY VR tab still offers it);
+    // one (the player skipped it before; the MILES VR tab still offers it);
     // bit 11: flips, experimental (A and the left stick in the air flip the player; FlipMotion);
     // bit 12: the trigger webs and the grip reels (WEB BUTTON: TRIGGER);
     // bit 13: the view stays upright on walls (STAND ON WALLS: OFF);
@@ -165,11 +165,11 @@ struct XrData {
     // drawn so far, one per hand per headset frame that shows one.
     uint32_t interacts{}, aimMarkers{};
     uint64_t markers{};
-    // The VR settings now: the SPIDY VR tab in the game's Settings changes
+    // The VR settings now: the MILES VR tab in the game's Settings changes
     // them during play. settings bits: 1 web grab,
     // 2 punch, 4 body, 8 webs in open air, 16 web shooter, 32 flips, 64 the
     // trigger webs (WEB BUTTON: TRIGGER; the grip reels), 128 STAND ON WALLS,
-    // 256 PHYSICAL WEBS.
+    // 256 PHYSICAL WEBS until October 15; in MilesVR, 256 VENOM HAND: LEFT.
     // Then the changes
     // made in that tab so far, the times the game built its Settings with it,
     // whether its hooks are in, and why it is missing (game_menu: 93xx-94xx
@@ -703,7 +703,7 @@ DWORD WINAPI run(void*) {
         // The VR settings are a tab of the game's own Settings (game_menu).
         const uint32_t menuCode = game_menu::install(config.base);
         if (menuCode) {
-            const auto text = "No SPIDY VR tab in the game's Settings (" + std::to_string(menuCode) +
+            const auto text = "No MILES VR tab in the game's Settings (" + std::to_string(menuCode) +
                               "); the launcher's settings apply";
             message(3, 0, text.c_str());
         }
@@ -873,7 +873,7 @@ DWORD WINAPI run(void*) {
         // A dodge the game itself slows time for is its perfect dodge: for a
         // moment after B went down with the game's time at full speed.
         float dodgeWatch{};
-        // The VR settings: the launch options, then the SPIDY VR tab in the
+        // The VR settings: the launch options, then the MILES VR tab in the
         // game's Settings during play.
         vr_settings::Values values;
         values.aimMarkers = !(config.options & 128);
@@ -884,9 +884,11 @@ DWORD WINAPI run(void*) {
         values.webShooter = !(config.options & 512);
         values.flips = config.options & 2048;
         values.triggerWebs = config.options & 4096;
-        // Miles's venom punch: the left hand's, or the right's (the launcher's Venom punch hand).
-        const unsigned venomSide = config.options & 0x200000 ? 0u : 1u;
-        const char* const venomName = venomSide ? "right" : "left";
+        // Miles's venom punch: the left hand's, or the right's (the launcher's Venom punch hand, and
+        // the MILES VR tab's VENOM HAND during play: applySettings moves it).
+        values.venomLeftHand = config.options & 0x200000;
+        unsigned venomSide = values.venomLeftHand ? 0u : 1u;
+        const char* venomName = venomSide ? "right" : "left";
         values.standOnWalls = !(config.options & 8192);
         values.swingSpeed = config.swingSpeed;
         values.snapTurn = static_cast<int>(config.snapTurn);
@@ -1033,7 +1035,7 @@ DWORD WINAPI run(void*) {
         // launch's, or one made in this session), else the headset's running
         // height and the hero's own arms. A session with the body and without
         // a calibration asks for one at its first gameplay unless the player
-        // skipped it before; the SPIDY VR tab asks again (CALIBRATE BODY: ON
+        // skipped it before; the MILES VR tab asks again (CALIBRATE BODY: ON
         // RESUME).
         float calibratedEye = static_cast<float>(config.eyeHeightMm) / 1000;
         float calibratedArm = static_cast<float>(config.armLengthMm) / 1000;
@@ -1141,6 +1143,16 @@ DWORD WINAPI run(void*) {
             rig.triggerWebs(values.triggerWebs);
             rig.standOnWalls(values.standOnWalls);
             native_hud::setSize(values.hud);
+            // VENOM HAND moves the venom to the other hand, uncharged (the tab is open, so the game is paused).
+            if (const unsigned side = values.venomLeftHand ? 0u : 1u; side != venomSide) {
+                venomSide = side;
+                venomName = venomSide ? "right" : "left";
+                venomCharge = {};
+                venomGrip = venomGlow = 0;
+                venomHandBefore = venomKeepWeb = venomStickBefore = venomStickTaken = venomRelSeen = false;
+                const auto text = std::string("Venom hand: ") + venomName;
+                message(2, 0, text.c_str());
+            }
             if (swingStarted && swingSettings) {
                 game_swing::Settings s;
                 s.grab = values.webGrab && sampleGrab;
@@ -1288,7 +1300,7 @@ DWORD WINAPI run(void*) {
                     const bool viewing = frame.focused && frame.valid;
                     displayTime = frame.predictedDisplayTime;
                     // The game as it is, on its screen, instead of VR: the
-                    // SPIDY VR tab's VIEW (a click of both thumbsticks until
+                    // MILES VR tab's VIEW (a click of both thumbsticks until
                     // October 12). Its gameplay is the game screen's, in 3D
                     // as scenes are there, the controllers an Xbox
                     // controller's, and nothing of Spidy's on the hero.
@@ -1535,7 +1547,7 @@ DWORD WINAPI run(void*) {
                     game_prompts::setReading(false);
                     game_prompts::setRewriting(false);
                     (void)promptHelp;
-                    // A change in the SPIDY VR tab takes effect at once.
+                    // A change in the MILES VR tab takes effect at once.
                     if (game_menu::take(values)) {
                         ++settingChanges;
                         applySettings();
@@ -1570,7 +1582,7 @@ DWORD WINAPI run(void*) {
                     wasGameplay = vrPlay;
                     const bool controlsVisible = recentPresentation(lastNewImageMs, GetTickCount64());
                     // The T-pose calibration: at the first gameplay of a session
-                    // without one, or when the SPIDY VR tab asks for it, once VR
+                    // without one, or when the MILES VR tab asks for it, once VR
                     // has shown play for a moment and no web flies the player. It
                     // goes on only while VR shows play (a pause or the flat
                     // screen holds it), and B skips it.
@@ -1601,7 +1613,7 @@ DWORD WINAPI run(void*) {
                         // Nor at the next sessions' first gameplay (the launcher keeps it).
                         calibrationWanted = calibrationPrompt = false;
                         runtime.haptic(1, .25f);
-                        message(3, 0, "Body calibration skipped - Settings > SPIDY VR > CALIBRATE BODY does it later");
+                        message(3, 0, "Body calibration skipped - Settings > MILES VR > CALIBRATE BODY does it later");
                     } else if (calibration.phase() != CalibrationPhase::idle && immersive) {
                         body_calibration::Sample sample;
                         sample.headTracked = validTrackedPose(frame.head);
@@ -2764,7 +2776,7 @@ DWORD WINAPI run(void*) {
                         d.settings = (values.webGrab ? 1u : 0u) | (values.punch ? 2u : 0u) | (values.body ? 4u : 0u) |
                                      (values.airWebs ? 8u : 0u) | (values.webShooter ? 16u : 0u) |
                                      (values.flips ? 32u : 0u) | (values.triggerWebs ? 64u : 0u) |
-                                     (values.standOnWalls ? 128u : 0u);
+                                     (values.standOnWalls ? 128u : 0u) | (values.venomLeftHand ? 256u : 0u);
                         d.scans = templePress.scans();
                         d.chargeJumps = chargeJump.charges();
                         const auto prompts = game_prompts::live();
@@ -3629,7 +3641,7 @@ DWORD WINAPI run(void*) {
                                   "Xbox controller; VR settings are in the launcher - VR resumes with gameplay"
                             : drawn == Presentation::stereoScreen
                                 ? "Game screen in 3D (a cutscene or another scene the game plays): the "
-                                  "controllers work as an Xbox controller - Settings > SPIDY VR > GAME SCREEN 3D "
+                                  "controllers work as an Xbox controller - Settings > MILES VR > GAME SCREEN 3D "
                                   "sets its depth"
                             : drawn == Presentation::flat
                                 ? "Flat screen - pause, SWITCH TO VR goes back to VR"

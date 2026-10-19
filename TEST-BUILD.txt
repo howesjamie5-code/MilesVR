@@ -1,5 +1,33 @@
-MilesVR 0.1.27 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.28 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.27: THE MILES VR TAB IN THE GAME'S SETTINGS
+--------------------------------------------------
+Spidy's in-game settings page, ported to Miles Morales. Miles Morales
+stores its Settings menu differently from Spider-Man (bigger rows and
+choices, the tab list moved, its own tab builder), so it was off until now.
+In the game: pause > Settings > go Up from the first tab (the list wraps)
+to MILES VR. Its rows look and work like the game's own (left/right to
+change, X reset, Y reset all) and take effect at once:
+  WEBS: web button, aim markers, webs in open air, swing speed, weight
+  VENOM (new): VENOM HAND - RIGHT or LEFT, the hand Miles's venom charges in
+  BODY: calibrate body
+  COMFORT: snap turn, smooth turn, vibration, game screen size and 3D, HUD
+  EXPERIMENTAL: flips, flip speed
+VR VIEW (switch to the game screen) is back on the pause menu's first
+page, under RESUME. What you change there is kept by the launcher for the
+next session (Venom hand included).
+This was worked out from the game's code without running it, so it is the
+first try: if the tab is missing, the session log says why ("No MILES VR
+tab ... (code)") - tell me the code.
+
+What to try:
+1. Pause, Settings, Up to MILES VR. Is it there? Do the rows show their
+   names and values? Change a few (e.g. SNAP TURN, HUD) and resume: do they
+   apply?
+2. VENOM HAND: LEFT, resume, charge the left grip and punch.
+3. Pause menu: is "SWITCH TO GAME SCREEN" under RESUME, and does it work?
+4. If the game crashes opening Settings, tell me exactly when.
 
 What changed since 0.1.26: NO MORE SPIDY UPDATES
 --------------------------------------------------

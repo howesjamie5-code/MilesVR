@@ -179,7 +179,7 @@ struct Data {
 };
 static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 200 &&
               offsetof(Command, tilt) == commandBytesV2 && offsetof(Command, leap) == commandBytesV3);
-// SpidySwingSettings: what the VR settings (the SPIDY VR tab in the game's
+// SpidySwingSettings: what the VR settings (the MILES VR tab in the game's
 // Settings) change during play.
 // grab: webs catch props and thugs (a swing started without them starts
 // them here); off lets go of what they hold. maxSpeed: the speed limit, up to

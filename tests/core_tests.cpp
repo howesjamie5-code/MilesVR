@@ -8779,7 +8779,7 @@ int main() {
               "NaN assist accepted");
         check(!bad([](ShooterConfig&) {}), "defaults rejected");
     });
-    test("VR settings tab: four sections, every setting once, a list's choices one per step", [] {
+    test("VR settings tab: five sections, every setting once, a list's choices one per step", [] {
         using namespace vr_settings;
         const auto& all = rows();
         unsigned seen = 0, headings = 0;
@@ -8799,12 +8799,17 @@ int main() {
             for (const char* c : row.choices)
                 check(c && *c, "an empty choice");
         }
-        check(headings == 4 && all[0].item == Item::none && all[6].item == Item::none && all[8].item == Item::none &&
-                  all[16].item == Item::none,
-              "the sections: webs, body, comfort, experimental");
-        check(all[17].item == Item::flips && all[17].choices.empty() && std::strcmp(all[16].title, "EXPERIMENTAL") == 0,
+        check(headings == 5 && all[0].item == Item::none && all[6].item == Item::none && all[8].item == Item::none &&
+                  all[10].item == Item::none && all[18].item == Item::none,
+              "the sections: webs, venom, body, comfort, experimental");
+        // Miles's venom (MilesVR): the hand it charges in, RIGHT or LEFT, as the launcher's Venom punch hand.
+        check(std::strcmp(all[6].title, "VENOM") == 0 && all[7].item == Item::venomHand &&
+                  all[7].choices.size() == 2 && std::strcmp(all[7].choices[0], "RIGHT") == 0 &&
+                  std::strcmp(all[7].choices[1], "LEFT") == 0,
+              "the venom hand under VENOM: RIGHT, or LEFT");
+        check(all[19].item == Item::flips && all[19].choices.empty() && std::strcmp(all[18].title, "EXPERIMENTAL") == 0,
               "the flips: a switch under EXPERIMENTAL");
-        check(all.size() == 19 && all[18].item == Item::flipSpeed && all[18].choices.size() == std::size(flipSpeeds),
+        check(all.size() == 21 && all[20].item == Item::flipSpeed && all[20].choices.size() == std::size(flipSpeeds),
               "the flip speed under the flips, the last row");
         // The wall view has no row of its own any more: it turned only while
         // Spidy held the player on a wall, so it was never a choice of its own
@@ -8814,18 +8819,18 @@ int main() {
         // then "also merge the two options").
         for (const auto& row : all)
             check(row.item != Item::standOnWalls, "the wall view still has a row of its own");
-        check(all[13].item == Item::screenSize && all[15].item == Item::hud && all[15].choices.size() == 4 &&
-                  std::strcmp(all[15].choices[0], "OFF") == 0 && std::strcmp(all[15].choices[3], "LARGE") == 0,
+        check(all[15].item == Item::screenSize && all[17].item == Item::hud && all[17].choices.size() == 4 &&
+                  std::strcmp(all[17].choices[0], "OFF") == 0 && std::strcmp(all[17].choices[3], "LARGE") == 0,
               "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
-        check(all[14].item == Item::screenDepth && std::strcmp(all[14].title, "GAME SCREEN 3D") == 0 &&
-                  all[14].choices.size() == 4 && std::strcmp(all[14].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[14].choices[3], "HIGH") == 0,
+        check(all[16].item == Item::screenDepth && std::strcmp(all[16].title, "GAME SCREEN 3D") == 0 &&
+                  all[16].choices.size() == 4 && std::strcmp(all[16].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[16].choices[3], "HIGH") == 0,
               "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
         // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
         for (const auto& row : all)
             check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
-        check(all[12].item == Item::view && std::strcmp(all[12].title, "VR VIEW") == 0 && all[12].choices.size() == 2 &&
-                  std::strcmp(all[12].choices[0], "VR") == 0 && std::strcmp(all[12].choices[1], "GAME SCREEN") == 0,
+        check(all[14].item == Item::view && std::strcmp(all[14].title, "VR VIEW") == 0 && all[14].choices.size() == 2 &&
+                  std::strcmp(all[14].choices[0], "VR") == 0 && std::strcmp(all[14].choices[1], "GAME SCREEN") == 0,
               "the view above the game screen's rows: VR, or GAME SCREEN");
         // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is.
         for (const auto& row : all)
@@ -8834,8 +8839,8 @@ int main() {
                   std::strcmp(all[1].choices[0], "GRIP") == 0 && std::strcmp(all[1].choices[1], "TRIGGER") == 0,
               "the web button first under WEBS: GRIP, or TRIGGER");
         check(all[4].item == Item::swingSpeed && all[5].item == Item::weight, "the weight under the swing speed");
-        check(all[7].item == Item::calibrate && all[7].choices.size() == 2 &&
-                  std::strcmp(all[7].choices[1], "ON RESUME") == 0,
+        check(all[9].item == Item::calibrate && all[9].choices.size() == 2 &&
+                  std::strcmp(all[9].choices[1], "ON RESUME") == 0,
               "the body's calibration: NO, or ON RESUME");
         // Every setting has a row but the wall view, which the launcher's one
         // "Wall running" now carries along with who holds you on the wall.
@@ -8909,6 +8914,10 @@ int main() {
                   choose(Item::view, 1, v) && v.flatScreen && choice(Item::view, v) == 1 &&
                   !choose(Item::view, 2, v) && choose(Item::view, 0, v) && !v.flatScreen,
               "the view: VR by default, GAME SCREEN the other choice");
+        check(!defaults.venomLeftHand && defaultChoice(Item::venomHand) == 0 && choose(Item::venomHand, 1, v) &&
+                  v.venomLeftHand && !choose(Item::venomHand, 2, v) && choose(Item::venomHand, 0, v) &&
+                  !v.venomLeftHand,
+              "the venom hand: RIGHT by default, LEFT the other choice");
         check(defaults.standOnWalls && choice(Item::standOnWalls, defaults) == 1 &&
                   defaultChoice(Item::standOnWalls) == 1 && choose(Item::standOnWalls, 0, v) && !v.standOnWalls &&
                   !choose(Item::standOnWalls, 0, v) && choose(Item::standOnWalls, 1, v) && v.standOnWalls,

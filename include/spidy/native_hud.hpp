@@ -40,7 +40,7 @@ struct Shape {
     // spans, as a tangent (0.577: 30 degrees each side).
     float distance = 2.f, halfWidth = .577f;
 };
-// The HUD's sizes (the SPIDY VR tab's HUD: 0 off, 1 small, 2 medium, 3 large):
+// The HUD's sizes (the MILES VR tab's HUD: 0 off, 1 small, 2 medium, 3 large):
 // the degrees the panel spans across.
 inline constexpr float widths[] = {0, 50, 60, 70};
 // Half a size's width as a tangent (medium for one out of range); 0 off.

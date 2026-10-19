@@ -664,7 +664,7 @@ class PadLayer {
     float held_{}, idle_{};
     uint32_t entries_{};
 };
-// The game played on its own screen (the SPIDY VR tab's VIEW: GAME SCREEN):
+// The game played on its own screen (the MILES VR tab's VIEW: GAME SCREEN):
 // every control as on an Xbox controller, as on the game screen
 // (Mapping::menus), and the two that no VR controller but the Steam Frame's
 // has. Back (the game's map) is the menu button held holdSeconds; a shorter

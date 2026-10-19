@@ -21,6 +21,8 @@ constexpr const char* webButtonChoices[] = {"GRIP", "TRIGGER"};
 // VIEW, a switch named by what the headset shows: GAME SCREEN is the game as
 // it is, its own picture on the screen ahead, as menus are, in 3D.
 constexpr const char* viewChoices[] = {"VR", "GAME SCREEN"};
+// VENOM HAND, a switch named by the hand: LEFT moves the venom to the left hand.
+constexpr const char* venomHandChoices[] = {"RIGHT", "LEFT"};
 constexpr const char* hudChoices[] = {"OFF", "SMALL", "MEDIUM", "LARGE"};
 constexpr const char* flipSpeedChoices[] = {"90\xC2\xB0/S",  "120\xC2\xB0/S", "150\xC2\xB0/S", "180\xC2\xB0/S",
                                             "240\xC2\xB0/S", "300\xC2\xB0/S", "360\xC2\xB0/S", "480\xC2\xB0/S"};
@@ -100,6 +102,8 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.standOnWalls;
     case Item::view:
         return &v.flatScreen;
+    case Item::venomHand:
+        return &v.venomLeftHand;
     default:
         return nullptr;
     }
@@ -118,9 +122,9 @@ Values sanitized(Values v) {
     v.screenDepth = std::clamp(v.screenDepth, 0, 3);
     return v;
 }
-const std::array<Row, 19>& rows() {
+const std::array<Row, 21>& rows() {
     // The help fits the game's description column beside the rows.
-    static const std::array<Row, 19> all{{
+    static const std::array<Row, 21> all{{
         {Item::none, "WEBS", nullptr, {}},
         {Item::webButton, "WEB BUTTON",
          "Which button shoots and holds a web; the other reels in and shoots web balls.", webButtonChoices},
@@ -130,8 +134,12 @@ const std::array<Row, 19>& rows() {
         {Item::swingSpeed, "SWING SPEED LIMIT", "How fast a swing can carry you.", swingChoices},
         {Item::weight, "WEIGHT", "How heavy you are while swinging and after letting go. 100% is real gravity.",
          weightChoices},
+        {Item::none, "VENOM", nullptr, {}},
+        {Item::venomHand, "VENOM HAND",
+         "The hand Miles's venom charges in: hold its grip, then punch, smash or blast.",
+         venomHandChoices},
         {Item::none, "BODY", nullptr, {}},
-        {Item::calibrate, "CALIBRATE BODY", "Fit Spider-Man to you: pick ON RESUME, then hold both triggers in a T-pose.",
+        {Item::calibrate, "CALIBRATE BODY", "Fit Miles to you: pick ON RESUME, then hold both triggers in a T-pose.",
          calibrateChoices},
         {Item::none, "COMFORT", nullptr, {}},
         {Item::snapTurn, "SNAP TURN", "How far a flick of the right stick turns you. Off: no snap turning.",

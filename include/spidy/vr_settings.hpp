@@ -5,7 +5,7 @@
 
 // Spidy's VR settings. The launcher (or the command line) gives a session
 // the values it starts with; during play the game's own Settings change
-// them: pause, Settings, then SPIDY VR after the game's last tab (game_menu).
+// them: pause, Settings, then MILES VR after the game's last tab (game_menu).
 // The session reports the last ones, and the launcher starts the next
 // session with them.
 namespace spidy::vr_settings {
@@ -62,6 +62,10 @@ struct Values {
     // depth there (the tab's GAME SCREEN 3D): 0 off, the game's flat frame; 1
     // low, 2 medium, 3 high (screenDepths).
     int screenDepth = 2;
+    // Miles's venom punch, smash and blast use the left hand and its stick
+    // (the tab's VENOM HAND: LEFT; the launcher's Venom punch hand); false
+    // the right.
+    bool venomLeftHand = false;
     bool operator==(const Values&) const = default;
 };
 // The steps the game's Settings offer. The launcher's slider sets any swing
@@ -119,9 +123,10 @@ enum class Item : uint8_t {
     standOnWalls,
     screenDepth,
     view,
+    venomHand,
 };
-inline constexpr Item lastItem = Item::view;
-// The SPIDY VR tab, top to bottom: a section's heading (item none) or a
+inline constexpr Item lastItem = Item::venomHand;
+// The MILES VR tab, top to bottom: a section's heading (item none) or a
 // setting. A setting without choices is an ON/OFF switch, the game's own;
 // one with choices steps through them. Titles are upper case, as the game's
 // own rows are; the help shows beside the rows while the setting is selected.
@@ -135,7 +140,7 @@ struct Row {
     // menu (the one with resume)").
     bool page{};
 };
-const std::array<Row, 19>& rows();
+const std::array<Row, 21>& rows();
 // The choice a setting shows for these values: a switch 0 (off) or 1 (on), a
 // list its step nearest to the value (a launcher value between two steps
 // shows the nearer one, the lower on a tie).

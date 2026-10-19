@@ -576,7 +576,7 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
     } else if (!options.calibrationPrompt) {
         args.emplace_back(L"--no-calibration-prompt");
     }
-    // The game's Settings offer these too (SPIDY VR), all but the render scale, the upscaling and the
+    // The game's Settings offer these too (MILES VR), all but the render scale, the upscaling and the
     // monitor's rate; the defaults go unsaid.
     const std::pair<int, std::pair<const wchar_t*, int>> settings[] = {
         {std::clamp(options.renderScale, static_cast<int>(minimumRenderScale), static_cast<int>(maximumRenderScale)),
@@ -610,7 +610,7 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
 }
 
 // The line tools/run_game_vr.py prints when a session ends with other VR
-// settings than it began with (the SPIDY VR tab in the game's Settings, a
+// settings than it began with (the MILES VR tab in the game's Settings, a
 // T-pose calibration made or skipped):
 //   VR settings from the headset: aim_markers=1 web_grab=1 air_webs=0 ...
 // Applies the ones the launcher offers to `options` for the next session
@@ -670,6 +670,8 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.armLengthMm = number;
         else if (key == "calibration_prompt")
             next.calibrationPrompt = number != 0;
+        else if (key == "venom_left_hand")
+            next.venomLeftHand = number != 0;
     }
     // A calibration is both measurements within their ranges, or none at all; anything else keeps the old one.
     if (!calibrated(next) && (next.eyeHeightMm || next.armLengthMm)) {

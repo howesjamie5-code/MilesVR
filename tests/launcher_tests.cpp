@@ -356,6 +356,10 @@ int main() {
                                               L"32",            L"--output",  L"r.json", L"--eye-height",
                                               L"1630",          L"--arm-length", L"590"};
         check(args == sized, "the next session is not sized");
+        // MilesVR: VENOM HAND moved to LEFT in the headset is the next session's Venom punch hand.
+        check(headsetSettings("VR settings from the headset: venom_left_hand=1", options) && options.venomLeftHand &&
+                  headsetSettings("VR settings from the headset: venom_left_hand=0", options) && !options.venomLeftHand,
+              "the venom hand did not come back from the headset");
         // Half a calibration, or one out of range, keeps the one there was.
         const auto kept = options;
         check(!headsetSettings("VR settings from the headset: eye_height_mm=1700 arm_length_mm=0", options) &&

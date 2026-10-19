@@ -253,7 +253,7 @@ void appendView(std::vector<Vertex>& out, const View& view, Vec3 viewer) {
         std::snprintf(line, sizeof line, "ARM LENGTH %.2f M", view.result.armLength);
         panel.text(out, line, 0, -.02f, .04f, white);
         panel.text(out, "SPIDER-MAN NOW HAS YOUR SIZE", 0, -.11f, .032f, soft);
-        panel.text(out, "REDO IT IN SETTINGS, SPIDY VR", 0, -.22f, .027f, grey);
+        panel.text(out, "REDO IT IN SETTINGS, MILES VR", 0, -.22f, .027f, grey);
     } else {
         panel.text(out, "BODY CALIBRATION", 0, .19f, .05f, white);
         // A figure in a T-pose; its arms turn green while both are in place.

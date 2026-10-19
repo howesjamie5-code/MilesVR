@@ -1,9 +1,9 @@
-// The SPIDY VR tab in the game's own Settings (game_menu.hpp). Addresses are
-// image offsets in the supported MilesMorales.exe; docs/REFERENCE.md lists them.
+// The MILES VR tab in the game's own Settings (game_menu.hpp; Spidy's SPIDY VR
+// tab, ported). Addresses are image offsets in the supported MilesMorales.exe.
 //
 // The game's Settings are Scaleform (Flash) screens fed by its settings system
 // (UISettingsMenuSystem) from configs/uiconfig/uisystemmenu.config: tabs of
-// items, each naming one of the game's 123 settings by number. Opening them,
+// items, each naming one of the game's 137 settings by number. Opening them,
 // the pause menu builds every tab's Flash object with its own row code and
 // hands the list to Flash (OpenOptions). Spidy builds one more tab with that
 // same code, from items copied from the game's own, and adds it to the list;
@@ -47,27 +47,28 @@ __declspec(dllexport) MenuTrace SpidyMenuTraceData;
 }
 
 namespace {
-// The settings system; +0x20 its config, whose tabs are at +0x168 (0x40 bytes
-// each, a UISystemMenu) and +0x170 counts them.
-constexpr uintptr_t settingsSystem = 0x66f3a60;
+// The settings system; +0x20 its config (8a0030), whose tabs are at +0x178
+// (0x48 bytes each, a UISystemMenu; 143b780) and +0x180 counts them.
+// Spider-Man.exe's were 0x40 bytes at +0x168, counted at +0x170.
+constexpr uintptr_t settingsSystem = 0x66f3a60, configTabs = 0x178, configTabCount = 0x180;
 // The pause menu's Settings build every tab and call Flash's OpenOptions.
-constexpr uintptr_t openOptions = 0x7dd9f0;
+constexpr uintptr_t openOptions = 0x94e930;
 // A tab's Flash object, rows and all: (out value, movie, tab) -> built.
-constexpr uintptr_t buildTab = 0x807740;
-// One item's row onto a Flash array, the tabs' rows (807740) and the pause
+// Miles Morales's own (Spider-Man.exe's 807740 rewritten): it builds a tab
+// whose id is not 2, 7 or 8 from its items, and only when one made a row.
+constexpr uintptr_t buildTab = 0x9808d0;
+// One item's row onto a Flash array, the tabs' rows (9808d0) and the pause
 // menu's first page alike: (array, movie, item, flag). The first page
-// (7dd7c0, the menu at the settings config's +0x128, its items at +0x158, as
-// many as +0x160 says) adds its items in a loop; this is where its call
+// (94e780, the menu at the settings config's +0x130, its items at +0x168, as
+// many as +0x170 says) adds its items in a loop; this is where its call
 // returns to.
-constexpr uintptr_t addItem = 0x9838c0, pageItemReturn = 0x94e849, pageItems = 0x158;
+constexpr uintptr_t addItem = 0x9838c0, pageItemReturn = 0x94e849, pageItems = 0x168;
 // The first page's own build (7dd7c0: its items, then Flash's Refresh), and
 // the callback Flash sends when A selects one of its items, with the item's
 // number (+8) - for VR VIEW, Spidy's setting number. The page shows its items
 // as buttons, so VR VIEW is one: A switches the view, and its name says what
 // A does next.
 constexpr uintptr_t pageRefresh = 0x94e780;
-// MilesVR: false until the settings config's offsets are ported (see install()).
-constexpr bool kLayoutPorted = false;
 constexpr uint32_t pageSelectHash = 0xd0dbcfa5;
 constexpr unsigned char pageRefreshBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74,
                                               0x24, 0x10, 0x48, 0x89, 0x7c, 0x24, 0x18, 0x55};
@@ -79,11 +80,25 @@ constexpr uintptr_t uiMovie = 0x2238250;
 constexpr uintptr_t openOptionsName = 0x3df9568, resetAllHash = 0x77f76e8;
 // The option types of a setting item and of a section heading (vtables).
 constexpr uintptr_t settingType = 0x4099560, headingType = 0x40996b0;
-// The tab's id: the game's run 0-10, and its RESET ALL ignores any above.
+// The tab's id: the game's run 0-10, and its RESET ALL ignores any above (it
+// must not be 2, 7 or 8, which the tab builder treats as special pages).
 constexpr uint32_t tabId = 93;
-// The rows' setting numbers: the game's run 0-122.
+// The rows' setting numbers: the game's run 0-136 (its row filter, 9867e0,
+// passes any number above).
 constexpr int firstSetting = 0x200;
-constexpr size_t tabBytes = 0x40, itemBytes = 0x88, choiceBytes = 0x50, maxChoices = 9;
+// A tab, an item (143b650) and an item's choice (143b5d0), each larger than
+// Spider-Man.exe's 0x40, 0x88 and 0x50: every text of an item and of a choice
+// (a LocString, 0x10 bytes) has a second one beside it in Miles Morales.
+//   tab:    +8 id, +0x10 name, +0x20 heading, +0x30 the game's own, copied;
+//           +0x38 items, +0x40 their count, +0x44 room for them
+//   item:   +8 setting, +0x10 title (+0x20 its twin), +0x30 help (+0x40 its
+//           twin), +0x68 option, +0x90 choices, +0x98 their count, +0x9c room
+//   choice: +8 name (+0x18 its twin), +0x28 help (+0x38 its twin), +0x48 image
+constexpr size_t tabBytes = 0x48, itemBytes = 0xa8, choiceBytes = 0x70, maxChoices = 9;
+constexpr size_t tabItems_ = 0x38, tabCount = 0x40, tabRoom = 0x44;
+constexpr size_t itemTitle = 0x10, itemTitleTwin = 0x20, itemHelp = 0x30, itemHelpTwin = 0x40, itemOption = 0x68,
+                 itemChoices = 0x90, itemChoiceCount = 0x98, itemChoiceRoom = 0x9c;
+constexpr size_t choiceName = 0x08, choiceClearFrom = 0x18, choiceClearTo = 0x50;
 constexpr size_t rowCount = std::tuple_size_v<std::remove_cvref_t<decltype(vr_settings::rows())>>;
 
 // A Scaleform GFx::Value as the game lays it out: 16 bytes of 0xff, the
@@ -192,21 +207,21 @@ const Text* choiceTexts[rowCount][maxChoices]{};
 void addTexts() {
     if (textCount)
         return;
-    tabName = addText("SPIDY_VR_TAB", "SPIDY VR");
-    tabHeading = addText("SPIDY_VR_HEADING", "SPIDY VR SETTINGS");
+    tabName = addText("MILES_VR_TAB", "MILES VR");
+    tabHeading = addText("MILES_VR_HEADING", "MILES VR SETTINGS");
     char tag[24];
     for (size_t r = 0; r < rowCount; ++r) {
         const auto& row = vr_settings::rows()[r];
-        sprintf_s(tag, "SPIDY_VR_%zu", r);
+        sprintf_s(tag, "MILES_VR_%zu", r);
         titles[r] = addText(tag, row.title);
         if (row.page)
             pageTitle = const_cast<Text*>(titles[r]);
         if (row.help) {
-            sprintf_s(tag, "SPIDY_VR_%zu_HELP", r);
+            sprintf_s(tag, "MILES_VR_%zu_HELP", r);
             helps[r] = addText(tag, row.help);
         }
         for (size_t k = 0; k < row.choices.size() && k < maxChoices; ++k) {
-            sprintf_s(tag, "SPIDY_VR_%zu_%zu", r, k);
+            sprintf_s(tag, "MILES_VR_%zu_%zu", r, k);
             choiceTexts[r][k] = addText(tag, row.choices[k]);
         }
     }
@@ -242,27 +257,30 @@ uint32_t buildItems() {
         const auto config = get<uintptr_t>(imageBase + settingsSystem + 0x20);
         if (!config)
             return 9501;
-        const auto tabs = get<uintptr_t>(config + 0x168);
-        const auto tabCount = get<uint32_t>(config + 0x170);
-        if (!tabs || !tabCount || tabCount > 64)
+        const auto tabs = get<uintptr_t>(config + configTabs);
+        const auto tabsCounted = get<uint32_t>(config + configTabCount);
+        if (!tabs || !tabsCounted || tabsCounted > 64)
             return 9501;
         uintptr_t menu{}, setting{}, heading{};
-        for (uint32_t t = 0; t < tabCount; ++t) {
+        for (uint32_t t = 0; t < tabsCounted; ++t) {
             const uintptr_t at = tabs + t * tabBytes;
-            const auto list = get<uintptr_t>(at + 0x30);
-            const auto count = get<uint32_t>(at + 0x38);
+            const auto list = get<uintptr_t>(at + tabItems_);
+            const auto count = get<uint32_t>(at + tabCount);
             if (!list || !count || count > 256)
                 continue;
-            // The GAME tab, else the first with items: id, texts and items are replaced.
-            if (!menu || get<uint32_t>(at + 8) == 4)
+            // The GAME tab, else the first with items that is no special page:
+            // id, texts and items are replaced.
+            const auto id = get<uint32_t>(at + 8);
+            if (id != 2 && id != 7 && id != 8 && (!menu || id == 4))
                 menu = at;
             for (uint32_t i = 0; i < count; ++i) {
                 const uintptr_t item = list + i * itemBytes;
-                const auto option = get<uintptr_t>(item + 0x48);
+                const auto option = get<uintptr_t>(item + itemOption);
                 const auto type = option ? get<uintptr_t>(option) - imageBase : 0;
                 // A setting with choices of its own: its first choice is the
                 // choices' template too.
-                if (!setting && type == settingType && get<uintptr_t>(item + 0x70) && get<uint32_t>(item + 0x78))
+                if (!setting && type == settingType && get<uintptr_t>(item + itemChoices) &&
+                    get<uint32_t>(item + itemChoiceCount))
                     setting = item;
                 if (!heading && type == headingType)
                     heading = item;
@@ -270,29 +288,28 @@ uint32_t buildItems() {
         }
         if (!menu || !setting || !heading)
             return 9502;
-        const auto choiceTemplate = get<uintptr_t>(setting + 0x70);
+        const auto choiceTemplate = get<uintptr_t>(setting + itemChoices);
         for (size_t r = 0; r < rowCount; ++r) {
             const auto& row = vr_settings::rows()[r];
             unsigned char* item = items[r];
             std::memcpy(item, reinterpret_cast<const void*>(row.item == Item::none ? heading : setting), itemBytes);
             put<uint64_t>(item, 8, static_cast<uint64_t>(firstSetting + r));
-            putText(item, 0x10, titles[r]);
-            putText(item, 0x20, helps[r]);
+            putText(item, itemTitle, titles[r]);
+            putText(item, itemHelp, helps[r]);
+            // The twins are the copied setting's: emptied, so none of its texts shows.
+            putText(item, itemTitleTwin, nullptr);
+            putText(item, itemHelpTwin, nullptr);
             // No choices: the game's own OFF and ON.
             const auto count = static_cast<uint32_t>(std::min(row.choices.size(), maxChoices));
-            put<uint64_t>(item, 0x70, count ? reinterpret_cast<uint64_t>(choices[r]) : 0);
-            put<uint32_t>(item, 0x78, count);
-            put<uint32_t>(item, 0x7c, count);
+            put<uint64_t>(item, itemChoices, count ? reinterpret_cast<uint64_t>(choices[r]) : 0);
+            put<uint32_t>(item, itemChoiceCount, count);
+            put<uint32_t>(item, itemChoiceRoom, count);
             for (uint32_t k = 0; k < count; ++k) {
                 unsigned char* c = choices[r][k];
                 std::memcpy(c, reinterpret_cast<const void*>(choiceTemplate), choiceBytes);
-                // The name; no help or preview image of its own (the row's help shows).
-                put<uint64_t>(c, 8, reinterpret_cast<uint64_t>(choiceTexts[r][k]->tag));
-                put<uint32_t>(c, 0x10, static_cast<uint32_t>(std::strlen(choiceTexts[r][k]->tag)));
-                put<uint32_t>(c, 0x14, choiceTexts[r][k]->hash);
-                put<uint64_t>(c, 0x18, 0);
-                put<uint64_t>(c, 0x20, 0);
-                put<uint64_t>(c, 0x28, 0);
+                // The name; no twin, help or preview image of its own (the row's help shows).
+                putText(c, choiceName, choiceTexts[r][k]);
+                std::memset(c + choiceClearFrom, 0, choiceClearTo - choiceClearFrom);
             }
         }
         // The tab's rows, and the one for the first page.
@@ -307,9 +324,9 @@ uint32_t buildItems() {
         put<uint32_t>(tab, 8, tabId);
         putText(tab, 0x10, tabName);
         putText(tab, 0x20, tabHeading);
-        put<uint64_t>(tab, 0x30, reinterpret_cast<uint64_t>(tabItems));
-        put<uint32_t>(tab, 0x38, static_cast<uint32_t>(tabRows));
-        put<uint32_t>(tab, 0x3c, static_cast<uint32_t>(tabRows));
+        put<uint64_t>(tab, tabItems_, reinterpret_cast<uint64_t>(tabItems));
+        put<uint32_t>(tab, tabCount, static_cast<uint32_t>(tabRows));
+        put<uint32_t>(tab, tabRoom, static_cast<uint32_t>(tabRows));
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 9501;
@@ -324,10 +341,10 @@ bool ready() {
     }
     return built == 1;
 }
-// The game's main thread is building the SPIDY VR tab (or VR VIEW on the
+// The game's main thread is building the MILES VR tab (or VR VIEW on the
 // pause menu's first page).
 thread_local bool buildingTab{};
-// Adds the SPIDY VR tab, built by the game's own code, to the tabs the pause
+// Adds the MILES VR tab, built by the game's own code, to the tabs the pause
 // menu's Settings hand to Flash.
 void addTab(GfxValue& tabs) {
     if (!ready())
@@ -451,7 +468,7 @@ void __fastcall callbackHook(void* ui, uint32_t hash, GfxValue* args, uint32_t c
         reinterpret_cast<void(__fastcall*)(void*)>(imageBase + pageRefresh)(ui);
         return;
     }
-    // Y RESET ALL on the SPIDY VR tab: the game's RESET ALL takes only its own tabs.
+    // Y RESET ALL on the MILES VR tab: the game's RESET ALL takes only its own tabs.
     if (built == 1 && args && count >= 1 && (args[0].type & typeMask) == intType &&
         static_cast<uint32_t>(args[0].data) == tabId && hash == get<uint32_t>(imageBase + resetAllHash)) {
         // The tab's own rows: VR VIEW is on the first page, not in the tab.
@@ -574,11 +591,6 @@ vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Valu
 uint32_t game_menu::install(uintptr_t base) {
     if (hooked)
         return 0;
-    // MilesVR: the settings config's layout differs in MilesMorales.exe (its first page's menu is at
-    // +0x130, not +0x128, and the tab array moved with it), and the offsets below are Spider-Man.exe's
-    // until they are mapped. Without the tab the launcher's settings apply, as they do on a failed check.
-    if (!kLayoutPorted)
-        return 9300;
     if (!created) {
         for (size_t i = 0; i < std::size(hooks); ++i)
             if (!matches(base + hooks[i].offset, hooks[i].bytes, hooks[i].count))

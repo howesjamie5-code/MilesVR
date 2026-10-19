@@ -516,7 +516,7 @@ CAMERA_MOVERS = {0x3dc8708: 'follow', 0x3dc8800: 'combat', 0x3dc8f10: 'death', 0
                  0x57dd9f0: 'photo_mode'}
 
 
-# What the VR settings (the SPIDY VR tab in the game's Settings, and X) changed, as XrData reports it. A session
+# What the VR settings (the MILES VR tab in the game's Settings, and X) changed, as XrData reports it. A session
 # that ends with other values than it started with prints them on one line, from which the launcher
 # starts the next session (launcher_text.hpp, headsetSettings).
 SETTINGS_LINE = 'VR settings from the headset: '
@@ -531,7 +531,8 @@ def start_settings(a):
                 snap_turn=a.snap_turn, smooth_turn=a.smooth_turn, haptics=a.haptics, screen_size=a.screen_size,
                 flips=a.flips, flip_speed=a.flip_speed, trigger_webs=a.trigger_webs, hud=a.hud,
                 stand_on_walls=not a.no_stand_on_walls, screen_depth=a.screen_depth, eye_height_mm=a.eye_height,
-                arm_length_mm=a.arm_length, calibration_prompt=not a.no_calibration_prompt)
+                arm_length_mm=a.arm_length, calibration_prompt=not a.no_calibration_prompt,
+                venom_left_hand=a.venom_left_hand)
 
 
 def settings_line(start, sample):
@@ -841,7 +842,7 @@ def snapshot(game, address):
                                           if name and layouts & 1 << kind])
         result.update(interacts=interacts, aim_markers=bool(aim_markers),
                       markers=struct.unpack_from('<Q', raw, 656)[0])
-        # The VR settings now (the SPIDY VR tab in the game's Settings changes them),
+        # The VR settings now (the MILES VR tab in the game's Settings changes them),
         # the tab's changes, the times the game built its Settings with it, whether its hooks are in, and
         # why it is missing (game_menu.hpp: 93xx-94xx not hooked, 95xx not built).
         flags, snap_turn, haptics, screen_size = struct.unpack_from('<4I', raw, 664)
@@ -871,7 +872,8 @@ def snapshot(game, address):
                                        stand_on_walls=bool(flags & 128),
                                        screen_depth=screen_depth,
                                        eye_height_mm=eye_height, arm_length_mm=arm_length,
-                                       calibration_prompt=not calibration_flags & 1),
+                                       calibration_prompt=not calibration_flags & 1,
+                                       venom_left_hand=bool(flags & 256)),
                       setting_changes=changes,
                       calibration=dict(phase=CALIBRATION_PHASES.get(phase, phase),
                                        hint=CALIBRATION_HINTS.get(hint, hint), progress=round(progress, 3),
@@ -1583,7 +1585,7 @@ def main():
                         'as before (the pad layer still gives the whole controller)')
     p.add_argument('--no-aim-markers', action='store_true',
                    help="Start with the aim markers (where each hand's web would land) hidden; AIM MARKERS in the "
-                        "SPIDY VR tab shows them")
+                        "MILES VR tab shows them")
     p.add_argument('--no-eye-occlusion', action='store_true',
                    help='Each eye draws everything in its view, hidden behind buildings or not (builds before '
                         'October 6 did; about half the frame rate)')
@@ -1599,7 +1601,7 @@ def main():
                    help="Your arm in millimetres from a T-pose calibration, from Spider-Man's shoulder at your size "
                         'to the wrist (with --eye-height)')
     p.add_argument('--no-calibration-prompt', action='store_true',
-                   help='Without a calibration, do not ask for the T-pose at the first gameplay (the SPIDY VR tab '
+                   help='Without a calibration, do not ask for the T-pose at the first gameplay (the MILES VR tab '
                         'in the game\'s Settings still offers it)')
     p.add_argument('--snap-turn', type=int, default=30,
                    help='Degrees a flick of the right stick turns you (0: no snap turning; default 30)')

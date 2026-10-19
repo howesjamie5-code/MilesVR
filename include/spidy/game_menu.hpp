@@ -3,7 +3,7 @@
 #include <cstdint>
 
 // Spidy's VR settings as a tab of the game's own Settings: pause, Settings,
-// then SPIDY VR after KEY MAPPING (the list wraps: Up from GAME); and VR VIEW
+// then MILES VR after KEY MAPPING (the list wraps: Up from GAME); and VR VIEW
 // on the pause menu's own first page, under RESUME, which the game builds from
 // the same kind of items (vr_settings::Row::page). The game
 // builds the tab's rows with its own option code, from settings items Spidy
@@ -25,7 +25,7 @@ void publish(const vr_settings::Values&);
 // A change made in the tab since the last call: true, with `values` holding it.
 bool take(vr_settings::Values&);
 struct Telemetry {
-    // The game built its Settings with the SPIDY VR tab (each opening, and
+    // The game built its Settings with the MILES VR tab (each opening, and
     // each refresh after a change), and the settings changed in it (RESET and
     // RESET ALL included).
     uint64_t tabs{}, changes{};

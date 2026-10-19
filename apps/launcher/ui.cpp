@@ -56,7 +56,7 @@ void handCursor() {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 }
 
-// The steps the game's Settings offer too (SPIDY VR, vr_settings.hpp).
+// The steps the game's Settings offer too (MILES VR, vr_settings.hpp).
 constexpr const char* kSnapTurns[] = {"Off", "15\xC2\xB0", "30\xC2\xB0", "45\xC2\xB0", "60\xC2\xB0", "90\xC2\xB0"};
 constexpr int kSnapValues[] = {0, 15, 30, 45, 60, 90};
 constexpr const char* kSmoothTurns[] = {"Off",          "60\xC2\xB0/s",  "90\xC2\xB0/s",
@@ -1235,7 +1235,7 @@ void App::optionsCard(ImVec2 size) {
         ImGui::Dummy(ImVec2(0, S(6)));
         ImGui::PushStyleColor(ImGuiCol_Text, vec(kFaint));
         ImGui::TextWrapped("Options apply when VR starts. In the headset, pause and open Settings, then "
-                           "SPIDY VR, to change them during play; the next session starts with them.");
+                           "MILES VR, to change them during play; the next session starts with them.");
         ImGui::PopStyleColor();
     }
     if (changed)
@@ -1477,7 +1477,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the two"},
           {"Hand to your temple, trigger", "Scan your surroundings: the game's R3"},
           {"Menu button", "Pause; there SWITCH TO GAME SCREEN plays the game as it is, on a 3D screen, and VR "
-                          "settings are in Settings > SPIDY VR"},
+                          "settings are in Settings > MILES VR"},
           {"X", "Game menu: map, suits, skills"}}},
         {"MENUS AND CUTSCENES",
          {{"Left stick", "Move through menus (they show on a screen in the headset)"},
@@ -1562,8 +1562,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         }
         ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenomBright, 0.7f));
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("Left-handed? Set Venom punch hand to Left on the Play tab: every venom power moves to "
-                               "the left hand and its stick.");
+        ImGui::TextUnformatted("Left-handed? Set Venom punch hand to Left on the Play tab, or VENOM HAND in the game's "
+                               "Settings > MILES VR while you play: every venom power moves to the left hand and its stick.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, S(4)));
@@ -1618,7 +1618,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         ImGui::TextUnformatted("Aim markers, blue for the left hand and orange for the right: a ring where a web would "
                                "hold, a faint dashed ring where it would hold in open air, a red cross where it would "
                                "miss, and a turning ring of three arcs around a prop or thug it would catch. The marker "
-                               "tightens as you squeeze the grip. AIM MARKERS in Settings > SPIDY VR, or in "
+                               "tightens as you squeeze the grip. AIM MARKERS in Settings > MILES VR, or in "
                                "the options here, hides them.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
