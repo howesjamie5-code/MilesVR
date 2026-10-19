@@ -1,5 +1,30 @@
-MilesVR 0.1.38 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.39 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.38: VENOM BUTTON - GRIP OR TRIGGER
+--------------------------------------------------
+A new setting picks the button that charges your venom fist:
+- In the launcher: Play tab > Venom button (Grip / Trigger).
+- In the game: pause > Settings > MILES VR > VENOM > VENOM BUTTON.
+GRIP (the default, as before): with venom full, the venom hand's grip
+charges the venom and that hand shoots no webs.
+TRIGGER: with venom full, the venom hand's trigger charges the venom and
+the grip keeps shooting and holding webs, so you can swing and punch with
+venom on the same hand. That hand's trigger does not reel in or shoot web
+balls while venom is full.
+(If WEB BUTTON is set to TRIGGER, it is the other way round: the venom
+on the trigger turns that hand's webs off, the venom on the grip keeps
+them.)
+
+Also fixed: WEB STYLE: ARCADE was not reported back from the game, so
+changing any setting in the game's MILES VR tab could put the launcher's
+Web style back to Realistic.
+
+What to try:
+1. Set Venom button to Trigger. Fill a bar, swing with the right grip,
+   then hold the right trigger: the fist charges; punch.
+2. Change VENOM BUTTON in the game's settings: the launcher shows the
+   same choice next time.
 
 What changed since 0.1.37: THE GAME'S SWING PROMPT
 --------------------------------------------------

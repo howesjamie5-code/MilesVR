@@ -1318,10 +1318,14 @@ class ProtocolTests(unittest.TestCase):
                                                      flips=False, flip_speed=300, trigger_webs=False, hud=3,
                                                      stand_on_walls=False, screen_depth=3, arcade_webs=False,
                                                      eye_height_mm=0, arm_length_mm=0, calibration_prompt=True,
-                                                     venom_left_hand=False))
+                                                     venom_left_hand=False, venom_trigger=False))
         # MilesVR: VENOM HAND: LEFT is settings bit 256 (arcade webs 512).
         struct.pack_into('<I', raw, 664, 29 | 256)
         self.assertTrue(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['vr_settings']['venom_left_hand'])
+        # WEB STYLE: ARCADE (512; until 0.1.39 the headset never set it) and VENOM BUTTON: TRIGGER (1024).
+        struct.pack_into('<I', raw, 664, 29 | 512 | 1024)
+        tab = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['vr_settings']
+        self.assertEqual((tab['arcade_webs'], tab['venom_trigger'], tab['venom_left_hand']), (True, True, False))
         # The HUD switched off in the tab.
         struct.pack_into('<I', raw, 748, 0)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['vr_settings']['hud'], 0)
@@ -1644,14 +1648,14 @@ class ProtocolTests(unittest.TestCase):
                     no_body=False, swing_speed=32.0, weight=60, snap_turn=30, smooth_turn=0, haptics=100,
                     screen_size=1, flips=False, flip_speed=180, trigger_webs=False, hud=2, eye_height=0,
                     arm_length=0, no_calibration_prompt=False, no_stand_on_walls=False, screen_depth=2,
-                    venom_left_hand=False, arcade_webs=False)
+                    venom_left_hand=False, arcade_webs=False, venom_trigger=False)
         start = start_settings(args)
         self.assertEqual(start, dict(aim_markers=True, web_grab=True, air_webs=True, web_shooter=True, punch=False,
                                      body=True, swing_speed=32.0, weight=60, snap_turn=30, smooth_turn=0,
                                      haptics=100, screen_size=1, flips=False, flip_speed=180, trigger_webs=False,
                                      hud=2, stand_on_walls=True, screen_depth=2, arcade_webs=False,
                                      eye_height_mm=0, arm_length_mm=0, calibration_prompt=True,
-                                     venom_left_hand=False))
+                                     venom_left_hand=False, venom_trigger=False))
         # Nothing changed, or no sample: no line.
         self.assertIsNone(settings_line(start, dict(vr_settings=dict(start))))
         self.assertIsNone(settings_line(start, None))
@@ -1662,7 +1666,7 @@ class ProtocolTests(unittest.TestCase):
                                          'swing_speed=48 weight=150 snap_turn=0 smooth_turn=90 haptics=100 '
                                          'screen_size=1 flips=0 flip_speed=180 trigger_webs=0 hud=2 '
                                          'stand_on_walls=1 screen_depth=2 arcade_webs=0 eye_height_mm=0 '
-                                         'arm_length_mm=0 calibration_prompt=1 venom_left_hand=0')
+                                         'arm_length_mm=0 calibration_prompt=1 venom_left_hand=0 venom_trigger=0')
         # The experimental flips switched on in the headset go to the launcher too; so do their speed, the web
         # button and the HUD.
         self.assertIn(' flips=1 ', settings_line(start, dict(vr_settings=dict(start, flips=True))))
@@ -1676,11 +1680,14 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn(' arcade_webs=1 ', settings_line(start, dict(vr_settings=dict(start, arcade_webs=True))))
         # A T-pose calibration in the headset goes to the launcher the same way; so does skipping it.
         self.assertTrue(settings_line(start, dict(vr_settings=dict(start, eye_height_mm=1630, arm_length_mm=590)))
-                        .endswith(' eye_height_mm=1630 arm_length_mm=590 calibration_prompt=1 venom_left_hand=0'))
+                        .endswith(' eye_height_mm=1630 arm_length_mm=590 calibration_prompt=1 venom_left_hand=0 '
+                                  'venom_trigger=0'))
         self.assertTrue(settings_line(start, dict(vr_settings=dict(start, calibration_prompt=False)))
-                        .endswith(' calibration_prompt=0 venom_left_hand=0'))
+                        .endswith(' calibration_prompt=0 venom_left_hand=0 venom_trigger=0'))
         # MilesVR: VENOM HAND moved to LEFT in the headset goes to the launcher's Venom punch hand.
         self.assertIn(' venom_left_hand=1', settings_line(start, dict(vr_settings=dict(start, venom_left_hand=True))))
+        # And VENOM BUTTON moved to TRIGGER goes to its Venom button.
+        self.assertIn(' venom_trigger=1', settings_line(start, dict(vr_settings=dict(start, venom_trigger=True))))
 
 
 if __name__ == '__main__':

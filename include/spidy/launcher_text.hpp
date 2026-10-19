@@ -507,6 +507,9 @@ struct SessionOptions {
     // Miles's venom punch: with the venom meter full this hand's webs switch off and its web button charges its
     // fist for the venom punch; off, the right hand's.
     bool venomLeftHand = false;
+    // The venom fist charges on the trigger (VENOM BUTTON: TRIGGER); off, on the grip. On the web button that
+    // hand's webs switch off while the meter is full; on the other, its webs stay.
+    bool venomTrigger = false;
     // Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or loose
     // things, and swings stay above the street; off, realistic webs bend round whatever comes in their way.
     bool arcadeWebs = false;
@@ -568,6 +571,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--trigger-webs");
     if (options.venomLeftHand)
         args.emplace_back(L"--venom-left-hand");
+    if (options.venomTrigger)
+        args.emplace_back(L"--venom-trigger");
     if (options.arcadeWebs)
         args.emplace_back(L"--arcade-webs");
     if (!options.wallRun)
@@ -684,6 +689,8 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.calibrationPrompt = number != 0;
         else if (key == "venom_left_hand")
             next.venomLeftHand = number != 0;
+        else if (key == "venom_trigger")
+            next.venomTrigger = number != 0;
     }
     // A calibration is both measurements within their ranges, or none at all; anything else keeps the old one.
     if (!calibrated(next) && (next.eyeHeightMm || next.armLengthMm)) {

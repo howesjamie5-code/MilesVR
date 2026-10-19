@@ -78,6 +78,8 @@ constexpr const char* kScreenDepths[] = {"Off", "Low", "Medium", "High"};
 constexpr const char* kWebButtons[] = {"Grip", "Trigger"};
 // The venom punch's hand (SessionOptions::venomLeftHand: the second).
 constexpr const char* kVenomHands[] = {"Right hand", "Left hand"};
+// The button that charges the venom fist (SessionOptions::venomTrigger: the second).
+constexpr const char* kVenomButtons[] = {"Grip", "Trigger"};
 // How webs behave (SessionOptions::arcadeWebs: the second).
 constexpr const char* kWebStyles[] = {"Realistic", "Arcade"};
 constexpr const char* kWeights[] = {"40%", "60%", "80%", "100%", "125%", "150%", "200%", "250%", "300%"};
@@ -1124,13 +1126,22 @@ void App::optionsCard(ImVec2 size) {
                o.triggerWebs = trigger != 0;
            });
     option("Venom punch hand",
-           "With the venom meter full, this hand's webs switch off; hold its grip to charge the venom punch, then "
-           "punch the marked enemy.",
+           "With the venom meter full, hold this hand's venom button to charge the venom punch, then punch the "
+           "marked enemy.",
            S(150), [&] {
                static constexpr int hands[] = {0, 1};
                int left = o.venomLeftHand ? 1 : 0;
                stepCombo("##venomHand", kVenomHands, hands, 2, &left);
                o.venomLeftHand = left != 0;
+           }, true);
+    option("Venom button",
+           "The button that charges the venom fist. On the web button that hand's webs are off while venom is "
+           "full; on the other one the webs stay, and its reel and web balls go.",
+           S(150), [&] {
+               static constexpr int buttons[] = {0, 1};
+               int trigger = o.venomTrigger ? 1 : 0;
+               stepCombo("##venomButton", kVenomButtons, buttons, 2, &trigger);
+               o.venomTrigger = trigger != 0;
            }, true);
     option("Webs hold in open air", "With nothing in reach, a web still holds 100 m out; off, it misses.", S(40),
            [&] { changed |= toggle("##air", &o.airWebs); });
@@ -1551,10 +1562,14 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const Power powers[] = {
         {"Venom Meter", "Land blows to fill it: a hit 10, a heavy blow, launch or slam 15, a finisher 20 (ten hits "
                         "fill a bar). Miles has up to three bars"},
-        {"Venom Hand", "With a bar full your right hand shoots no webs or web balls: its grip is your venom now. A "
-                       "web you hold as it fills stays until you let go"},
-        {"Venom Charge", "Hold the right grip (the trigger, if Web button is set to it): your fist glows and the "
-                         "controller buzzes. Let go and the charge fades after a moment, so strike before it does"},
+        {"Venom Hand", "With a bar full your right hand's venom button is your venom now. On the web button (the "
+                       "default) that hand shoots no webs or web balls; a web you hold as it fills stays until you "
+                       "let go"},
+        {"Venom Button", "Play tab > Venom button, or VENOM BUTTON in the game's MILES VR settings: GRIP (the "
+                         "default) or TRIGGER. Trigger keeps your webs on the grip while venom is full, and that "
+                         "hand's trigger charges the venom instead of reeling or shooting web balls"},
+        {"Venom Charge", "Hold the venom button (the right grip by default): your fist glows and the controller "
+                         "buzzes. Let go and the charge fades after a moment, so strike before it does"},
         {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "
                         "web strike flies you in and lands it. Uses one bar"},
         {"Venom Jump", "In a fight, standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "

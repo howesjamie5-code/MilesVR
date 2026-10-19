@@ -543,6 +543,7 @@ Settings loadSettings() {
         else if (key == "flips") o.flips = number() != 0;
         else if (key == "trigger_webs") o.triggerWebs = number() != 0;
         else if (key == "venom_left_hand") o.venomLeftHand = number() != 0;
+        else if (key == "venom_trigger") o.venomTrigger = number() != 0;
         else if (key == "arcade_webs") o.arcadeWebs = number() != 0;
         else if (key == "wall_run") o.wallRun = number() != 0;
         else if (key == "game_depth_of_field") o.gameDepthOfField = number() != 0;
@@ -603,7 +604,7 @@ void saveSettings(const Settings& settings) {
     file << "game=" << narrow(settings.gameExe) << "\nxr_runtime=" << narrow(settings.runtime)
          << "\nsmall_window=" << o.smallWindow << "\nstock_monitor_view=" << o.stockMonitorView
          << "\naim_markers=" << o.aimMarkers << "\nair_webs=" << o.airWebs << "\nflips=" << o.flips
-         << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand << "\narcade_webs=" << o.arcadeWebs
+         << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand << "\nvenom_trigger=" << o.venomTrigger << "\narcade_webs=" << o.arcadeWebs
          << "\nstand_on_walls=" << o.standOnWalls
          << "\nwall_run=" << o.wallRun
          << "\ngame_depth_of_field=" << o.gameDepthOfField

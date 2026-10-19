@@ -25,6 +25,7 @@ constexpr const char* webStyleChoices[] = {"REALISTIC", "ARCADE"};
 constexpr const char* viewChoices[] = {"VR", "GAME SCREEN"};
 // VENOM HAND, a switch named by the hand: LEFT moves the venom to the left hand.
 constexpr const char* venomHandChoices[] = {"RIGHT", "LEFT"};
+constexpr const char* venomButtonChoices[] = {"GRIP", "TRIGGER"};
 constexpr const char* hudChoices[] = {"OFF", "SMALL", "MEDIUM", "LARGE"};
 constexpr const char* flipSpeedChoices[] = {"90\xC2\xB0/S",  "120\xC2\xB0/S", "150\xC2\xB0/S", "180\xC2\xB0/S",
                                             "240\xC2\xB0/S", "300\xC2\xB0/S", "360\xC2\xB0/S", "480\xC2\xB0/S"};
@@ -108,6 +109,8 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.flatScreen;
     case Item::venomHand:
         return &v.venomLeftHand;
+    case Item::venomButton:
+        return &v.venomTrigger;
     default:
         return nullptr;
     }
@@ -126,9 +129,9 @@ Values sanitized(Values v) {
     v.screenDepth = std::clamp(v.screenDepth, 0, 3);
     return v;
 }
-const std::array<Row, 24>& rows() {
+const std::array<Row, 25>& rows() {
     // The help fits the game's description column beside the rows.
-    static const std::array<Row, 24> all{{
+    static const std::array<Row, 25> all{{
         {Item::none, "WEBS", nullptr, {}},
         {Item::webStyle, "WEB STYLE",
          "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.", webStyleChoices},
@@ -143,8 +146,11 @@ const std::array<Row, 24>& rows() {
          weightChoices},
         {Item::none, "VENOM", nullptr, {}},
         {Item::venomHand, "VENOM HAND",
-         "The hand Miles's venom charges in: hold its grip, then punch, smash or blast.",
+         "The hand Miles's venom charges in: hold its button, then punch, smash or blast.",
          venomHandChoices},
+        {Item::venomButton, "VENOM BUTTON",
+         "Charges your venom fist. If not the web button, that hand keeps its webs.",
+         venomButtonChoices},
         {Item::none, "COMFORT", nullptr, {}},
         {Item::snapTurn, "SNAP TURN", "How far a flick of the right stick turns you. Off: no snap turning.",
          snapChoices},

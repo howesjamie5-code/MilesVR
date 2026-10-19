@@ -9875,8 +9875,8 @@ int main() {
         // settings ingame into nice sections"), each with a setting in the tab;
         // MilesVR's VENOM after SWINGING.
         const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},      {5, "SWINGING"}, {8, "VENOM"},
-                                                           {10, "COMFORT"},  {14, "DISPLAY"}, {19, "BODY"},
-                                                           {21, "EXPERIMENTAL"}};
+                                                           {11, "COMFORT"},  {15, "DISPLAY"}, {20, "BODY"},
+                                                           {22, "EXPERIMENTAL"}};
         check(headings == std::size(sections), "the sections: webs, swinging, venom, comfort, display, body, experimental");
         for (const auto& [at, title] : sections) {
             check(all[at].item == Item::none && std::strcmp(all[at].title, title) == 0, "a section out of place");
@@ -9889,9 +9889,17 @@ int main() {
         check(all[9].item == Item::venomHand && all[9].choices.size() == 2 &&
                   std::strcmp(all[9].choices[0], "RIGHT") == 0 && std::strcmp(all[9].choices[1], "LEFT") == 0,
               "the venom hand under VENOM: RIGHT, or LEFT");
-        check(all[22].item == Item::flips && all[22].choices.empty() && std::strcmp(all[21].title, "EXPERIMENTAL") == 0,
+        // And the button it charges on, GRIP or TRIGGER, as the launcher's Venom button.
+        check(all[10].item == Item::venomButton && all[10].choices.size() == 2 &&
+                  std::strcmp(all[10].choices[0], "GRIP") == 0 && std::strcmp(all[10].choices[1], "TRIGGER") == 0,
+              "the venom button under the venom hand: GRIP, or TRIGGER");
+        Values v;
+        check(choice(Item::venomButton, v) == 0 && choose(Item::venomButton, 1, v) && v.venomTrigger &&
+                  choice(Item::venomButton, v) == 1,
+              "VENOM BUTTON: TRIGGER sets the venom on the trigger");
+        check(all[23].item == Item::flips && all[23].choices.empty() && std::strcmp(all[22].title, "EXPERIMENTAL") == 0,
               "the flips: a switch under EXPERIMENTAL");
-        check(all.size() == 24 && all[23].item == Item::flipSpeed && all[23].choices.size() == std::size(flipSpeeds),
+        check(all.size() == 25 && all[24].item == Item::flipSpeed && all[24].choices.size() == std::size(flipSpeeds),
               "the flip speed under the flips, the last row");
         // The wall view has no row of its own any more: it turned only while
         // Spidy held the player on a wall, so it was never a choice of its own
@@ -9901,18 +9909,18 @@ int main() {
         // then "also merge the two options").
         for (const auto& row : all)
             check(row.item != Item::standOnWalls, "the wall view still has a row of its own");
-        check(all[16].item == Item::screenSize && all[18].item == Item::hud && all[18].choices.size() == 4 &&
-                  std::strcmp(all[18].choices[0], "OFF") == 0 && std::strcmp(all[18].choices[3], "LARGE") == 0,
+        check(all[17].item == Item::screenSize && all[19].item == Item::hud && all[19].choices.size() == 4 &&
+                  std::strcmp(all[19].choices[0], "OFF") == 0 && std::strcmp(all[19].choices[3], "LARGE") == 0,
               "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
-        check(all[17].item == Item::screenDepth && std::strcmp(all[17].title, "GAME SCREEN 3D") == 0 &&
-                  all[17].choices.size() == 4 && std::strcmp(all[17].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[17].choices[3], "HIGH") == 0,
+        check(all[18].item == Item::screenDepth && std::strcmp(all[18].title, "GAME SCREEN 3D") == 0 &&
+                  all[18].choices.size() == 4 && std::strcmp(all[18].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[18].choices[3], "HIGH") == 0,
               "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
         // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
         for (const auto& row : all)
             check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
-        check(all[15].item == Item::view && std::strcmp(all[15].title, "VR VIEW") == 0 && all[15].choices.size() == 2 &&
-                  std::strcmp(all[15].choices[0], "VR") == 0 && std::strcmp(all[15].choices[1], "GAME SCREEN") == 0,
+        check(all[16].item == Item::view && std::strcmp(all[16].title, "VR VIEW") == 0 && all[16].choices.size() == 2 &&
+                  std::strcmp(all[16].choices[0], "VR") == 0 && std::strcmp(all[16].choices[1], "GAME SCREEN") == 0,
               "the view above the game screen's rows: VR, or GAME SCREEN");
         // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is.
         for (const auto& row : all)
@@ -9926,10 +9934,10 @@ int main() {
               "the web button under the web style: GRIP, or TRIGGER");
         check(all[3].item == Item::aimMarkers && all[4].item == Item::airWebs, "the aim markers, then the air webs");
         check(all[6].item == Item::swingSpeed && all[7].item == Item::weight, "SWINGING: the swing speed, the weight");
-        check(all[11].item == Item::snapTurn && all[12].item == Item::smoothTurn && all[13].item == Item::haptics,
+        check(all[12].item == Item::snapTurn && all[13].item == Item::smoothTurn && all[14].item == Item::haptics,
               "COMFORT: snap and smooth turning, the vibration");
-        check(all[20].item == Item::calibrate && all[20].choices.size() == 2 &&
-                  std::strcmp(all[20].choices[1], "ON RESUME") == 0,
+        check(all[21].item == Item::calibrate && all[21].choices.size() == 2 &&
+                  std::strcmp(all[21].choices[1], "ON RESUME") == 0,
               "the body's calibration: NO, or ON RESUME");
         // Every setting has a row but the wall view, which the launcher's one
         // "Wall running" now carries along with who holds you on the wall.

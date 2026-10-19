@@ -574,7 +574,8 @@ def start_settings(a):
                 flips=a.flips, flip_speed=a.flip_speed, trigger_webs=a.trigger_webs, hud=a.hud,
                 stand_on_walls=not a.no_stand_on_walls, screen_depth=a.screen_depth, arcade_webs=a.arcade_webs,
                 eye_height_mm=a.eye_height, arm_length_mm=a.arm_length,
-                calibration_prompt=not a.no_calibration_prompt, venom_left_hand=a.venom_left_hand)
+                calibration_prompt=not a.no_calibration_prompt, venom_left_hand=a.venom_left_hand,
+                venom_trigger=a.venom_trigger)
 
 
 def settings_line(start, sample):
@@ -933,7 +934,7 @@ def snapshot(game, address):
                                        screen_depth=screen_depth, arcade_webs=bool(flags & 512),
                                        eye_height_mm=eye_height, arm_length_mm=arm_length,
                                        calibration_prompt=not calibration_flags & 1,
-                                       venom_left_hand=bool(flags & 256)),
+                                       venom_left_hand=bool(flags & 256), venom_trigger=bool(flags & 1024)),
                       setting_changes=changes,
                       calibration=dict(phase=CALIBRATION_PHASES.get(phase, phase),
                                        hint=CALIBRATION_HINTS.get(hint, hint), progress=round(progress, 3),
@@ -1770,6 +1771,9 @@ def main():
     p.add_argument('--venom-left-hand', action='store_true',
                    help="Miles's venom punch is the left hand's: with the venom meter full its webs switch off and "
                         'its web button charges it (the right hand otherwise)')
+    p.add_argument('--venom-trigger', action='store_true',
+                   help="The trigger charges the venom fist (VENOM BUTTON: TRIGGER); otherwise the grip. On the web "
+                        "button that hand's webs switch off while the meter is full; on the other they stay")
     p.add_argument('--arcade-webs', action='store_true',
                    help='Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or '
                         'loose things, and swings stay above the street')
@@ -2035,7 +2039,8 @@ def session(a, startup):
                              (0x10000 if a.game_monitor_view or game_view else 0) |
                              (0x20000 if a.own_shadows else 0) | (0 if reflections else 0x40000) |
                              (0x100000 if a.no_prompt_help else 0) | (0x80000 if a.eye_lens_distances else 0) |
-                             (0x200000 if a.venom_left_hand else 0) | (0x400000 if a.arcade_webs else 0)) + \
+                             (0x200000 if a.venom_left_hand else 0) | (0x400000 if a.arcade_webs else 0) |
+                             (0x800000 if a.venom_trigger else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
                                                  a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth, 0)

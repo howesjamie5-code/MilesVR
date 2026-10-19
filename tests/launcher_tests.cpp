@@ -236,6 +236,11 @@ int main() {
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--venom-left-hand", "the venom punch on the left hand");
         options.venomLeftHand = false;
+        check(!options.venomTrigger, "the venom on the trigger in a new launcher");
+        options.venomTrigger = true;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 8 && args[7] == L"--venom-trigger", "the venom button on the trigger");
+        options.venomTrigger = false;
         check(!options.arcadeWebs, "arcade webs in a new launcher");
         options.arcadeWebs = true;
         args = sessionArguments(options, L"r.json", L"", L"");
@@ -365,6 +370,9 @@ int main() {
         check(headsetSettings("VR settings from the headset: venom_left_hand=1", options) && options.venomLeftHand &&
                   headsetSettings("VR settings from the headset: venom_left_hand=0", options) && !options.venomLeftHand,
               "the venom hand did not come back from the headset");
+        check(headsetSettings("VR settings from the headset: venom_trigger=1", options) && options.venomTrigger &&
+                  headsetSettings("VR settings from the headset: venom_trigger=0", options) && !options.venomTrigger,
+              "the venom button did not come back from the headset");
         // Half a calibration, or one out of range, keeps the one there was.
         const auto kept = options;
         check(!headsetSettings("VR settings from the headset: eye_height_mm=1700 arm_length_mm=0", options) &&

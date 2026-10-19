@@ -66,6 +66,11 @@ struct Values {
     // (the tab's VENOM HAND: LEFT; the launcher's Venom punch hand); false
     // the right.
     bool venomLeftHand = false;
+    // The button that charges the venom fist (the tab's VENOM BUTTON; the
+    // launcher's Venom button): false the grip, true the trigger. On the
+    // hand's web button (WEB BUTTON) its webs are off while the meter is full;
+    // on the other one the webs stay, and that button's reel and web balls go.
+    bool venomTrigger = false;
     // Arcade webs (the tab's WEB STYLE: ARCADE; SwingConfig::arcade): webs go
     // through lamp posts, signs, cars and other thin or loose things, and
     // swings stay above the street. Off, REALISTIC: webs are ropes that bend
@@ -130,8 +135,9 @@ enum class Item : uint8_t {
     view,
     venomHand,
     webStyle,
+    venomButton,
 };
-inline constexpr Item lastItem = Item::webStyle;
+inline constexpr Item lastItem = Item::venomButton;
 // The MILES VR tab, top to bottom: a section's heading (item none) or a
 // setting. The sections: WEBS, SWINGING, VENOM, COMFORT, DISPLAY, BODY and
 // EXPERIMENTAL (the player, October 19: "sort the options in spidy vr
@@ -148,7 +154,7 @@ struct Row {
     // menu (the one with resume)").
     bool page{};
 };
-const std::array<Row, 24>& rows();
+const std::array<Row, 25>& rows();
 // The choice a setting shows for these values: a switch 0 (off) or 1 (on), a
 // list its step nearest to the value (a launcher value between two steps
 // shows the nearer one, the lower on a tie).

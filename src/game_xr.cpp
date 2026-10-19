@@ -94,6 +94,8 @@ struct XrConfig {
     // for the button they ask for nor named with the VR control, and the
     // interact button is the game's Y as before; the pad layer stays);
     // bit 21: arcade webs (WEB STYLE: ARCADE; vr_settings::Values::arcadeWebs)
+    // (MilesVR: bit 21 the venom hand, 22 arcade webs, 23 the venom fist on
+    // the trigger - vr_settings::Values::venomTrigger)
     uint32_t options{};
     // OpenXR runtime manifest the launcher chose; empty: Virtual Desktop's if
     // installed, else Windows' active runtime.
@@ -793,6 +795,8 @@ DWORD WINAPI run(void*) {
         // filled still goes on until it is let go.
         float venomGrip{};
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
+        // The venom on the hand's web button (VENOM BUTTON as WEB BUTTON): its webs are off meanwhile.
+        bool venomWebsOff{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -957,9 +961,11 @@ DWORD WINAPI run(void*) {
         // the MILES VR tab's VENOM HAND during play: applySettings moves it).
         values.venomLeftHand = config.options & 0x200000;
         unsigned venomSide = values.venomLeftHand ? 0u : 1u;
+        bool venomTriggerBefore = values.venomTrigger;
         const char* venomName = venomSide ? "right" : "left";
         values.standOnWalls = !(config.options & 8192);
         values.arcadeWebs = config.options & 0x400000; // bit 22 in MilesVR: 21 is the venom hand
+        values.venomTrigger = config.options & 0x800000;
         values.swingSpeed = config.swingSpeed;
         values.snapTurn = static_cast<int>(config.snapTurn);
         values.smoothTurn = static_cast<int>(config.smoothTurn);
@@ -1258,6 +1264,14 @@ DWORD WINAPI run(void*) {
             rig.standOnWalls(values.standOnWalls);
             native_hud::setSize(values.hud);
             // VENOM HAND moves the venom to the other hand, uncharged (the tab is open, so the game is paused).
+            // VENOM BUTTON changed: the venom starts again uncharged on the other button.
+            if (values.venomTrigger != venomTriggerBefore) {
+                venomTriggerBefore = values.venomTrigger;
+                venomCharge = {};
+                venomGrip = venomGlow = 0;
+                venomHandBefore = venomKeepWeb = false;
+                message(2, 0, values.venomTrigger ? "Venom button: trigger" : "Venom button: grip");
+            }
             if (const unsigned side = values.venomLeftHand ? 0u : 1u; side != venomSide) {
                 venomSide = side;
                 venomName = venomSide ? "right" : "left";
@@ -1896,6 +1910,18 @@ DWORD WINAPI run(void*) {
                     // of a swing.
                     {
                         auto& fist = motion.swing.hands[venomSide];
+                        // The venom button (VENOM BUTTON): the swing's web button (its grip,
+                        // the trigger with WEB BUTTON: TRIGGER) or its other, the reel's. On
+                        // the web button the hand's webs are off while the venom has it; on
+                        // the other only that button's reel and web balls are.
+                        const bool venomOnWeb = values.venomTrigger == values.triggerWebs;
+                        float& venomButton = venomOnWeb ? fist.grip : fist.trigger;
+                        const auto takeVenomButton = [&] {
+                            if (venomOnWeb)
+                                fist.grip = fist.trigger = 0;
+                            else
+                                venomButton = 0;
+                        };
                         // The venom hand's thumbstick clicked with the meter full empties
                         // it there and then, whatever the player is doing: the fist's
                         // charge is gone and its webs are back (the user, October 19:
@@ -1950,8 +1976,8 @@ DWORD WINAPI run(void*) {
                             // to charge - is no fight; in a fight the mod's own venom
                             // moves stand. Standing, and a punch away from the body: a
                             // swing's pulls and yanks come toward it.
-                            const bool held = fist.grip > venom_punch::gripOn ||
-                                              (venomGameHeld && fist.grip > venom_punch::gripOff);
+                            const bool held = venomButton > venom_punch::gripOn ||
+                                              (venomGameHeld && venomButton > venom_punch::gripOff);
                             const bool calm = calmSeconds >= venom_punch::fightCalmSeconds;
                             prompt_buttons::Demand ask = venomPromptOn ? promptAsked : prompt_buttons::Demand{};
                             if (!ask.any() && calm && immersive && !calibrationInput && !padLayer.latched()) {
@@ -1987,22 +2013,23 @@ DWORD WINAPI run(void*) {
                             }
                             venomPromptLeft = venomGameHeld ? 1.f : 0.f;
                             if (venomPromptOn || venomGameHeld)
-                                fist.grip = fist.trigger = 0;
+                                takeVenomButton();
                         }
                         const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
                                                !calibrationInput && !padLayer.latched();
                         if (!venomHand)
                             venomKeepWeb = false;
-                        else if (!venomHandBefore && swingState.webs[venomSide].attached &&
-                                 fist.grip > venom_punch::gripOff)
+                        else if (!venomHandBefore && venomOnWeb && swingState.webs[venomSide].attached &&
+                                 venomButton > venom_punch::gripOff)
                             venomKeepWeb = true;
-                        if (venomKeepWeb && fist.grip < venom_punch::gripOff)
+                        if (venomKeepWeb && venomButton < venom_punch::gripOff)
                             venomKeepWeb = false;
                         venomHandBefore = venomHand;
                         venomHandOn = venomHand && !venomKeepWeb;
-                        venomGrip = venomHandOn ? fist.grip : 0.f;
+                        venomWebsOff = venomHandOn && venomOnWeb;
+                        venomGrip = venomHandOn ? venomButton : 0.f;
                         if (venomHandOn)
-                            fist.grip = fist.trigger = 0;
+                            takeVenomButton();
                     }
                     // A thumbstick's click, but not the venom hand's that let the venom go.
                     const auto stickClick = [&](unsigned i) {
@@ -2780,8 +2807,12 @@ DWORD WINAPI run(void*) {
                         if (venomFull && !venomFullBefore && steering) {
                             runtime.haptic(venomSide, .4f, .08f);
                             char text[96];
-                            sprintf_s(text, "Venom full - the %s hand's webs are off: hold its grip to charge your fist",
-                                      venomName);
+                            const char* button = values.venomTrigger ? "trigger" : "grip";
+                            if (values.venomTrigger == values.triggerWebs)
+                                sprintf_s(text, "Venom full - the %s hand's webs are off: hold its %s to charge your fist",
+                                          venomName, button);
+                            else
+                                sprintf_s(text, "Venom full - hold the %s %s to charge your fist", venomName, button);
                             message(3, 0, text);
                         }
                         venomFills += venomFull && !venomFullBefore;
@@ -3125,8 +3156,8 @@ DWORD WINAPI run(void*) {
                         d.settings = (values.webGrab ? 1u : 0u) | (values.punch ? 2u : 0u) | (values.body ? 4u : 0u) |
                                      (values.airWebs ? 8u : 0u) | (values.webShooter ? 16u : 0u) |
                                      (values.flips ? 32u : 0u) | (values.triggerWebs ? 64u : 0u) |
-                                     (values.standOnWalls ? 128u : 0u) | (values.venomLeftHand ? 256u : 0u);
-                                     (values.standOnWalls ? 128u : 0u) | (values.arcadeWebs ? 512u : 0u);
+                                     (values.standOnWalls ? 128u : 0u) | (values.venomLeftHand ? 256u : 0u) |
+                                     (values.arcadeWebs ? 512u : 0u) | (values.venomTrigger ? 1024u : 0u);
                         d.scans = templePress.scans();
                         d.camos = camoPress.scans();
                         d.swingTaps = swingTap.taps();
@@ -3194,7 +3225,7 @@ DWORD WINAPI run(void*) {
                         d.venomMeter = venomMeter.value;
                         d.venomGrip = venomGrip;
                         d.venomGlow = venomGlow;
-                        d.venomFlags = (venom_punch::full(venomMeter.value) ? 1u : 0u) | (venomHandOn ? 2u : 0u) |
+                        d.venomFlags = (venom_punch::full(venomMeter.value) ? 1u : 0u) | (venomWebsOff ? 2u : 0u) |
                                        (venomArmed ? 4u : 0u) | (venomKeepWeb ? 8u : 0u);
                         d.venomFills = venomFills;
                         d.venomCharges = venomCharges;
@@ -3571,8 +3602,8 @@ DWORD WINAPI run(void*) {
                         saved.aims[i] = aims.hands[i];
                         saved.offers[i] = pointing[i] ? *pointing[i] : offer_pointing::Pointed{};
                     }
-                    // The right hand shoots no web while it holds the venom.
-                    if (venomHandOn)
+                    // The venom hand shoots no web while the venom has its web button.
+                    if (venomWebsOff)
                         saved.aims[venomSide] = {};
                     saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
                     saved.strandUpper = webRopes.upper();
