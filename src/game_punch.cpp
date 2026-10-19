@@ -847,6 +847,39 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
                     if (hands[i].tracked && length(hands[i].fist - middle) < stealth::onBack)
                         onBack |= 1u << i;
             }
+        // No one on the ground: a perch takedown - an enemy below, a hand pointing at him.
+        if (!target && sinceBlow >= stealth::calmSeconds && strike.phase() == WebStrike::Phase::Idle &&
+            player.grounded && !player.swinging) {
+            float bestAim = stealth::perchAim;
+            for (const auto& b : bots) {
+                Vec3 feet{};
+                if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
+                    game_targets::held(base, b) || !game_targets::position(b, feet))
+                    continue;
+                const Vec3 d = feet - player.feet;
+                if (d.y > -stealth::perchBelow || std::hypot(d.x, d.z) > stealth::perchReach)
+                    continue;
+                const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
+                uint32_t aiming{};
+                float aimed = -1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& h = in.hands[i];
+                    if (!hands[i].tracked)
+                        continue;
+                    const Vec3 way = h.aim.orientation.rotate({0, 0, -1});
+                    if (stealth::aimsAt(h.aim.position, way, middle)) {
+                        aiming |= 1u << i;
+                        aimed = std::max(aimed, dot(way, normalized(middle - h.aim.position)));
+                    }
+                }
+                if (!aiming || aimed < bestAim || !game_targets::live(base, b))
+                    continue;
+                bestAim = aimed;
+                target = b.record;
+                point = feet + Vec3{0, b.size.height(botHeight) + .35f, 0};
+                onBack = aiming | stealth::perchBit;
+            }
+        }
         AcquireSRWLockExclusive(&output);
         venomOut.takedownTarget = target;
         venomOut.takedownPoint = point;

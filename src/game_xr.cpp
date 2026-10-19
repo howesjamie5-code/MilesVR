@@ -809,6 +809,7 @@ DWORD WINAPI run(void*) {
         uint32_t takedownOnBack{}, takedownsDone{};
         float takedownPress{};
         bool takedownY{}; // Y down at the last frame
+        bool takedownPerch{}; // the takedown going in is a perch's: the game's Y, not its X
         // 0.1.68: the takedown turns the hero to his back first, as the interact step turns him to a door
         // (the game takes its Y only from a hero who faces the thing): the stick toward him for
         // takedownTurn seconds, at takedownAim (his place as it fired).
@@ -1940,13 +1941,17 @@ DWORD WINAPI run(void*) {
                     // him its web is not shot (no web grab catches and flings him).
                     for (unsigned i = 0; i < 2; ++i) {
                         const auto grab = takedownHands[i].update(
-                            frame.seconds, immersive && !calibrationInput && takedownTarget != 0,
+                            frame.seconds,
+                            immersive && !calibrationInput && takedownTarget != 0 &&
+                                // A perch takedown is the hand that points at him (0.1.70).
+                                (!(takedownOnBack & stealth::perchBit) || ((takedownOnBack >> i) & 1u)),
                             frame.hands[i].squeeze, frame.hands[i].grip.position - frame.head.position);
                         if (grab.hold)
                             (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
                         if (grab.fire) {
+                            takedownPerch = (takedownOnBack & stealth::perchBit) != 0;
                             takedownPress = .6f;
-                            takedownTurn = .2f;
+                            takedownTurn = takedownPerch ? 0.f : .2f;
                             takedownAim = takedownPoint;
                             ++takedownsDone;
                             runtime.haptic(static_cast<int>(i), 1.f, .2f);
@@ -1954,7 +1959,9 @@ DWORD WINAPI run(void*) {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, "Takedown - the game's X, %.1f m from him", metres);
+                                sprintf_s(text, takedownPerch ? "Perch takedown - the game's Y, %.1f m from him"
+                                                        : "Takedown - the game's X, %.1f m from him",
+                                          metres);
                                 message(3, 0, text);
                             }
                         }
@@ -2810,15 +2817,18 @@ DWORD WINAPI run(void*) {
                         {
                             const bool y = (origins.play() & buttonY) != 0;
                             if (takedownTarget && y && !takedownY) {
+                                takedownPerch = (takedownOnBack & stealth::perchBit) != 0;
                                 takedownPress = .6f;
-                                takedownTurn = .2f;
+                                takedownTurn = takedownPerch ? 0.f : .2f;
                                 takedownAim = takedownPoint;
                                 ++takedownsDone;
                                 {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, "Takedown - the game's X, %.1f m from him", metres);
+                                sprintf_s(text, takedownPerch ? "Perch takedown - the game's Y, %.1f m from him"
+                                                        : "Takedown - the game's X, %.1f m from him",
+                                          metres);
                                 message(3, 0, text);
                             }
                             }
@@ -3077,7 +3087,7 @@ DWORD WINAPI run(void*) {
                         // takedown; Y, Triangle, is its web strike takedown from a perch - 0.1.66
                         // to 0.1.68 sent Y, and the game never took a ground takedown from it).
                         if (takedownPress > 0)
-                            walk.demand.buttons |= prompt_buttons::padX;
+                            walk.demand.buttons |= takedownPerch ? prompt_buttons::padY : prompt_buttons::padX;
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");

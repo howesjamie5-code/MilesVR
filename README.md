@@ -77,7 +77,7 @@ The launcher's **Controls** tab lists every control. The basics:
 | Interact | **Y** |
 | Scan | **Right** hand to your temple, pull its **trigger** |
 | Camouflage | **Left** hand to your temple, pull its **trigger** |
-| Stealth takedown | Behind an unaware enemy (a blue mark shows): squeeze a **grip** and **yank** toward you, or press **Y**. From a perch: **Y** |
+| Stealth takedown | Behind an unaware enemy (a blue mark shows): squeeze a **grip** and **yank** toward you, or press **Y**. From a perch: **point** at him below, then **grip** and **yank** (or **Y**) |
 | Phone | Reach to your back pocket, squeeze the grip, bring it up in front of you; **B** puts it away |
 | Pause | **Menu**, or hold both sticks in |
 

@@ -1573,7 +1573,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Blue mark over an enemy: grip + yank, or Y", "Stealth takedown (the game's own). The mark shows when "
                                                          "you are behind him, close enough",
            "Takedown - the game's X, 1.2 m from him"},
-          {"From a perch above him: Y", "Perch takedown (the game's own)"}}},
+          {"From a perch: point at him, grip + yank, or Y", "Perch takedown (the game's own). The blue mark "
+                                                            "shows over the one you point at below",
+           "Perch takedown - the game's Y, 6.0 m from him"}}},
         {"PHONE",
          {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
                                                     "keep squeezing and bring it up in front of you",

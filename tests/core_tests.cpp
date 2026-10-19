@@ -790,6 +790,11 @@ int main() {
         // He faces +z: the player at -z is behind him, at +z in front, at the side neither.
         check(behind({0,0,0},{0,0,1},{0,0,-1})&&!behind({0,0,0},{0,0,1},{0,0,1})&&!behind({0,0,0},{0,0,1},{1,0,0}),
               "behind him, not in front or beside");
+        // From a perch: pointing at him below, within about 14 degrees.
+        const Vec3 perchHand{0,5,0},him{3,0,-4};
+        check(aimsAt(perchHand,normalized(him-perchHand),him)&&!aimsAt(perchHand,{0,0,-1},him)&&
+                  aimsAt(perchHand,normalized(him+Vec3{.6f,0,0}-perchHand),him),
+              "pointing at him from above, a little off still counts, straight ahead does not");
         const float dt=1.f/90;
         Takedown t;
         Vec3 hand{0,-.3f,-.5f};

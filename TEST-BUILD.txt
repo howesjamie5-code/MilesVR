@@ -1,5 +1,19 @@
-MilesVR 0.1.69 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.70 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.69: PERCH TAKEDOWNS
+--------------------------------------------------
+Standing on a ledge, lamp post or rooftop at least 1.5 m above an enemy
+(within 15 m), out of a fight, point a hand at him: the blue mark shows
+over him. Squeeze that hand's grip and yank toward you (or press Y): the
+game's own perch takedown (its Y, Triangle). That hand shoots no web
+while you do it, so the web grab does not catch and fling him. The panel
+says "Perch takedown - the game's Y, 6.0 m from him".
+Ground takedowns are as in 0.1.69 (the game's X).
+
+What to try:
+1. Perch above an unaware thug, point at him: the mark? Grip + yank:
+   the perch takedown?
 
 What changed since 0.1.68: TAKEDOWNS PRESS THE RIGHT BUTTON
 --------------------------------------------------

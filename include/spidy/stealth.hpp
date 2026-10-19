@@ -19,6 +19,20 @@ namespace spidy::stealth {
 constexpr float reach = 1.5f, rise = 1.f, behindCos = .35f; // reach 1.8 until 0.1.68
 // A hand within `onBack` of his middle is on his back.
 constexpr float onBack = .6f;
+// A perch takedown (MilesVR 0.1.70, the user: "i want the perch silent
+// takedown implemented"): the player on his feet at least `perchBelow`
+// above an enemy and within `perchReach` of him across, a hand pointing at
+// him within `perchAim` (a cosine): the game's web strike takedown, its Y.
+constexpr float perchBelow = 1.5f, perchReach = 15, perchAim = .97f;
+// A hand from `from` along `way` (unit) points at `target` within perchAim.
+inline bool aimsAt(Vec3 from, Vec3 way, Vec3 target) {
+    const Vec3 to = target - from;
+    const float d = length(to);
+    return d > .1f && std::isfinite(d) && finite(way) && dot(way, to / d) >= perchAim;
+}
+// Venom::takedownHands: a bit per hand pointing at him, and this bit for a
+// perch takedown (the game's Y; without it a ground one, its X).
+constexpr unsigned perchBit = 0x100;
 // No mark within `calmSeconds` of a blow of the player's: in a fight Y is the
 // game's web strike.
 constexpr float calmSeconds = 5;
