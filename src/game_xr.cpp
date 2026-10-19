@@ -809,6 +809,11 @@ DWORD WINAPI run(void*) {
         uint32_t takedownOnBack{}, takedownsDone{};
         float takedownPress{};
         bool takedownY{}; // Y down at the last frame
+        // 0.1.68: the takedown turns the hero to his back first, as the interact step turns him to a door
+        // (the game takes its Y only from a hero who faces the thing): the stick toward him for
+        // takedownTurn seconds, at takedownAim (his place as it fired).
+        float takedownTurn{};
+        Vec3 takedownAim{};
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -1940,13 +1945,22 @@ DWORD WINAPI run(void*) {
                         if (grab.hold)
                             (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
                         if (grab.fire) {
-                            takedownPress = .3f;
+                            takedownPress = .6f;
+                            takedownTurn = .2f;
+                            takedownAim = takedownPoint;
                             ++takedownsDone;
                             runtime.haptic(static_cast<int>(i), 1.f, .2f);
-                            message(3, 0, "Takedown");
+                            {
+                                char text[96];
+                                const float metres = std::hypot(takedownPoint.x - swingState.position.x,
+                                                             takedownPoint.z - swingState.position.z);
+                                sprintf_s(text, "Takedown - the game's Y, %.1f m from him", metres);
+                                message(3, 0, text);
+                            }
                         }
                     }
                     takedownPress = std::max(0.f, takedownPress - static_cast<float>(frame.seconds));
+                    takedownTurn = std::max(0.f, takedownTurn - static_cast<float>(frame.seconds));
                     // The Mega Venom Blast (0.1.56): all three bars full, both grips
                     // squeezed together. A grip alone waits a moment for the other
                     // before the swing sees it, so the blast's squeeze shoots no webs.
@@ -2796,9 +2810,17 @@ DWORD WINAPI run(void*) {
                         {
                             const bool y = (origins.play() & buttonY) != 0;
                             if (takedownTarget && y && !takedownY) {
-                                takedownPress = .3f;
+                                takedownPress = .6f;
+                                takedownTurn = .2f;
+                                takedownAim = takedownPoint;
                                 ++takedownsDone;
-                                message(3, 0, "Takedown");
+                                {
+                                char text[96];
+                                const float metres = std::hypot(takedownPoint.x - swingState.position.x,
+                                                             takedownPoint.z - swingState.position.z);
+                                sprintf_s(text, "Takedown - the game's Y, %.1f m from him", metres);
+                                message(3, 0, text);
+                            }
                             }
                             takedownY = y;
                             if (takedownTarget || takedownPress > 0)
@@ -2853,6 +2875,19 @@ DWORD WINAPI run(void*) {
                                 ahead = normalized(ahead);
                                 walk.forward = stepIn * dot(look, ahead);
                                 walk.right = stepIn * dot(look, cross(ahead, {0, 1, 0}));
+                            }
+                        }
+                        // A takedown: the stick toward him for a moment, so the hero
+                        // faces his back as the game's Y goes in (0.1.68).
+                        if (takedownTurn > 0 && finite(takedownAim) && finite(swingState.position)) {
+                            Vec3 toward{takedownAim.x - swingState.position.x, 0,
+                                        takedownAim.z - swingState.position.z};
+                            Vec3 ahead{camera[8], 0, camera[10]};
+                            if (length(toward) > .1f && length(ahead) > .3f) {
+                                toward = normalized(toward);
+                                ahead = normalized(ahead);
+                                walk.forward = .5f * dot(toward, ahead);
+                                walk.right = .5f * dot(toward, cross(ahead, {0, 1, 0}));
                             }
                         }
                         // While a use is under way the game's crawl is where the

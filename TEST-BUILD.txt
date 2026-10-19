@@ -1,5 +1,16 @@
-MilesVR 0.1.67 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.68 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.67: TAKEDOWNS TURN MILES TO FACE HIM
+--------------------------------------------------
+0.1.67's takedown fired (the buzz) and sent the game's Y, but the game did
+no takedown. The game takes its Y only from a Miles who faces the thing
+(as with doors), and in VR he faces wherever he last walked. Now the
+takedown first turns him to the enemy's back (the stick toward him for a
+moment), holds Y a little longer, and the mark shows only within 1.5 m
+(was 1.8), so you are close enough.
+The panel and the session log now say "Takedown - the game's Y, 1.2 m
+from him", so the distance can be checked.
 
 What changed since 0.1.66: QUICKER STEALTH TAKEDOWNS
 --------------------------------------------------

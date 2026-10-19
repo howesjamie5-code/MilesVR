@@ -14,7 +14,7 @@ namespace spidy::stealth {
 // Within `reach` across and `rise` up or down of his feet, and behind him: the
 // player's place from him at least `behindCos` (a cosine) against the way he
 // faces.
-constexpr float reach = 1.8f, rise = 1.f, behindCos = .35f;
+constexpr float reach = 1.5f, rise = 1.f, behindCos = .35f; // reach 1.8 until 0.1.68
 // A hand within `onBack` of his middle is on his back.
 constexpr float onBack = .6f;
 // No mark within `calmSeconds` of a blow of the player's: in a fight Y is the
