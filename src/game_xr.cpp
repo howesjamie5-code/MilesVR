@@ -937,6 +937,7 @@ DWORD WINAPI run(void*) {
         // leap let go of, for the swing's next commands.
         game_pad::ChargeJump chargeJump;
         ULONGLONG jumpLegsUntil{}; // a jump pressed lately: the game's legs (native_body::gameLegs)
+        bool stickWalking{};       // the left stick moves him: the game's walk and run legs
         // The right hand at the temple scans; the left's is Miles's Camouflage.
         game_pad::TemplePress templePress{2u}, camoPress{1u};
         game_pad::SwingTap swingTap;
@@ -3019,6 +3020,7 @@ DWORD WINAPI run(void*) {
                         askingGame = steering && swingState.owned && !calibrationInput &&
                                      (walk.zip || (inFlight && (walk.interact || walk.demand.any())));
                         walk.jump = (keys & swingJumpKey) != 0;
+                        stickWalking = std::hypot(walk.right, walk.forward) > .2f;
                         // A jump pressed: the game's legs for its takeoff (the body's gameLegs).
                         if (walk.jump)
                             jumpLegsUntil = GetTickCount64() + 700;
@@ -3517,7 +3519,7 @@ DWORD WINAPI run(void*) {
                                      // The game's crouches on the ground are not the body's, but a
                                      // Charge Jump's and a jump's are (0.1.62).
                                      (chargeJump.charging() || GetTickCount64() < jumpLegsUntil ||
-                                              !swingState.grounded
+                                              !swingState.grounded || stickWalking
                                           ? native_body::gameLegs
                                           : 0u);
                         pose.standUp = motion.standUp;

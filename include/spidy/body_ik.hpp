@@ -196,6 +196,10 @@ struct Targets {
     // along the floor behind him, where a squat folded them up in front of
     // his eyes. Standing tall enough, kneeling is standing.
     bool kneel{};
+    // Planted on the ground the hero stands on himself (not a wall): the
+    // game's pose may say he perches there (MilesVR 0.1.63), and the feet
+    // step after the hips rather than slide.
+    bool ground{};
 };
 struct Config {
     // Where the wrist joint sits from the grip point of a right hand, in its
@@ -263,6 +267,15 @@ struct Config {
     // How fast the body takes over from the game's pose and gives it back
     // (shares per second).
     float blendSpeed = 4;
+    // Planted feet step after the hips: once a foot is stepReach (model units
+    // at the body's size) from where it should stand, it lifts stepLift and
+    // moves there in stepSeconds, one foot at a time.
+    float stepReach = .18f, stepLift = .07f, stepSeconds = .22f;
+    // A perch: the game's hips stay under perchCrouch of their standing height
+    // over the feet for perchSeconds (a landing's squat is shorter). Perched,
+    // the feet stand perchStance wider apart and the knees bend out
+    // perchKnees of the way to the side.
+    float perchCrouch = .72f, perchSeconds = .5f, perchStance = .09f, perchKnees = .7f;
 };
 struct State {
     float weight{}, yaw{};
@@ -275,6 +288,17 @@ struct State {
         Quat orientation{};
     };
     std::array<Held, 2> held{};
+    // Planted feet (MilesVR 0.1.63, the user: "when i move the legs move as
+    // well"): where each stands, model space, and a step under way.
+    struct Foot {
+        bool set{};
+        Vec3 at{}, from{}, to{};
+        float step = -1; // 0..1 through a step; below 0 none
+    };
+    std::array<Foot, 2> feet{};
+    // How long the game's pose has crouched low on the ground (a perch).
+    float crouched{};
+    bool perched{};
 };
 // Turns the body's yaw by `radians` about the up, at once: the player snap
 // turned (body and all), or the model turned under the body (the hero's
@@ -288,6 +312,7 @@ struct Result {
     std::array<float, 2> handError{-1, -1};
     float headError = -1;
     float yaw{};
+    bool perched{};
 };
 // One frame. `wanted` turns the body on (it blends in) or off (it blends
 // out, toward the same targets); `dt` seconds since the last call. `scale`

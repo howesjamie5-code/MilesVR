@@ -431,6 +431,11 @@ void solveHero(float* out, uintptr_t job, uintptr_t instance) {
             if (!standing && !t.airborne && !(wanted.flags & native_body::gameLegs)) {
                 t.plant = true;
                 t.floor = {};
+                t.ground = true;
+            } else {
+                state.feet = {};
+                state.crouched = 0;
+                state.perched = false;
             }
             t.kneel = standing && (wanted.flags & native_body::kneel);
             t.eyes = toModel.rotate(wanted.eyes);

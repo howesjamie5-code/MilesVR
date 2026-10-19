@@ -1,5 +1,24 @@
-MilesVR 0.1.62 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.63 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.62: WALKING LEGS, STEPPING FEET AND A PERCH
+--------------------------------------------------
+- Moving with the left stick on the ground plays the game's walk and run
+  legs again (0.1.62 kept them planted).
+- Standing still, each foot stays put. When you move about your room and
+  your body gets about 18 cm from a foot, it takes a quick step (lifts,
+  moves, lands), one foot at a time, instead of sliding.
+- Perched (the game holds Miles in a low crouch for half a second or
+  more: a lamp post, a ledge, a rooftop edge): a Spider-Man perch - feet
+  wider apart, knees bent out to the sides. How low he crouches follows
+  your real head: crouch down and he sinks into the perch, stand up and he
+  rises out of it.
+- Charging a Charge Jump, jumping and the air keep the game's legs.
+
+What to try:
+1. Walk with the stick: walking legs? Stand still and step about in your
+   room: do the feet step?
+2. Land on a lamp post or ledge and crouch down in real life: the perch?
 
 What changed since 0.1.61: NO CROUCHING LEGS ON THE GROUND
 --------------------------------------------------

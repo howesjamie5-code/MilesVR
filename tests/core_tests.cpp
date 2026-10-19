@@ -8593,6 +8593,30 @@ int main() {
             }
         }
     });
+    test("body: on his own ground a foot stays put, and steps after the hips once they carry it far", [] {
+        // MilesVR 0.1.63, the user: "when i move the legs move aswell".
+        auto b=testBody();
+        body::Targets t;t.head=true;t.plant=true;t.ground=true;t.floor={};t.eyes={0,1.6f,0};t.facing={};
+        body::State s;body::Result r;
+        auto pose=solved(b,t,s,{},1,&r);
+        pose=solved(b,t,s,{},1,&r); // blended in
+        const Vec3 before[2]={b.at(pose,b.rig.legs[0].foot),b.at(pose,b.rig.legs[1].foot)};
+        check(r.grounded&&!r.perched,"standing on his ground: grounded, and no perch");
+        // A few centimetres: the feet stay where they stand.
+        t.eyes={.05f,1.6f,0};
+        pose=solved(b,t,s,{},1,&r);
+        for(int i=0;i<2;++i)
+            check(length(b.at(pose,b.rig.legs[i].foot)-before[i])<.02f,"a foot slid after a small move");
+        // Half a metre across: each foot steps after the hips, and ends under them.
+        t.eyes={.5f,1.6f,0};
+        pose=solved(b,t,s,{},1,&r);
+        pose=solved(b,t,s,{},1,&r);
+        for(int i=0;i<2;++i){
+            const Vec3 hip=b.at(pose,b.rig.legs[i].upper),foot=b.at(pose,b.rig.legs[i].foot);
+            check(std::fabs(foot.x-hip.x)<.15f,"a foot did not step after the hips");
+            check(foot.y<.2f,"a foot did not land on the floor");
+        }
+    });
     test("body: on a wall the body stands up in the world and plants no feet", [] {
         auto b=testBody(true);
         // The hero crawls up a wall: the world's up is the model's -z.

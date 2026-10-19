@@ -464,6 +464,16 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
                                  {pose.direction(legs[1].foot, {1, 0, 0}), pose.direction(legs[1].foot, {0, 1, 0})}};
     const Vec3 hips = pose.position(rig.pelvis) * s;
     const Vec3 hipsForward = level(pose.direction(rig.pelvis, rig.pelvisForward));
+    // A perch (0.1.63): on his own ground, the game holds the hips low over
+    // the feet for longer than a landing's squat.
+    {
+        const float standingHips = (rig.thigh[0] + rig.shin[0] + rig.ankleHeight[0]) * s;
+        const float overFeet = dot(hips, up) - std::min(dot(feet[0], up), dot(feet[1], up)) + rig.ankleHeight[0] * s;
+        const bool low = t.ground && standingHips > 0 && overFeet < c.perchCrouch * standingHips;
+        state.crouched = low ? state.crouched + dt : 0.f;
+        state.perched = state.crouched >= c.perchSeconds;
+        r.perched = state.perched;
+    }
     // Feet stand on the ground only while the hero itself stands upright -
     // or on the player's own floor, planted, whichever way the hero is turned.
     const float lowest = std::min(dot(feet[0], up), dot(feet[1], up));
@@ -547,8 +557,40 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
                 back = height - knee > thigh ? run(shin, height - thigh - ankle)
                                              : run(thigh, height - knee) + run(shin, knee - ankle);
             }
-            const Vec3 foot = hip - up * (height - ankle) - forward * back;
-            limb(pose, rig, leg.upper, leg.lower, leg.foot, foot, forward, w);
+            const Vec3 side = i == 0 ? left : left * -1.f;
+            const bool perch = state.perched && !t.kneel;
+            Vec3 foot = hip - up * (height - ankle) - forward * back + side * (perch ? c.perchStance * s : 0.f);
+            // On the ground the foot stays where it stands, and steps there
+            // once the hips have carried its place far enough (the player
+            // walking about his room), one foot at a time.
+            if (t.ground && !t.kneel) {
+                auto& f = state.feet[static_cast<size_t>(i)];
+                const auto& other = state.feet[static_cast<size_t>(1 - i)];
+                const float reach = c.stepReach * s;
+                if (!f.set) {
+                    f = {true, foot, foot, foot, -1};
+                } else if (f.step >= 0) {
+                    f.to = foot;
+                    f.step = std::min(1.f, f.step + dt / c.stepSeconds);
+                    const float e = f.step * f.step * (3 - 2 * f.step);
+                    f.at = f.from + (f.to - f.from) * e + up * (c.stepLift * s * std::sin(3.14159265f * f.step));
+                    if (f.step >= 1) {
+                        f.at = f.to;
+                        f.step = -1;
+                    }
+                } else {
+                    // Its height is always the floor's; across, it waits.
+                    f.at = f.at + up * dot(foot - f.at, up);
+                    if (length(level(foot - f.at)) > reach && other.step < 0) {
+                        f.from = f.at;
+                        f.to = foot;
+                        f.step = 0;
+                    }
+                }
+                foot = f.at;
+            }
+            const Vec3 knees = perch ? normalized(forward + side * c.perchKnees) : forward;
+            limb(pose, rig, leg.upper, leg.lower, leg.foot, foot, knees, w);
             // A kneeling foot goes where the shin takes it, behind him.
             if (back > .05f * s)
                 continue;
