@@ -98,7 +98,7 @@ With a web attached, the venom button reels in. Hold the venom button until the 
 | Venom Punch | Punch the marked enemy. Within 2 m your fist lands it; farther away the web strike flies you in | 1 bar |
 | Venom Jump | In a fight, standing, punch straight **up**: enemies within 5 m go up into the air, and you jump up with them | 1 bar |
 | Venom Smash | Punch straight **down**, standing or in the air: everyone within 5 m is hit and thrown | 1 bar |
-| Mega Venom Blast | With all three bars full, squeeze **both grips together** (no charge needed) | 3 bars |
+| Mega Venom Blast | With all three bars full, squeeze **both grips together**: the game's own blast, with its slow motion and sound | 3 bars |
 | Let the venom go | Click the venom hand's stick: the meter empties and your webs are back | all |
 
 ## Reports

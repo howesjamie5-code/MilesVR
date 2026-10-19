@@ -1,5 +1,19 @@
-MilesVR 0.1.56 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.57 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.56: THE GAME'S OWN MEGA VENOM BLAST
+--------------------------------------------------
+Squeezing both grips with all three bars full now sends the game its own
+Mega Venom Blast (its L3 + R3, both sticks in), as on the flat screen:
+its hover, its quick slow motion, its sound and its blast. The panel says
+"MEGA VENOM BLAST - the game's own (its L3 + R3)".
+If the game does not take it (the bars are still full 1.5 s later: the
+skill not unlocked, a story moment that blocks it), the mod's own blast
+goes off instead, as in 0.1.56.
+
+What to try:
+1. Three full bars, squeeze both grips: the game's slow motion and sound?
+   Does anything odd happen to your view or body while it plays?
 
 What changed since 0.1.55: MEGA VENOM BLAST ON BOTH GRIPS
 --------------------------------------------------
