@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 41, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 42, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -363,8 +363,10 @@ struct XrData {
     // Version 41: venom smashes gone off, the enemies the latest hit, and the
     // drops called off with no ground under him.
     uint32_t venomSmashes{}, venomSmashHits{}, venomSmashesCalledOff{}, venomSpare{};
+    // Version 42: the meter's holder's 16 words around it (game_venom::Meter::around).
+    uint32_t venomAround[16]{};
 };
-static_assert(sizeof(XrData) == 1232);
+static_assert(sizeof(XrData) == 1296);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -2731,6 +2733,7 @@ DWORD WINAPI run(void*) {
                         d.venomSmashes = static_cast<uint32_t>(venomSmashesBefore);
                         d.venomSmashHits = venomSmashHits;
                         d.venomSmashesCalledOff = venomSmashesCalledOff;
+                        std::memcpy(d.venomAround, venomMeter.around, sizeof(d.venomAround));
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];

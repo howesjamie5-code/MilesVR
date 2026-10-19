@@ -1,5 +1,23 @@
-MilesVR 0.1.20 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.21 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.20: READY FOR THE EXTRA VENOM BARS
+--------------------------------------------------
+You have a 100% save, with Miles's two extra venom bars. Until now the mod
+took a meter reading above 200 for a bad reading and would have lost the
+meter. Now it accepts it, and the session report records the game's values
+next to the meter, so the next build can see exactly how the game keeps the
+three bars and make "one bar per move" exact.
+The venom smash from 0.1.20 is in this build too (not tested yet).
+
+What to try, on the 100% save:
+1. Fill all three bars (watch the HUD). Note roughly when the right hand's
+   webs switch off: after the first bar, or only when all three are full?
+2. Do one venom punch: how many bars does the HUD show after it?
+3. Do one venom smash (charge, punch down, standing and from a jump): how
+   many bars are left? How many thugs got hit?
+4. Use one of the game's own venom moves and heal once, if you can.
+5. Close the game and keep the reports folder. Tell me what the HUD showed.
 
 What changed since 0.1.19: THE VENOM SMASH
 --------------------------------------------------

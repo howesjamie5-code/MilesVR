@@ -18,6 +18,9 @@ namespace spidy::venom_punch {
 // 41.75 at the next heal (reports\venom-probe-20261018-234812.csv).
 constexpr uintptr_t meleeManagerVtable = 0x3e122a8, meterOffset = 0x28c;
 constexpr float fullMeter = 100;
+// The most a meter read is believed to hold: Miles gets two more bars later
+// in the story (until 0.1.21 a meter past 200 read as no meter at all).
+constexpr float mostMeter = 1000;
 // Within this long of an enemy near, the player is in a fight: the right
 // stick's click is no LB + RB there (the game's web throw of an object).
 constexpr float fightCalmSeconds = 3;

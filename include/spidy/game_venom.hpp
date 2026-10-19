@@ -37,6 +37,11 @@ struct Meter {
     // frame's meter came from: 0 nowhere, 1 the HeroMeleeManager's neighbour,
     // 2 the holder found by its class.
     uint32_t holderVtable{}, holderOffset{}, route{};
+    // The holder's 16 words around the meter, from aroundBefore bytes before
+    // it (the meter is the eighth): how the game keeps the two bars Miles
+    // gets later in the story (a meter up to 300, or a count of bars).
+    static constexpr uintptr_t aroundBefore = 0x1c;
+    uint32_t around[16]{};
 };
 // Once a frame: `record` is the player's actor record (0 without one).
 Meter sample(uintptr_t base, uintptr_t record);

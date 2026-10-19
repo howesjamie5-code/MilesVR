@@ -101,7 +101,7 @@ void scan(uintptr_t base, uintptr_t record) {
 }
 bool meter(uintptr_t address, float& value) {
     return read(address, &value, 4) && std::isfinite(value) && value >= 0 &&
-           value <= spidy::venom_punch::fullMeter * 2;
+           value <= spidy::venom_punch::mostMeter;
 }
 // The component the meter at `address` lies in: the player's that starts nearest below it.
 const Component* holding(uintptr_t address) {
@@ -195,6 +195,9 @@ spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t rec
     }
     moved = moved || bestValue != chosenAt;
     out.value = bestValue;
+    // The fields around the meter, for the report: how the game keeps Miles's later bars.
+    for (unsigned i = 0; i < std::size(out.around); ++i)
+        read(best + offset - Meter::aroundBefore + i * 4, &out.around[i], 4);
     if (from.size() == 1 || moved) {
         out.address = best + offset;
         out.holder = best;
