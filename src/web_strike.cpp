@@ -58,23 +58,6 @@ void WebStrike::hangOn(bool grounded, float seconds) {
     phase_ = Phase::Hanging;
     hangLeft_ = std::max({left, config_.hang, std::isfinite(seconds) ? seconds : 0.f});
 }
-bool WebStrike::dash(int hand, const FightTarget& target, Vec3 head, Vec3 feet, Vec3 way, float speed,
-                     const WorldQueries& world) {
-    if (phase_ == Phase::Flying || hand < 0 || hand > 1 || !finite(head) || !finite(feet) ||
-        !finite(target.feet) || !inSight(world, head, target.middle()))
-        return false;
-    phase_ = Phase::Flying;
-    hand_ = hand;
-    target_ = target.id;
-    armed_[static_cast<size_t>(hand)] = false;
-    direction_ = way;
-    fistSpeed_ = speed;
-    elapsed_ = sinceStep_ = waited_ = 0;
-    rising_ = false;
-    destination_ = stop(feet, target);
-    duration_ = std::max(config_.minSeconds, length(destination_ - feet) / config_.speed);
-    return true;
-}
 void WebStrike::rise(Vec3 feet, Vec3 destination, float seconds, float hang) {
     if (!finite(feet) || !finite(destination))
         return;

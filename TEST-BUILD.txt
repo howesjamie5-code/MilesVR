@@ -1,5 +1,12 @@
-MilesVR 0.1.35 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.36 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.35: VENOM DASH SCRAPPED
+--------------------------------------------------
+The Venom Dash is gone (it did not work well). A charged punch at the
+marked enemy is the Venom Punch again, near or far: within 2 m the fist
+lands it, farther away the web strike flies you in and lands it, as
+before 0.1.33. The Venom Jump and Camouflage stay.
 
 What changed since 0.1.34: CAMOUFLAGE
 --------------------------------------------------

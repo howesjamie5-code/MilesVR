@@ -137,8 +137,8 @@ struct Venom {
     Vec3 megaPoint{};
     uint32_t megaSpare{};
     // Out (version 5): Venom Jumps gone off, the enemies the latest threw up,
-    // and where; Venom Dashes that landed (each a venom blow too) and those
-    // whose flight ended without its blow.
+    // and where. dashes and dashesMissed: the Venom Dash's, scrapped in
+    // 0.1.36 (the user: "it didnt really work well"); always 0.
     uint64_t jumps{}, dashes{};
     uint32_t jumpHits{}, dashesMissed{};
     Vec3 jumpPoint{};

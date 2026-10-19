@@ -384,12 +384,16 @@ struct XrData {
     // counter broke, and the game's dodge (B) pressed while a warning stood.
     uint32_t senseShown{}, senseFrames{}, senseSightFrames{}, senseTingles{}, senseBroken{}, senseDodges{};
     // Version 46: Venom Jumps gone off and the enemies the latest threw up;
-    // Venom Dashes that landed, and those that ended without their blow.
+    // the Venom Dash's two, always 0 since it was scrapped (0.1.36).
     uint32_t venomJumps{}, venomJumpHits{}, venomDashes{}, venomDashesMissed{};
     // Version 47: Camouflage pressed (the left trigger pulled at the left temple).
     uint32_t camos{}, camoSpare{};
 };
 static_assert(sizeof(XrData) == 1352);
+// Where tools/run_game_vr.py reads them (until 0.1.36 it read Spider-Sense's
+// at 1304, a word late, and the venom jump's and camouflage after them).
+static_assert(offsetof(XrData, venomMegaHits) == 1292 && offsetof(XrData, senseShown) == 1300 &&
+              offsetof(XrData, venomJumps) == 1324 && offsetof(XrData, camos) == 1340);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -777,8 +781,8 @@ DWORD WINAPI run(void*) {
         venom_punch::Charge venomCharge;
         uint32_t venomCharges{};
         uint64_t venomBlowsBefore{}, venomSpentBefore{}, venomSmashesBefore{}, venomMegasBefore{};
-        uint64_t venomJumpsBefore{}, venomDashesBefore{};
-        uint32_t venomJumpHits{}, venomDashesMissed{};
+        uint64_t venomJumpsBefore{};
+        uint32_t venomJumpHits{};
         uint32_t venomMegaHits{};
         uint32_t venomSmashHits{}, venomSmashesCalledOff{};
         float venomGlow{};
@@ -2816,12 +2820,9 @@ DWORD WINAPI run(void*) {
                                         burst.view = {exchange.lastPoint, 0};
                                         burst.since = frame.predictedDisplayTime;
                                     }
-                                    // A Venom Dash's blow on arrival is one of these too.
-                                    const bool dashed = exchange.dashes > venomDashesBefore;
                                     message(3, 0, exchange.spent > venomSpentBefore
-                                                      ? (dashed ? "Venom dash!" : "Venom punch!")
-                                                      : (dashed ? "Venom dash! (the meter could not be emptied)"
-                                                                : "Venom punch! (the meter could not be emptied)"));
+                                                      ? "Venom punch!"
+                                                      : "Venom punch! (the meter could not be emptied)");
                                 }
                                 // The venom smash went off (venom_punch.hpp): a big burst
                                 // with its ring on the ground, and both hands feel it.
@@ -2884,8 +2885,6 @@ DWORD WINAPI run(void*) {
                                 }
                                 venomJumpsBefore = exchange.jumps;
                                 venomJumpHits = exchange.jumpHits;
-                                venomDashesBefore = exchange.dashes;
-                                venomDashesMissed = exchange.dashesMissed;
                                 venomMegaHits = exchange.megaHits;
                                 venomSmashHits = exchange.smashHits;
                                 venomSmashesCalledOff = exchange.smashesCalledOff;
@@ -3209,8 +3208,6 @@ DWORD WINAPI run(void*) {
                         d.venomMegaHits = venomMegaHits;
                         d.venomJumps = static_cast<uint32_t>(venomJumpsBefore);
                         d.venomJumpHits = venomJumpHits;
-                        d.venomDashes = static_cast<uint32_t>(venomDashesBefore);
-                        d.venomDashesMissed = venomDashesMissed;
                         d.venomPromptPresses = venomPromptPresses;
                         std::memcpy(d.venomAround, venomMeter.around, sizeof(d.venomAround));
                         d.senseShown = senseShown;

@@ -1207,6 +1207,14 @@ class ProtocolTests(unittest.TestCase):
         # Two of the game's venom prompts answered by a venom gesture.
         struct.pack_into('<I', raw, 1296, 2)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['venom']['prompt_presses'], 2)
+        # Spider-Sense's six right after them (XrData's offsetof checks), then a Venom Jump that threw
+        # up three, then four camouflage presses.
+        struct.pack_into('<6I2I8xI', raw, 1300, 11, 12, 13, 14, 15, 16, 1, 3, 4)
+        result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
+        self.assertEqual(result['sense_headset'], dict(shown=11, mark_frames=12, sight_frames=13, tingles=14,
+                                                       broken=15, dodges=16))
+        self.assertEqual((result['venom']['jumps'], result['venom']['jump_hits']), (1, 3))
+        self.assertEqual(result['camouflage'], dict(presses=4))
 
     def test_xr_decodes_both_hands_and_status_message(self):
         raw = bytearray(1352)

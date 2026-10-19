@@ -854,8 +854,8 @@ def snapshot(game, address):
         v_holder, v_holder_offset, v_route, v_dumps = struct.unpack_from('<4I', raw, 1196)
         v_smashes, v_smash_hits, v_smash_off, v_megas = struct.unpack_from('<4I', raw, 1212)
         v_mega_hits, v_prompt_presses = struct.unpack_from('<2I', raw, 1292)
-        v_jumps, v_jump_hits, v_dashes, v_dashes_missed = struct.unpack_from('<4I', raw, 1328)
-        result.update(camouflage=dict(presses=struct.unpack_from('<I', raw, 1344)[0]))
+        v_jumps, v_jump_hits = struct.unpack_from('<2I', raw, 1324)
+        result.update(camouflage=dict(presses=struct.unpack_from('<I', raw, 1340)[0]))
         # The meter's holder's 16 words around it (the meter is the eighth), as floats and as integers.
         v_around = struct.unpack_from('<16I', raw, 1228)
         v_around_f = struct.unpack_from('<16f', raw, 1228)
@@ -869,14 +869,13 @@ def snapshot(game, address):
                                  let_go=v_dumps, smashes=v_smashes, smash_hits=v_smash_hits,
                                  smashes_called_off=v_smash_off, megas=v_megas, mega_hits=v_mega_hits,
                                  prompt_presses=v_prompt_presses, jumps=v_jumps, jump_hits=v_jump_hits,
-                                 dashes=v_dashes, dashes_missed=v_dashes_missed,
                                  around=[dict(offset=hex(0x10c - 0x1c + 4*i), word=hex(w),
                                               float=round(f, 3) if math.isfinite(f) and abs(f) < 1e7 else None)
                                          for i, (w, f) in enumerate(zip(v_around, v_around_f))]))
         # Spider-Sense in the headset (spider_sense.hpp): warnings that showed, frames that drew a mark over an
         # attacker and in the sightline (one out of view), tingles sent to the controllers, marks a counter broke,
         # and the game's dodge pressed while a warning stood (what a red mark asks for).
-        s_shown, s_frames, s_sight, s_tingles, s_broken, s_dodges = struct.unpack_from('<6I', raw, 1304)
+        s_shown, s_frames, s_sight, s_tingles, s_broken, s_dodges = struct.unpack_from('<6I', raw, 1300)
         result.update(sense_headset=dict(shown=s_shown, mark_frames=s_frames, sight_frames=s_sight,
                                          tingles=s_tingles, broken=s_broken, dodges=s_dodges))
         result.update(crawl=dict(frames=crawl_frames, stood=crawl_stood, stick_samples=crawl_stick,

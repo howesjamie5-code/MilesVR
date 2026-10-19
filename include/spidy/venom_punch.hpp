@@ -289,11 +289,6 @@ inline Vec3 jumpFlight(Vec3 centre, Vec3 feet) {
     const Vec3 f = blastFlight(centre, feet);
     return Vec3{f.x, 0, f.z} * (jumpThrow / smashThrow) + Vec3{0, jumpLift, 0};
 }
-// The Venom Dash (0.1.33): the charged fist punched out at the marked enemy
-// beyond the venom punch's reach and within dashRange (chest to his middle):
-// Miles flies straight to him, and the blow on arrival is a venom blow. One
-// bar. Nearer, the same punch is the venom punch.
-constexpr float dashRange = 15;
 // The game prompting for one of its own venom moves (the user, October 19:
 // story moments "such as powering stuff up" must go on with the venom punch,
 // the smash and the blast). Miles Morales's venom moves are its LB with a

@@ -98,8 +98,6 @@ Venom venomOut;
 // Venom Blast's double punch.
 venom_punch::SmashDrop smash;
 venom_punch::Spread spreadArms;
-// The Venom Dash in flight (the strike's): its blow is a venom blow.
-bool dashing{};
 // Seconds since an enemy was in the fight (the headset's calm, the same way):
 // the Venom Jump goes off only in a fight.
 float sinceFight = 1e9f;
@@ -245,7 +243,6 @@ void publishStrikes(uint32_t status) {
 }
 void resetFight() {
     smash.cancel();
-    dashing = false;
     sinceFight = 1e9f;
     punches.reset();
     turnSeen = false;
@@ -606,10 +603,7 @@ void land(PunchEvent e, bool byStrike) {
     // The right fist charged with venom: this blow is the venom punch, and
     // the charge is spent.
     const uint32_t charge = venomCharge.load();
-    // The Venom Dash's arrival is a venom blow, whatever the charge did meanwhile.
-    const bool dashed = dashing && byStrike;
-    const bool venom = (e.hand == (venomHand.load() ? 1 : 0) && venomArmed()) || dashed;
-    dashing = dashing && !byStrike;
+    const bool venom = e.hand == (venomHand.load() ? 1 : 0) && venomArmed();
     if (venom) {
         venomUsed = charge;
         Vec3 along{e.direction.x, 0, e.direction.z};
@@ -652,7 +646,6 @@ void land(PunchEvent e, bool byStrike) {
         const bool emptied = spendBar(venomMeter.load());
         AcquireSRWLockExclusive(&output);
         ++venomOut.blows;
-        venomOut.dashes += dashed;
         venomOut.spent += emptied;
         venomOut.lastCharge = charge;
         venomOut.lastPoint = e.point;
@@ -755,9 +748,6 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         return opened;
     watch.current(bots);
     fighter = player;
-    // A Venom Dash the strike ended without its blow (the game did not jump).
-    if (dashing && strike.phase() != WebStrike::Phase::Flying)
-        dashing = false;
     // The fist: the knuckles, fistAhead along the hand from its web shooter
     // (the swing input's aim, webShooter: the nozzle, 2.5 cm further back
     // since October 18, which this keeps the fist clear of); its motion
@@ -792,9 +782,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     enemies.clear();
     nearby.clear();
     const Vec3 chest = player.feet + Vec3{0, strike.config().chest, 0};
-    // A charged venom fist reaches out to the Venom Dash's range.
-    const float striking = std::max(strike.config().maxDistance + beyondReach,
-                                    venomArmed() ? venom_punch::dashRange + beyondReach : 0.f);
+    const float striking = strike.config().maxDistance + beyondReach;
     for (const auto& b : bots) {
         Vec3 feet{};
         // Nor a thug of a later wave, waiting unseen where he will appear,
@@ -893,7 +881,6 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         punches.spend(side);
         strike.spent(side);
         strike.cancel();
-        dashing = false;
         blast(player.feet, Blast::Jump);
         strike.rise(player.feet, player.feet + Vec3{0, venom_punch::jumpHeight, 0}, venom_punch::jumpSeconds,
                     venom_punch::jumpHang);
@@ -926,37 +913,6 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
             punches.spend(side);
             strike.spent(side);
             land(e, false);
-            break;
-        }
-    }
-    // The Venom Dash: the venom fist, charged, thrown out at the marked enemy
-    // beyond venomReach and within dashRange, the same way. A strike's flight
-    // takes him there, and its blow is a venom blow (land()).
-    if (venomArmed() && hands[side].tracked && !hands[side].busy && strike.phase() != WebStrike::Phase::Flying &&
-        !smash.active()) {
-        const auto& sc = strike.config();
-        const Vec3 velocity = punches.velocity(side);
-        const float speed = length(velocity);
-        for (const auto& target : enemies) {
-            if (target.id != lock.target() || speed < sc.minSpeed)
-                continue;
-            const float distance = length(target.middle() - chest);
-            const Vec3 moving = velocity / speed;
-            const Vec3 neck = head - Vec3{0, sc.neck, 0};
-            const Vec3 out = normalized(hands[side].fist - neck);
-            const Vec3 toward = normalized(target.middle() - hands[side].fist);
-            if (distance <= venomReach || distance > venom_punch::dashRange || dot(moving, out) < sc.outward ||
-                dot(moving, toward) < sc.markedAim)
-                continue;
-            if (!strike.dash(side, target, head, player.feet, moving, speed, world))
-                break;
-            venomUsed = venomCharge.load();
-            dashing = true;
-            punches.spend(side);
-            lock.take(target.id);
-            ++tally.opened;
-            tally.distance = distance;
-            opened = {true, false};
             break;
         }
     }
@@ -1107,12 +1063,6 @@ Flight game_punch::fly(float seconds, Vec3 feet, bool grounded, bool waiting) {
         ++tally.landed;
     }
     tally.missed += step.missed;
-    if (step.missed && dashing) {
-        dashing = false;
-        AcquireSRWLockExclusive(&output);
-        ++venomOut.dashesMissed;
-        ReleaseSRWLockExclusive(&output);
-    }
     if (step.landed || step.missed)
         publishStrikes(2);
     return out;
@@ -1130,7 +1080,6 @@ void game_punch::cancelStrike() {
     if (strike.phase() != WebStrike::Phase::Idle) {
         tally.missed += strike.phase() == WebStrike::Phase::Flying;
         strike.cancel();
-        dashing = false;
         publishStrikes(enabled ? 2u : 0u);
     }
     ReleaseSRWLockShared(&updating);

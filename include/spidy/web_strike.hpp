@@ -178,11 +178,6 @@ class WebStrike {
     // the player hangs (WebStrikeConfig::hang, or `seconds` if longer: a thug
     // pulled to him in the air has just arrived).
     void hangOn(bool grounded, float seconds = 0);
-    // MilesVR's Venom Dash: a flight to `target` opened at once, whatever
-    // open() asks of a fist (the caller judged the punch, and its range); none
-    // to one out of sight from `head`.
-    bool dash(int hand, const FightTarget& target, Vec3 head, Vec3 feet, Vec3 way, float speed,
-              const WorldQueries& world);
     // MilesVR's Venom Jump: a flight up to `destination`, there in `seconds`,
     // with no one at its end and no blow; the player then hangs there `hang`.
     void rise(Vec3 feet, Vec3 destination, float seconds, float hang);
