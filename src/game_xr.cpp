@@ -136,7 +136,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 47, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 48, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -387,7 +387,8 @@ struct XrData {
     // the Venom Dash's two, always 0 since it was scrapped (0.1.36).
     uint32_t venomJumps{}, venomJumpHits{}, venomDashes{}, venomDashesMissed{};
     // Version 47: Camouflage pressed (the left trigger pulled at the left temple).
-    uint32_t camos{}, camoSpare{};
+    // Version 48: the game's RT tapped as a web began a swing (game_pad::SwingTap).
+    uint32_t camos{}, swingTaps{};
 };
 static_assert(sizeof(XrData) == 1352);
 // Where tools/run_game_vr.py reads them (until 0.1.36 it read Spider-Sense's
@@ -928,6 +929,7 @@ DWORD WINAPI run(void*) {
         game_pad::ChargeJump chargeJump;
         // The right hand at the temple scans; the left's is Miles's Camouflage.
         game_pad::TemplePress templePress{2u}, camoPress{1u};
+        game_pad::SwingTap swingTap;
         uint32_t camosBefore{};
         uint32_t chargesBefore{}, leapsBefore{}, scansBefore{};
         float leapOut{};
@@ -2962,6 +2964,9 @@ DWORD WINAPI run(void*) {
                                                  swingState.wall == static_cast<uint32_t>(game_swing::Surface::game);
                             const bool webbed = swingState.webs[0].attached || swingState.webs[1].attached;
                             walk.parkour = onCrawl && (walk.jump || webbed);
+                            // The game's RT tapped as a web takes him into a swing: its swing prompt.
+                            walk.swing = swingTap.update(frame.seconds, steering && !calibrationInput,
+                                                         inFlight && webbed && !onCrawl);
                         }
                         walk.scan = templePress.held() && steering;
                         walk.camo = camoPress.held() && steering;
@@ -3124,6 +3129,7 @@ DWORD WINAPI run(void*) {
                                      (values.standOnWalls ? 128u : 0u) | (values.arcadeWebs ? 512u : 0u);
                         d.scans = templePress.scans();
                         d.camos = camoPress.scans();
+                        d.swingTaps = swingTap.taps();
                         d.chargeJumps = chargeJump.charges();
                         const auto prompts = game_prompts::live();
                         d.promptInvokes = prompts.invokes;

@@ -112,6 +112,9 @@ struct Walk {
     bool parkour{};
     float look{}, lookUp{};
     bool scan{}, camo{};
+    // The game's RT, a tap as a web takes the player into a swing (SwingTap):
+    // what its own swing prompt ("Hold RT", the opening's first swing) waits for.
+    bool swing{};
     // What the game is asking for now, sent in place of the interact's Y
     // (ContextPress). {}: nothing is, and interact is the game's Y as before.
     prompt_buttons::Demand demand{};
@@ -292,6 +295,43 @@ class TemplePress {
     bool down_[2]{}, held_{};
     uint32_t allowed_, hands_{}, scans_{};
     float left_{};
+};
+// A web taking the player into a swing, as the game's RT (Walk::swing): a tap
+// of tapSeconds as the swing begins, so the game's own swing prompt - "Hold RT"
+// at the start of the story, which the VR swing never pressed - sees its
+// button (MilesVR 0.1.38, the user: the prompt must go with the grip's
+// swing). A tap, not the swing's length: RT held on in the air is the
+// game's own web swing.
+class SwingTap {
+  public:
+    static constexpr float tapSeconds = .25f;
+    // seconds: since the previous update. play: the controllers play VR.
+    // swinging: a web holds the player in the swing's flight. Returns the
+    // game's RT: down or not.
+    bool update(float seconds, bool play, bool swinging) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        left_ = std::max(0.f, left_ - dt);
+        if (!play) {
+            left_ = 0;
+            was_ = false;
+            return false;
+        }
+        if (swinging && !was_) {
+            left_ = tapSeconds;
+            ++taps_;
+        }
+        was_ = swinging;
+        return left_ > 0;
+    }
+    // Taps sent so far.
+    uint32_t taps() const {
+        return taps_;
+    }
+
+  private:
+    float left_{};
+    bool was_{};
+    uint32_t taps_{};
 };
 // The right thumbstick pushed straight down or up, as Walk::heal and
 // Walk::zip. In VR play that stick turns the player with its left and right;
@@ -1143,6 +1183,8 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
             s.buttons |= rightThumb;
         if (walk.camo)
             s.buttons |= dpadUp;
+        if (walk.swing)
+            s.rightTrigger = 255;
         s.thumbLX = stick(walk.right);
         s.thumbLY = stick(walk.forward);
         s.thumbRX = stick(walk.look);

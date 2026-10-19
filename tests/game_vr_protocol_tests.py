@@ -1172,12 +1172,12 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_never_publishes_partly_updated_pose(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         self.assertIsNone(xr_snapshot(Reader(*([raw, struct.pack('<Q', 6)]*8)), 0))
 
     def test_xr_reports_where_the_venom_meter_came_from(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['venom']
         self.assertEqual((result['holder_vtable'], result['holder_offset'], result['route']), ('0x0', '0x0', 'none'))
         # A full meter read from the class that holds it (found after the HeroMeleeManager), and written to.
@@ -1215,10 +1215,12 @@ class ProtocolTests(unittest.TestCase):
                                                        broken=15, dodges=16))
         self.assertEqual((result['venom']['jumps'], result['venom']['jump_hits']), (1, 3))
         self.assertEqual(result['camouflage'], dict(presses=4))
+        struct.pack_into('<I', raw, 1344, 6)
+        self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['swing_prompt'], dict(rt_taps=6))
 
     def test_xr_decodes_both_hands_and_status_message(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         struct.pack_into('<16f', raw, 160, *range(16))
         struct.pack_into('<16f', raw, 224, *range(16, 32))
         raw[288:295] = b'Tracked'
@@ -1243,7 +1245,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_says_why_gameplay_was_unavailable_and_which_camera_ran(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         # A played scene whose camera the gate does not accept, the third player of the session,
         # and the menu button held on the virtual controller the game has read 900 times.
         struct.pack_into('<2I2Q2IQ', raw, 592, 8, 0x3dc8f80, 3, 0x2aefe723280, 0x10, 1, 900)
@@ -1262,7 +1264,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_counts_interacts_dodges_and_aim_markers(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual((result['interacts'], result['aim_markers'], result['markers']), (0, False, 0))
         self.assertEqual(result['dodges'], 0)
@@ -1297,7 +1299,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_the_vr_settings_and_the_settings_tab(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         # Markers on; web grab, webs in open air, the web shooter and body on, punching off; 48 m/s, half again
         # real gravity, 45 degree snap turns, smooth turning at 120 degrees a second, half vibration, the large
         # screen; two changes in the SPIDY VR tab, which the game built 7 times.
@@ -1362,7 +1364,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_the_layout_the_runtime_uses_for_the_controllers(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         # Before the runtime says: nothing, and nothing in the session log.
         self.assertEqual((result['controllers'], result['controller_layouts']), ([None, None], []))
@@ -1399,7 +1401,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_what_the_game_asked_a_player_for(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         # Before any prompt: nothing asked for, and no line in the session log.
         self.assertEqual(result['prompts']['asking'], None)
@@ -1484,7 +1486,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_the_controller_buttons_the_player_pressed(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual((result['vr_buttons'], result['vr_buttons_played']), ([], []))
         # The October 13 question: B arrived and Y never did, so which hand was pressed?
@@ -1542,7 +1544,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_walls_the_game_held_the_player_on(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual(result['surface'], dict(entries=0, frames=0, hero_up=[0, 0, 0], stand_off_m=0,
                                                  head_height_m=0, head_clearance_m=0, view_tilt_deg=0))
@@ -1559,7 +1561,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_the_game_s_own_crawl_under_the_player(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['warp'],
                          dict(asked=0, applied=0, refused=0, faulted=0, taken=0, declined=0, game_run_frames=0,
                               hold_grace_frames=0))
@@ -1573,7 +1575,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_gaps_in_play_the_vent_crawl_and_the_game_camera(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual(result['tracking_gaps'], dict(frames=0, reasons=[]))
         self.assertEqual(result['floor_crawl'], dict(frames=0, capped_frames=0, kneel_frames=0))
@@ -1590,7 +1592,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_pointing_at_the_game_s_interactions(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['offers'],
                          dict(hooks='off', hook_error=0, point_frames=0, reach_frames=0, asks=0, refused=0,
                               presses=0, picked=0, failed=0, most_seen=0, masked_updates=0, posed_checks=0,
@@ -1616,7 +1618,7 @@ class ProtocolTests(unittest.TestCase):
 
     def test_xr_reports_the_t_pose_calibration(self):
         raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 47, 1352, 3, 4)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual(result['calibration'], dict(phase='none', hint=None, progress=0, done=0, skipped=0,
                                                      reach_m=[0, 0]))

@@ -714,7 +714,7 @@ def snapshot(game, address):
         raw = game.read(address, 1352)
         if len(raw) != 1352:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53585244, 47, 1352):
+        if struct.unpack_from('<3I', raw) != (0x53585244, 48, 1352):
             raise RuntimeError('Game XR protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -855,7 +855,8 @@ def snapshot(game, address):
         v_smashes, v_smash_hits, v_smash_off, v_megas = struct.unpack_from('<4I', raw, 1212)
         v_mega_hits, v_prompt_presses = struct.unpack_from('<2I', raw, 1292)
         v_jumps, v_jump_hits = struct.unpack_from('<2I', raw, 1324)
-        result.update(camouflage=dict(presses=struct.unpack_from('<I', raw, 1340)[0]))
+        camo_presses, swing_taps = struct.unpack_from('<2I', raw, 1340)
+        result.update(camouflage=dict(presses=camo_presses), swing_prompt=dict(rt_taps=swing_taps))
         # The meter's holder's 16 words around it (the meter is the eighth), as floats and as integers.
         v_around = struct.unpack_from('<16I', raw, 1228)
         v_around_f = struct.unpack_from('<16f', raw, 1228)

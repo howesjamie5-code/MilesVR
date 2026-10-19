@@ -1,5 +1,21 @@
-MilesVR 0.1.37 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.38 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.37: THE GAME'S SWING PROMPT
+--------------------------------------------------
+At the start of the story the game asks you to hold RT to swing. Your VR
+swing never pressed RT, so the prompt never finished. Now, each time a
+web catches and takes you into a swing in the air (grip, or trigger with
+WEB BUTTON: TRIGGER), the game gets a quick tap of RT (a quarter of a
+second), so its swing prompt sees its button.
+
+What to try:
+1. Update to this build from the 0.1.37 launcher (Update now).
+2. At the opening's "Hold RT" swing prompt, swing with a web: does the
+   prompt finish?
+3. Swing around normally: anything odd when a web catches (a jerk, an
+   extra web, the game taking over the swing)?
+The session report has swing_prompt.rt_taps.
 
 What changed since 0.1.36: UPDATES FROM GITHUB
 --------------------------------------------------

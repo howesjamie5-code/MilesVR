@@ -5276,6 +5276,19 @@ int main() {
         lefts[0]=1;
         check(camo.update(dt,true,looking,hands,both,lefts)&&camo.hands()==1&&camo.scans()==1,"the left hand did not camouflage");
         check(!noScan.update(dt,true,looking,hands,both,lefts),"the left hand scanned");
+        // A web taking him into a swing: the game's RT, a tap as it begins.
+        game_pad::SwingTap tap;
+        check(!tap.update(dt,true,false),"no swing, no RT");
+        check(tap.update(dt,true,true)&&tap.taps()==1,"the swing began: RT");
+        int down{};
+        for(int i=0;i<60;++i)down+=tap.update(dt,true,true);
+        check(down>=20&&down<=23&&tap.taps()==1,"a tap of a quarter second, not the whole swing");
+        tap.update(dt,true,false);
+        check(tap.update(dt,true,true)&&tap.taps()==2,"the next swing: RT again");
+        check(!tap.update(dt,false,true),"not outside VR play");
+        game_pad::Walk swung;swung.swing=true;
+        check(game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,swung).rightTrigger==255,
+              "the swing's tap is not the game's RT");
         game_pad::Walk hidden;hidden.camo=true;
         check(game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,hidden).buttons==game_pad::dpadUp,
               "Camouflage is not the game's D-pad up");
