@@ -1,5 +1,14 @@
-MilesVR 0.1.50 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.51 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.50: SHORTER VENOM TEXT IN THE LAUNCHER
+--------------------------------------------------
+The Play tab's venom box, the Venom settings' descriptions and the
+VENOM POWERS card now say just what triggers what, e.g.
+  Web Grip + Venom Trigger:  GRIP = webs.  TRIGGER = web balls, reel.
+  Venom full: tap TRIGGER = web ball, hold = charge.
+  Venom Punch: Charged: punch the marked enemy. 1 bar
+The log lines under each power stay. Nothing in the game changed.
 
 What changed since 0.1.49: TWO DESCRIPTIONS FIXED
 --------------------------------------------------

@@ -1128,8 +1128,7 @@ void App::optionsCard(ImVec2 size) {
                o.venomTrigger = !o.triggerWebs; // never the same button
            });
     option("Venom punch hand",
-           "With the venom meter full, hold this hand's venom button to charge the venom punch, then punch the "
-           "marked enemy.",
+           "The hand your venom is on.",
            S(150), [&] {
                static constexpr int hands[] = {0, 1};
                int left = o.venomLeftHand ? 1 : 0;
@@ -1137,8 +1136,7 @@ void App::optionsCard(ImVec2 size) {
                o.venomLeftHand = left != 0;
            }, true);
     option("Venom button",
-           "The button that charges the venom fist (hold it) once a bar is full. Always the other one from Web "
-           "button: changing one changes the other.",
+           "Venom full: hold = charge, tap = web ball. Always the opposite of Web button.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.venomTrigger ? 1 : 0;
@@ -1151,16 +1149,12 @@ void App::optionsCard(ImVec2 size) {
         // it (the user, October 20: "i want this specified in the launcher to avoid confusion make it be
         // seen"). venom_punch::VenomButtons does it.
         // The two ways round, as the user worded them; the one chosen above shows bright.
-        const std::string heading =
-            format("VENOM CONTROLS - YOUR %s HAND, WITH A VENOM BAR FULL", o.venomLeftHand ? "LEFT" : "RIGHT");
+        const std::string heading = format("VENOM CONTROLS - %s HAND", o.venomLeftHand ? "LEFT" : "RIGHT");
         const std::string lines[] = {
-            "If Web button is on Grip and Venom button is on Trigger: the grip is your webs and swinging, always. "
-            "The trigger shoots web balls (with a web attached it reels in); with a venom bar full, tap the trigger "
-            "for a web ball and hold it to charge your venom fist.",
-            "If Web button is on Trigger and Venom button is on Grip, it is the other way round: the trigger is your "
-            "webs and swinging, always. The grip shoots web balls (with a web attached it reels in); with a venom "
-            "bar full, tap the grip for a web ball and hold it to charge your venom fist.",
-            "Your other hand works as normal. Web button and Venom button are always opposite buttons.",
+            "Web Grip + Venom Trigger:  GRIP = webs.  TRIGGER = web balls, reel.  Venom full: tap TRIGGER = web "
+            "ball, hold = charge.",
+            "Web Trigger + Venom Grip:  TRIGGER = webs.  GRIP = web balls, reel.  Venom full: tap GRIP = web ball, "
+            "hold = charge.",
         };
         const size_t chosen = o.venomTrigger ? 0 : 1;
         auto* draw = ImGui::GetWindowDrawList();
@@ -1178,11 +1172,10 @@ void App::optionsCard(ImVec2 size) {
         draw->AddText(fonts_.bold, S(13.5f), ImVec2(at.x + S(4), y), col(kVenom), heading.c_str(), nullptr, inner);
         y += measure(fonts_.bold, S(13.5f), heading.c_str(), inner).y + S(6);
         for (size_t i = 0; i < std::size(lines); ++i) {
-            const bool last = i + 1 == std::size(lines), bright = i == chosen;
+            const bool bright = i == chosen;
             ImFont* font = bright ? fonts_.semibold : fonts_.body;
-            draw->AddText(font, S(13.5f), ImVec2(at.x + S(4), y),
-                          col(bright ? kText : kVenomBright, bright ? 1.f : last ? 0.8f : 0.6f), lines[i].c_str(),
-                          nullptr, inner);
+            draw->AddText(font, S(13.5f), ImVec2(at.x + S(4), y), col(bright ? kText : kVenomBright, bright ? 1.f : 0.6f),
+                          lines[i].c_str(), nullptr, inner);
             y += measure(font, S(13.5f), lines[i].c_str(), inner).y + S(6);
         }
         ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + height + S(14)));
@@ -1611,47 +1604,27 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const std::string buttonLine = format("Venom button: %s", vo.venomTrigger ? "trigger" : "grip");
     const std::string chargedLine = format("Venom charged - punch the marked enemy with your %s fist", venomHand);
     const std::string releaseLine = format("Venom let go - the %s hand's venom meter is empty", venomHand);
-    const char* webName = vo.triggerWebs ? "trigger" : "grip";
-    const char* venomName = vo.venomTrigger ? "trigger" : "grip";
-    const std::string buttonsText = format(
-        "Yours: Web button %s, Venom button %s (always opposite: change one on the Play tab or in the game's MILES "
-        "VR settings and the other switches). The %s is your webs and swinging, always. The %s shoots web balls "
-        "(with a web attached it reels in); once a bar is full, on your %s hand, tap it for a web ball and hold it "
-        "to charge the venom",
-        vo.triggerWebs ? "TRIGGER" : "GRIP", vo.venomTrigger ? "TRIGGER" : "GRIP", webName, venomName, venomHand);
+    const std::string buttonsText = format("%s = webs.  %s = web balls, reel.  Venom full: tap %s = web ball, "
+                                           "hold = charge.",
+                                           vo.triggerWebs ? "Trigger" : "Grip", vo.venomTrigger ? "Trigger" : "Grip",
+                                           vo.venomTrigger ? "trigger" : "grip");
     struct Power {
         const char* name;
         const char* description;
         const char* log = nullptr;
     };
     const Power powers[] = {
-        {"Venom Meter", "Land blows to fill it: ten hits fill a bar (heavy blows and finishers more). Up to three "
-                        "bars",
-         fullLine.c_str()},
-        {"Web And Venom Buttons", buttonsText.c_str(), buttonLine.c_str()},
-        {"Venom Charge", "Hold the venom button until your fist glows and the controller buzzes. With a web "
-                         "attached it reels instead. The charge lasts about 1.5 s after you let go",
-         chargedLine.c_str()},
-        {"Venom Punch", "Charged, punch the marked thug: within 2 m your fist lands it, farther away the web "
-                        "strike flies you in. One bar",
-         "Venom punch!"},
-        {"Venom Jump", "In a fight, standing: charged, punch straight up. Enemies within 5 m go up and you jump "
-                       "with them. One bar",
-         "Venom jump! 3 enemies up"},
-        {"Venom Smash", "Charged, punch straight down, standing or in the air (not on a web). Everyone within 5 m "
-                        "is hit and thrown. One bar",
-         "Venom smash! 3 enemies hit"},
-        {"Mega Venom Blast", "All three bars full: charged, stretch both arms out wide. Everyone within 10 m. All "
-                             "three bars",
-         "MEGA VENOM BLAST! 5 enemies hit"},
-        {"Story Venom", "Out of a fight, hold the venom button and punch: the game's own Venom Punch, for story "
-                        "moments such as a generator",
+        {"Venom Meter", "Land blows to fill it. Up to 3 bars", fullLine.c_str()},
+        {"Your Buttons", buttonsText.c_str(), buttonLine.c_str()},
+        {"Venom Charge", "Venom full: hold the venom button until it glows and buzzes", chargedLine.c_str()},
+        {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!"},
+        {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up"},
+        {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit"},
+        {"Mega Venom Blast", "3 bars full, charged: both arms out wide. 3 bars", "MEGA VENOM BLAST! 5 enemies hit"},
+        {"Story Venom", "Out of a fight: hold the venom button and punch",
          "Venom - the game's own venom punch (its LB + X), for as long as you hold the venom button"},
-        {"Venom Release", "With a bar full, click the venom hand's stick: the meter empties at once",
-         releaseLine.c_str()},
-        {"Camouflage", "Left hand to the side of your head, pull its trigger: invisible until the game's "
-                       "camouflage meter runs out",
-         "Camouflage"},
+        {"Venom Release", "Venom full: click the venom hand's stick to empty the meter", releaseLine.c_str()},
+        {"Camouflage", "Left hand to your temple, pull its trigger", "Camouflage"},
     };
     const float gap = S(16);
     float columnY[2] = {origin.y, origin.y};
@@ -1716,8 +1689,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         }
         ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenomBright, 0.7f));
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("Left-handed? Set Venom punch hand to Left on the Play tab, or VENOM HAND in the game's "
-                               "Settings > MILES VR while you play: every venom power moves to the left hand and its stick.");
+        ImGui::TextUnformatted("Left-handed? Set Venom punch hand to Left: every venom power moves to the left hand.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
         ImGui::Dummy(ImVec2(0, S(4)));
