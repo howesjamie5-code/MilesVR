@@ -708,29 +708,36 @@ int main() {
         d.cancel();
         check(!d.active() && !d.step(.01f, {}, true).blast, "cancelled: nothing");
     });
-    test("venom on the other button: a tap a web ball, a hold the charge, the reel while a web holds", [] {
-        using spidy::venom_punch::SharedButton;
+    test("venom hand's buttons: the venom button charges, the other shoots webs, a tap of it a web ball", [] {
+        using spidy::venom_punch::VenomButtons;
         const float dt = 1.f / 90;
-        SharedButton b;
-        // A tap: nothing while it is down, a web ball's press as it is let go.
-        auto o = b.update(dt, 1, false);
-        check(o.charge == 1 && o.button == 0, "down: the charge hears it, the swing not yet");
-        for (int i = 0; i < 10; ++i)
-            b.update(dt, 1, false);
-        o = b.update(dt, 0, false);
-        check(o.button == 1 && o.charge == 0 && b.taps() == 1, "a tap let go: a web ball");
-        int pressed = 1;
+        VenomButtons b;
+        // The other button held: a web at once, and on as long as it is held; no web ball after.
+        auto o = b.update(dt, 0, 1, false);
+        check(o.web == 1 && o.reel == 0 && o.charge == 0, "held: the web at once");
+        for (int i = 0; i < 40; ++i)
+            o = b.update(dt, 0, 1, true);
+        check(o.web == 1, "held: the web stays");
+        for (int i = 0; i < 40; ++i)
+            check(b.update(dt, 0, 0, i < 2).reel == 0, "a hold let go shot a web ball");
+        check(b.taps() == 0, "a hold is no tap");
+        // A tap: its web, let go, then the web ball once the web has gone.
+        b.update(dt, 0, 1, false);
+        for (int i = 0; i < 5; ++i)
+            b.update(dt, 0, 1, true);
+        o = b.update(dt, 0, 0, true);
+        check(o.web == 0 && o.reel == 0 && b.taps() == 1, "the tap let go: its web first");
+        o = b.update(dt, 0, 0, false);
+        int pressed{};
         for (int i = 0; i < 20; ++i)
-            pressed += b.update(dt, 0, false).button > 0;
-        check(pressed >= 8 && pressed <= 10, "the web ball's press lasts a tenth of a second");
-        // A hold: the charge, and no web ball as it is let go.
-        for (int i = 0; i < 45; ++i)
-            check(b.update(dt, 1, false).button == 0, "a hold sent the swing a press");
-        check(b.update(dt, 0, false).button == 0 && b.taps() == 1, "a hold let go: no web ball");
-        // A web on the hand: the button reels, and charges nothing.
-        o = b.update(dt, .8f, true);
-        check(o.button == .8f && o.charge == 0, "with a web, the reel's");
-        check(SharedButton::tapSeconds < spidy::venom_punch::Charge::chargeSeconds, "a tap never charges");
+            pressed += b.update(dt, 0, 0, false).reel > 0;
+        check(pressed >= 8 && pressed <= 10, "then the web ball, a tenth of a second's press");
+        // The venom button: the charge, or the reel while a web holds.
+        o = b.update(dt, 1, 0, false);
+        check(o.charge == 1 && o.reel == 0 && o.web == 0, "the venom button charges");
+        o = b.update(dt, .8f, 1, true);
+        check(o.charge == 0 && o.reel == .8f && o.web == 1, "with a web, it reels");
+        check(VenomButtons::tapSeconds < spidy::venom_punch::Charge::chargeSeconds, "a tap never charges");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;

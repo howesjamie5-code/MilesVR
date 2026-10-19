@@ -149,7 +149,7 @@ const std::array<Row, 25>& rows() {
          "The hand Miles's venom charges in: hold its button, then punch, smash or blast.",
          venomHandChoices},
         {Item::venomButton, "VENOM BUTTON",
-         "Charges your venom fist. If not the web button, that hand keeps its webs.",
+         "Charges your venom fist; the other button shoots webs (tap: a web ball).",
          venomButtonChoices},
         {Item::none, "COMFORT", nullptr, {}},
         {Item::snapTurn, "SNAP TURN", "How far a flick of the right stick turns you. Off: no snap turning.",

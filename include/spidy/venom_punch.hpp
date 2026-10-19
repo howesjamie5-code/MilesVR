@@ -186,48 +186,68 @@ class Charge {
     bool held_{}, spent_{};
 };
 
-// The venom on the hand's other button (VENOM BUTTON not the web button,
-// MilesVR 0.1.41): that button is the reel's and the web balls' too, and the
-// user, October 20: with the venom on it "people cant web up enemies anymore".
-// So it shares: while the hand's web holds, the button reels as ever and
-// charges nothing; otherwise a tap (let go within tapSeconds) is a web ball,
-// sent as a press of pulseSeconds as it is let go, and a hold charges the
-// fist (Charge needs chargeSeconds, longer than a tap).
-class SharedButton {
+// The venom hand's two buttons while the venom has it (MilesVR 0.1.42, the
+// user, October 20: "i want it so web balls can be shot no matter the
+// setting ... the tap of grip and then hold for swinging and then other way
+// round for trigger"). The venom button (VENOM BUTTON) holds the charge, and
+// reels while the hand's web holds. The other button is the hand's webs:
+// held it shoots and holds a web at once, as the web button does; a tap (let
+// go within tapSeconds) is a web ball, a press of pulseSeconds on the swing's
+// reel button once the tap's own web has let go (a web ball is that button
+// on a hand without a web), and no later than pendingSeconds.
+class VenomButtons {
   public:
-    static constexpr float tapSeconds = .25f, pulseSeconds = .1f;
+    static constexpr float tapSeconds = .25f, pulseSeconds = .1f, pendingSeconds = .3f;
     static_assert(tapSeconds < Charge::chargeSeconds);
     struct Out {
+        float web{};    // the swing's web button: shoot and hold a web
+        float reel{};   // the swing's other: reel a held web, else a web ball
         float charge{}; // the venom charge's button (Charge::update's grip)
-        float button{}; // what the hand's button does as the swing's: reel, web ball
     };
-    // seconds: since the previous update. value: the button, 0..1. reeling:
-    // the hand's web holds.
-    Out update(float seconds, float value, bool reeling) {
+    // seconds: since the previous update. venom and other: the buttons, 0..1.
+    // webHeld: the hand's web holds (the swing's, a step behind).
+    Out update(float seconds, float venom, float other, bool webHeld) {
         const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
-        const float v = std::isfinite(value) ? std::clamp(value, 0.f, 1.f) : 0.f;
-        if (reeling) {
-            reset();
-            return {0, v};
-        }
-        const bool down = v >= (held_ ? gripOff : gripOn);
-        if (down)
+        const auto unit = [](float v) { return std::isfinite(v) ? std::clamp(v, 0.f, 1.f) : 0.f; };
+        const float v = unit(venom), o = unit(other);
+        const bool down = o >= (held_ ? gripOff : gripOn);
+        if (down) {
             time_ += dt;
-        else {
+            pending_ = -1;
+        } else {
             if (held_ && time_ < tapSeconds) {
-                pulse_ = pulseSeconds;
+                pending_ = 0;
                 ++taps_;
             }
             time_ = 0;
         }
         held_ = down;
-        Out out{down ? v : 0.f, pulse_ > 0 ? 1.f : 0.f};
-        pulse_ = std::max(0.f, pulse_ - dt);
+        Out out;
+        out.web = o;
+        if (webHeld) {
+            out.reel = v;
+        } else {
+            out.charge = v;
+        }
+        if (pulse_ > 0) {
+            out.reel = 1;
+            pulse_ = std::max(0.f, pulse_ - dt);
+        } else if (pending_ >= 0) {
+            // The tap's web let go: the web ball. Still held after
+            // pendingSeconds (it caught and the swing kept it): none.
+            if (!webHeld) {
+                pulse_ = pulseSeconds;
+                pending_ = -1;
+            } else if ((pending_ += dt) > pendingSeconds) {
+                pending_ = -1;
+            }
+        }
         return out;
     }
     void reset() {
         held_ = false;
         time_ = pulse_ = 0;
+        pending_ = -1;
     }
     // Web balls the taps sent.
     uint32_t taps() const {
@@ -236,7 +256,7 @@ class SharedButton {
 
   private:
     bool held_{};
-    float time_{}, pulse_{};
+    float time_{}, pulse_{}, pending_ = -1;
     uint32_t taps_{};
 };
 

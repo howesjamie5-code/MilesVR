@@ -1135,14 +1135,50 @@ void App::optionsCard(ImVec2 size) {
                o.venomLeftHand = left != 0;
            }, true);
     option("Venom button",
-           "The button that charges the venom fist (hold it). On the web button that hand's webs are off while "
-           "venom is full; on the other one the webs stay, a tap still shoots a web ball and it still reels.",
+           "The button that charges the venom fist (hold it) once a bar is full. The other button then shoots "
+           "that hand's webs: hold it to swing, tap it for a web ball.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.venomTrigger ? 1 : 0;
                stepCombo("##venomButton", kVenomButtons, buttons, 2, &trigger);
                o.venomTrigger = trigger != 0;
            }, true);
+    {
+        // What the venom hand's two buttons do with venom full, for the choice above, where no one can miss
+        // it (the user, October 20: "i want this specified in the launcher to avoid confusion make it be
+        // seen"). venom_punch::VenomButtons does it.
+        const char* hand = o.venomLeftHand ? "LEFT" : "RIGHT";
+        const char* venomButton = o.venomTrigger ? "TRIGGER" : "GRIP";
+        const char* webButton = o.venomTrigger ? "GRIP" : "TRIGGER";
+        const std::string heading = format("WITH VENOM FULL, YOUR %s HAND:", hand);
+        const std::string lines[] = {
+            format("%s  -  hold: charge the venom fist. With a web attached: reel in.", venomButton),
+            format("%s  -  hold: shoot a web and swing. Tap: a web ball.", webButton),
+            "Until a venom bar is full, the grip and trigger work as normal.",
+        };
+        auto* draw = ImGui::GetWindowDrawList();
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x, inner = width - S(28);
+        float height = S(12) + measure(fonts_.bold, S(13.5f), heading.c_str(), inner).y + S(6);
+        for (const auto& line : lines)
+            height += measure(fonts_.semibold, S(13.5f), line.c_str(), inner).y + S(4);
+        height += S(8);
+        draw->AddRectFilled(ImVec2(at.x - S(10), at.y - S(4)), ImVec2(at.x + width + S(4), at.y + height),
+                            col(kVenom, 0.16f), S(8));
+        draw->AddRect(ImVec2(at.x - S(10), at.y - S(4)), ImVec2(at.x + width + S(4), at.y + height), col(kVenom),
+                      S(8), 0, S(1.5f));
+        float y = at.y + S(8);
+        draw->AddText(fonts_.bold, S(13.5f), ImVec2(at.x + S(4), y), col(kVenom), heading.c_str(), nullptr, inner);
+        y += measure(fonts_.bold, S(13.5f), heading.c_str(), inner).y + S(6);
+        for (size_t i = 0; i < std::size(lines); ++i) {
+            const bool last = i + 1 == std::size(lines);
+            draw->AddText(last ? fonts_.body : fonts_.semibold, S(13.5f), ImVec2(at.x + S(4), y),
+                          col(last ? kVenomBright : kText, last ? 0.8f : 1.f), lines[i].c_str(), nullptr, inner);
+            y += measure(last ? fonts_.body : fonts_.semibold, S(13.5f), lines[i].c_str(), inner).y + S(4);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + height + S(14)));
+        ImGui::Dummy(ImVec2(width, 0));
+    }
     option("Webs hold in open air", "With nothing in reach, a web still holds 100 m out; off, it misses.", S(40),
            [&] { changed |= toggle("##air", &o.airWebs); });
     option("Aim markers", "Show where each hand's web would land.", S(40),
@@ -1562,14 +1598,13 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const Power powers[] = {
         {"Venom Meter", "Land blows to fill it: a hit 10, a heavy blow, launch or slam 15, a finisher 20 (ten hits "
                         "fill a bar). Miles has up to three bars"},
-        {"Venom Hand", "With a bar full your right hand's venom button is your venom now. On the web button (the "
-                       "default) that hand shoots no webs or web balls; a web you hold as it fills stays until you "
-                       "let go"},
-        {"Venom Button", "Play tab > Venom button, or VENOM BUTTON in the game's MILES VR settings: GRIP (the "
-                         "default) or TRIGGER. Trigger keeps your webs on the grip while venom is full: hold the "
-                         "trigger to charge, tap it for a web ball, and with a web attached it still reels"},
-        {"Venom Charge", "Hold the venom button (the right grip by default): your fist glows and the controller "
-                         "buzzes. Let go and the charge fades after a moment, so strike before it does"},
+        {"Venom Hand", "With a bar full your right hand's two buttons split: the venom button charges venom, the "
+                       "other shoots webs. A web you hold as it fills stays until you let go"},
+        {"Venom Button", "Play tab > Venom button, or VENOM BUTTON in the game's MILES VR settings. GRIP (the "
+                         "default): hold the grip to charge, the trigger shoots webs (hold: swing, tap: web ball). "
+                         "TRIGGER: hold the trigger to charge, the grip shoots webs (hold: swing, tap: web ball)"},
+        {"Venom Charge", "Hold the venom button: your fist glows and the controller buzzes. With a web attached "
+                         "it reels instead. Let go and the charge fades after a moment, so strike before it does"},
         {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "
                         "web strike flies you in and lands it. Uses one bar"},
         {"Venom Jump", "In a fight, standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "

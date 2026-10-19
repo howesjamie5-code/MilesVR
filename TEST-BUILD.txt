@@ -1,5 +1,26 @@
-MilesVR 0.1.41 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.42 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.41: WEBS AND WEB BALLS WITH VENOM FULL, EITHER SETTING
+--------------------------------------------------
+With a venom bar full, the venom hand's two buttons now split the same
+way whichever Venom button you pick:
+- The VENOM BUTTON: hold it to charge the venom fist. With a web
+  attached it reels in.
+- The OTHER button: hold it to shoot a web and swing; tap it for a web
+  ball.
+So with Venom button: GRIP (the default) the trigger now shoots that
+hand's webs while venom is full (before, that hand had no webs at all),
+and with Venom button: TRIGGER the grip's tap is the web ball (0.1.41
+had it on a tap of the trigger).
+The launcher's Play tab shows this in an orange box under Venom button,
+for the choice you pick.
+
+What to try:
+1. Venom button: Grip, a bar full: hold the right trigger to swing, tap
+   it for a web ball, hold the right grip to charge.
+2. Venom button: Trigger: hold the right grip to swing, tap it for a web
+   ball, hold the right trigger to charge.
 
 What changed since 0.1.40: WEB BALLS WITH VENOM BUTTON: TRIGGER
 --------------------------------------------------

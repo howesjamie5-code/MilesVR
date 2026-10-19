@@ -795,10 +795,9 @@ DWORD WINAPI run(void*) {
         // filled still goes on until it is let go.
         float venomGrip{};
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
-        // The venom on the hand's web button (VENOM BUTTON as WEB BUTTON): its webs are off meanwhile.
-        bool venomWebsOff{};
-        // The venom on the hand's other button: a tap a web ball, a hold the charge, the reel while a web holds.
-        venom_punch::SharedButton venomShared;
+        // The venom hand's buttons while the venom has it: the venom button charges (and reels a held
+        // web), the other shoots webs, a tap of it a web ball (venom_punch::VenomButtons).
+        venom_punch::VenomButtons venomButtons;
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -2028,17 +2027,17 @@ DWORD WINAPI run(void*) {
                             venomKeepWeb = false;
                         venomHandBefore = venomHand;
                         venomHandOn = venomHand && !venomKeepWeb;
-                        venomWebsOff = venomHandOn && venomOnWeb;
-                        venomGrip = venomHandOn ? venomButton : 0.f;
-                        if (venomHandOn && !venomOnWeb) {
-                            const auto shared = venomShared.update(frame.seconds, venomButton,
+                        venomGrip = 0;
+                        if (venomHandOn) {
+                            // The venom button charges; the other one is the hand's webs.
+                            const float venomValue = venomButton, other = venomOnWeb ? fist.trigger : fist.grip;
+                            const auto split = venomButtons.update(frame.seconds, venomValue, other,
                                                                    swingState.webs[venomSide].attached);
-                            venomGrip = shared.charge;
-                            venomButton = shared.button;
+                            venomGrip = split.charge;
+                            fist.grip = split.web;
+                            fist.trigger = split.reel;
                         } else {
-                            venomShared.reset();
-                            if (venomHandOn)
-                                takeVenomButton();
+                            venomButtons.reset();
                         }
                     }
                     // A thumbstick's click, but not the venom hand's that let the venom go.
@@ -2817,12 +2816,10 @@ DWORD WINAPI run(void*) {
                         if (venomFull && !venomFullBefore && steering) {
                             runtime.haptic(venomSide, .4f, .08f);
                             char text[96];
-                            const char* button = values.venomTrigger ? "trigger" : "grip";
-                            if (values.venomTrigger == values.triggerWebs)
-                                sprintf_s(text, "Venom full - the %s hand's webs are off: hold its %s to charge your fist",
-                                          venomName, button);
-                            else
-                                sprintf_s(text, "Venom full - hold the %s %s to charge your fist", venomName, button);
+                            sprintf_s(text, "Venom full - hold the %s %s to charge your fist; its %s shoots webs "
+                                            "(tap: a web ball)",
+                                      venomName, values.venomTrigger ? "trigger" : "grip",
+                                      values.venomTrigger ? "grip" : "trigger");
                             message(3, 0, text);
                         }
                         venomFills += venomFull && !venomFullBefore;
@@ -3235,7 +3232,7 @@ DWORD WINAPI run(void*) {
                         d.venomMeter = venomMeter.value;
                         d.venomGrip = venomGrip;
                         d.venomGlow = venomGlow;
-                        d.venomFlags = (venom_punch::full(venomMeter.value) ? 1u : 0u) | (venomWebsOff ? 2u : 0u) |
+                        d.venomFlags = (venom_punch::full(venomMeter.value) ? 1u : 0u) |
                                        (venomArmed ? 4u : 0u) | (venomKeepWeb ? 8u : 0u);
                         d.venomFills = venomFills;
                         d.venomCharges = venomCharges;
@@ -3612,9 +3609,6 @@ DWORD WINAPI run(void*) {
                         saved.aims[i] = aims.hands[i];
                         saved.offers[i] = pointing[i] ? *pointing[i] : offer_pointing::Pointed{};
                     }
-                    // The venom hand shoots no web while the venom has its web button.
-                    if (venomWebsOff)
-                        saved.aims[venomSide] = {};
                     saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
                     saved.strandUpper = webRopes.upper();
                     if (calibration.phase() != body_calibration::Phase::idle) {
