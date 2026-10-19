@@ -1118,8 +1118,8 @@ void App::optionsCard(ImVec2 size) {
                stepCombo("##webStyle", kWebStyles, styles, 2, &arcade);
                o.arcadeWebs = arcade != 0;
            });
-    option("Web button", "Which button shoots and holds a web, to swing: only that. The other one shoots web "
-           "balls and reels in. Venom button is always the other one.",
+    option("Web button", "The button for swinging, and only that. The other one shoots web balls and reels in. "
+           "Venom button is always the other one.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.triggerWebs ? 1 : 0;
@@ -1151,9 +1151,9 @@ void App::optionsCard(ImVec2 size) {
         // The two ways round, as the user worded them; the one chosen above shows bright.
         const std::string heading = format("VENOM CONTROLS - %s HAND", o.venomLeftHand ? "LEFT" : "RIGHT");
         const std::string lines[] = {
-            "Web Grip + Venom Trigger:  GRIP = webs.  TRIGGER = web balls, reel.  Venom full: tap TRIGGER = web "
+            "Web Grip + Venom Trigger:  GRIP = swinging.  TRIGGER = web balls, reel.  Venom full: tap TRIGGER = web "
             "ball, hold = charge.",
-            "Web Trigger + Venom Grip:  TRIGGER = webs.  GRIP = web balls, reel.  Venom full: tap GRIP = web ball, "
+            "Web Trigger + Venom Grip:  TRIGGER = swinging.  GRIP = web balls, reel.  Venom full: tap GRIP = web ball, "
             "hold = charge.",
         };
         const size_t chosen = o.venomTrigger ? 0 : 1;
@@ -1604,7 +1604,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const std::string buttonLine = format("Venom button: %s", vo.venomTrigger ? "trigger" : "grip");
     const std::string chargedLine = format("Venom charged - punch the marked enemy with your %s fist", venomHand);
     const std::string releaseLine = format("Venom let go - the %s hand's venom meter is empty", venomHand);
-    const std::string buttonsText = format("%s = webs.  %s = web balls, reel.  Venom full: tap %s = web ball, "
+    const std::string buttonsText = format("%s = swinging.  %s = web balls, reel.  Venom full: tap %s = web ball, "
                                            "hold = charge.",
                                            vo.triggerWebs ? "Trigger" : "Grip", vo.venomTrigger ? "Trigger" : "Grip",
                                            vo.venomTrigger ? "trigger" : "grip");

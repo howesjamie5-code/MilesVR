@@ -1,5 +1,11 @@
-MilesVR 0.1.51 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.52 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.51: "SWINGING", NOT "WEBS"
+--------------------------------------------------
+The launcher's venom text says "GRIP = swinging" (not "webs"), so it is
+not mixed up with web balls. The Web button description says "The button
+for swinging, and only that." Nothing in the game changed.
 
 What changed since 0.1.50: SHORTER VENOM TEXT IN THE LAUNCHER
 --------------------------------------------------
