@@ -1,5 +1,16 @@
-MilesVR 0.1.54 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.55 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.54: THE WEB POSE'S FINGERS
+--------------------------------------------------
+In the web-shooting pose the two middle fingers curled so far into the
+palm that Miles's hand looked indented round the knuckles. They now curl
+a little less (the knuckle 77 degrees instead of 86): the tips rest on the
+palm instead of pressing into it.
+
+What to try:
+1. Shoot a web and look at the hand: no dents? Do the fingers still
+   touch the palm (the web shooter's button), or is there a gap now?
 
 What changed since 0.1.53: LOOKING INTO THE LOW-POLY PLAYER MODEL
 --------------------------------------------------
