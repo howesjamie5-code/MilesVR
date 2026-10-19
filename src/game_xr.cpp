@@ -856,6 +856,7 @@ DWORD WINAPI run(void*) {
         // told the phone has the hands (Settings::noBlows).
         Phone phone;
         PocketDraw pocketDraw;
+        unsigned pocketHandsBefore{};
         PhoneMusic phoneMusic;
         PhoneView phoneShown;
         bool phoneBlows{};
@@ -1481,9 +1482,16 @@ DWORD WINAPI run(void*) {
                         if (pocketDraw.update(frame.seconds, drawPlay, frame.head, grips, gripsTracked,
                                               squeezes))
                             phoneDrawnWith = pocketDraw.drewWith();
-                        for (unsigned i = 0; i < 2; ++i)
+                        for (unsigned i = 0; i < 2; ++i) {
                             if (pocketDraw.hands() & (1u << i))
                                 controller.hands[i].squeeze = 0;
+                            // MilesVR: a tick as the grip catches the pocket (a draw begins): now bring
+                            // it up in front. The user, October 20: "i pulled it out once and cant do it
+                            // again" - a draw gave no sign it had begun.
+                            if ((pocketDraw.hands() & ~pocketHandsBefore & (1u << i)) && phoneDrawnWith < 0)
+                                runtime.haptic(i, .3f, .05f);
+                        }
+                        pocketHandsBefore = pocketDraw.hands();
                     }
                     // The player's up (its actor's second row): a wall's normal
                     // while the game holds it on one. Spidy's own flight is on none.

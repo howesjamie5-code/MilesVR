@@ -232,7 +232,7 @@ class PocketDraw {
     // is out in front once it is `front` ahead and no lower than `raised`
     // under the head.
     static constexpr float pocketBelow = 1.1f, pocketAbove = .55f, pocketSide = .05f, pocketOut = .4f,
-                           behind = .15f, front = .15f, raised = .65f, drawSeconds = 1.5f, pressed = .6f,
+                           behind = .11f, front = .15f, raised = .65f, drawSeconds = 2.5f, pressed = .6f,
                            released = .3f, yawDeadZone = .6f, yawSpeed = 6, yawDrift = .5f, lostSeconds = .5f;
     // seconds: since the previous update. play: the controllers play VR.
     // head, grips: in one space; tracked: each grip's pose; squeezes: each

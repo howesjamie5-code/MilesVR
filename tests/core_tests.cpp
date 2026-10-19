@@ -2942,7 +2942,7 @@ int main() {
         step(d,front,0);
         // Too slow, nothing opens.
         step(d,pocket,1);
-        for(int i=0;i<20;++i)step(d,pocket,1,.1f);
+        for(int i=0;i<30;++i)step(d,pocket,1,.1f);
         check(!step(d,front,1)&&d.draws()==1,"a draw slower than drawSeconds opened it");
         step(d,front,0);
         check(!step(d,pocket,1,1.f/90,false)&&d.hands()==0u,"outside VR play a draw began");

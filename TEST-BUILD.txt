@@ -1,7 +1,24 @@
-MilesVR 0.1.30 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.31 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.28: EVERYTHING NEW IN SPIDY 0.4.0 (but its gadget wheel)
+What changed since 0.1.30: THE PHONE IS EASIER TO PULL OUT
+--------------------------------------------------
+You pulled the phone out once and could not again. Nothing kept it from
+coming out a second time; the gesture is simply strict and gave no sign.
+How to draw it:
+  1. Put a hand on your BACK pocket - behind your hip, not hanging at your
+     side.
+  2. Squeeze that hand's grip. NEW: a short buzz says the pocket caught it.
+  3. Keep squeezing and bring the hand up in front of your chest within
+     2.5 seconds (was 1.5). The phone opens in that hand.
+  B on its home screen puts it away.
+The pocket also reaches a little closer to you (11 cm behind your eyes
+instead of 15). Wall climbing is scrapped; this is the main build.
+
+What to try:
+1. Draw the phone a few times with either hand. Do you feel the buzz?
+
+What changed in 0.1.30: EVERYTHING NEW IN SPIDY 0.4.0 (but its gadget wheel)
 --------------------------------------------------
 Spidy 0.4.0 (October 19) is ported in: its game addresses were moved to
 Miles Morales the same way as 0.3.8's were, and the few that did not map

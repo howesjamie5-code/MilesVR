@@ -1504,8 +1504,10 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Slow motion by itself", "Time slows for a moment at a finisher, a called blow, a thug who arrives in "
                                     "front of you in the air, and a perfect dodge"}}},
         {"PHONE",
-         {{"Grip behind a hip, bring it up", "Draw the phone from your back pocket: squeeze a grip with the hand "
-                                             "behind your hip and bring it up in front of you, still squeezed"},
+         {{"Grip behind a hip, bring it up", "Draw the phone from your back pocket: put a hand on your back "
+                                             "pocket (behind your hip, not at your side), squeeze its grip - a "
+                                             "short buzz says it caught - and keep squeezing as you bring it up "
+                                             "in front of your chest within 2.5 seconds"},
           {"Stick  /  A  /  B", "Pick an app or button  /  press it  /  put the phone away"},
           {"Triggers", "Music volume: left down, right up"},
           {"Apps", "Music (the files in the Music folder beside the launcher), map, and GEAR: your gadgets"}}},
