@@ -936,6 +936,7 @@ DWORD WINAPI run(void*) {
         // its hand at the temple is the game's R3, its scan. leapOut: the
         // leap let go of, for the swing's next commands.
         game_pad::ChargeJump chargeJump;
+        ULONGLONG jumpLegsUntil{}; // a jump pressed lately: the game's legs (native_body::gameLegs)
         // The right hand at the temple scans; the left's is Miles's Camouflage.
         game_pad::TemplePress templePress{2u}, camoPress{1u};
         game_pad::SwingTap swingTap;
@@ -3018,6 +3019,9 @@ DWORD WINAPI run(void*) {
                         askingGame = steering && swingState.owned && !calibrationInput &&
                                      (walk.zip || (inFlight && (walk.interact || walk.demand.any())));
                         walk.jump = (keys & swingJumpKey) != 0;
+                        // A jump pressed: the game's legs for its takeoff (the body's gameLegs).
+                        if (walk.jump)
+                            jumpLegsUntil = GetTickCount64() + 700;
                         // A jump on the game's own crawl - the player's, a web's
                         // takeoff, or the mount's that walks him on from it onto
                         // Spidy's wall - goes out as its RT + A, the only one
@@ -3509,7 +3513,13 @@ DWORD WINAPI run(void*) {
                                      (swingState.owned && !motion.standing ? native_body::airborne : 0u) |
                                      (calibratedEye > 0 ? native_body::calibrated : 0u) |
                                      (motion.standing || crawlsFloor ? native_body::standing : 0u) |
-                                     (kneels ? native_body::kneel : 0u);
+                                     (kneels ? native_body::kneel : 0u) |
+                                     // The game's crouches on the ground are not the body's, but a
+                                     // Charge Jump's and a jump's are (0.1.62).
+                                     (chargeJump.charging() || GetTickCount64() < jumpLegsUntil ||
+                                              !swingState.grounded
+                                          ? native_body::gameLegs
+                                          : 0u);
                         pose.standUp = motion.standUp;
                         pose.floor = motion.floor;
                         pose.eyes = Vec3{(motion.eyes[0][12] + motion.eyes[1][12]) / 2,

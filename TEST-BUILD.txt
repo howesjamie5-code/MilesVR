@@ -1,5 +1,19 @@
-MilesVR 0.1.61 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.62 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.61: NO CROUCHING LEGS ON THE GROUND
+--------------------------------------------------
+On the ground Miles's legs no longer fold into the game's crouches (the
+squat after landing, crouching on a perch, sneaking): he stands on
+planted legs, feet flat under the hips. The game's own leg animation
+still plays while you charge a Charge Jump (hold A), when you press jump
+(A), and whenever you are off the ground (swinging, falling).
+
+What to try:
+1. Land from a swing, stand on a lamp post or ledge: legs standing, no
+   squat?
+2. Hold A on the ground: the charge crouch still shows? Jump: the jump's
+   legs?
 
 What changed since 0.1.60: BIG GROUND EXPLOSIONS FOR THE SMASH AND THE MEGA
 --------------------------------------------------

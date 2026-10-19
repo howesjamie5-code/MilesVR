@@ -425,6 +425,13 @@ void solveHero(float* out, uintptr_t job, uintptr_t instance) {
             // surface under the hips instead.
             t.plant = standing;
             t.floor = standing ? toModel.rotate(wanted.floor) : Vec3{};
+            // On the ground the game's crouches are no stance either: planted
+            // legs on the floor under the model's origin, his feet, unless the
+            // game's legs are wanted (a Charge Jump, a jump, off the ground).
+            if (!standing && !t.airborne && !(wanted.flags & native_body::gameLegs)) {
+                t.plant = true;
+                t.floor = {};
+            }
             t.kneel = standing && (wanted.flags & native_body::kneel);
             t.eyes = toModel.rotate(wanted.eyes);
             t.facing = toModel * wanted.facing;

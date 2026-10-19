@@ -50,6 +50,13 @@ enum Flags : uint32_t {
     // Standing so, the view holds the head below the player's own under a
     // roof (a vent, a duct): the legs kneel (body::Targets::kneel).
     kneel = 64,
+    // The game's legs on the ground (MilesVR 0.1.62): a Charge Jump charging,
+    // a jump just pressed, the hero off the ground. Without it a hero on the
+    // ground stands on planted legs, whatever crouch the game plays (a
+    // landing's, a perch's, sneaking) - the user: "disable the crouch
+    // animation except for the one that happens when doing a charge jump and
+    // just jump in general".
+    gameLegs = 128,
 };
 struct Command {
     uint32_t magic = 0x53424443, version = 4, bytes = sizeof(Command), flags{};
