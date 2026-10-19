@@ -797,7 +797,7 @@ DWORD WINAPI run(void*) {
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
         // The venom hand's buttons while the venom has it: the venom button charges (and reels a held
         // web), the other shoots webs, a tap of it a web ball (venom_punch::VenomButtons).
-        venom_punch::VenomButtons venomButtons;
+        venom_punch::VenomButtons venomButtons, offButtons;
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -967,6 +967,9 @@ DWORD WINAPI run(void*) {
         values.standOnWalls = !(config.options & 8192);
         values.arcadeWebs = config.options & 0x400000; // bit 22 in MilesVR: 21 is the venom hand
         values.venomTrigger = config.options & 0x800000;
+        // Never on the web button (the launcher pairs them; a session started otherwise too).
+        if (values.venomTrigger == values.triggerWebs)
+            values.venomTrigger = !values.triggerWebs;
         values.swingSpeed = config.swingSpeed;
         values.snapTurn = static_cast<int>(config.snapTurn);
         values.smoothTurn = static_cast<int>(config.smoothTurn);
@@ -2045,6 +2048,17 @@ DWORD WINAPI run(void*) {
                             fist.trigger = split.reel;
                         } else {
                             venomButtons.reset();
+                        }
+                        // The other hand the same way, with no venom (0.1.47, the user: the web button's tap
+                        // a web ball "always"): a tap of its web button a web ball, held a web.
+                        auto& off = motion.swing.hands[1 - venomSide];
+                        if (immersive && !calibrationInput && !padLayer.latched()) {
+                            const auto split = offButtons.update(frame.seconds, off.trigger, off.grip,
+                                                                 swingState.webs[1 - venomSide].attached, false);
+                            off.grip = split.web;
+                            off.trigger = split.reel;
+                        } else {
+                            offButtons.reset();
                         }
                     }
                     // A thumbstick's click, but not the venom hand's that let the venom go.

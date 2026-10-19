@@ -590,6 +590,7 @@ Settings loadSettings() {
     // A calibration is both measurements within their ranges, or none.
     if (!text::calibrated(settings.options))
         settings.options.eyeHeightMm = settings.options.armLengthMm = 0;
+    spidy::launcher::pairButtons(settings.options);
     return settings;
 }
 

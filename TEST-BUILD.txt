@@ -1,5 +1,22 @@
-MilesVR 0.1.46 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.47 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.46: WEB BUTTON AND VENOM BUTTON ARE NEVER THE SAME
+--------------------------------------------------
+Web button and Venom button are now always opposite buttons. Change one
+(in the launcher or the game's MILES VR settings) and the other switches
+with it. Only two setups exist:
+- Web button GRIP, Venom button TRIGGER: the grip always webs (tap: web
+  ball, hold: swing) on BOTH hands; the trigger is normal until venom is
+  full, then holding the venom hand's trigger charges the venom.
+- Web button TRIGGER, Venom button GRIP: the other way round - the
+  trigger always webs (tap: web ball, hold: swing) on both hands; the
+  venom hand's grip charges the venom once a bar is full.
+The launcher's VENOM POWERS card says which setup is yours ("Web And
+Venom Buttons"), and the WEBS card lists the web button's tap and hold.
+Saved settings with both on the same button (the old default was both
+on Grip) are fixed as they load: the web button stays, the venom goes to
+the other one.
 
 What changed since 0.1.45: VENOM BUTTON TRIGGER - THE GRIP'S TAP IS ALWAYS A WEB BALL
 --------------------------------------------------

@@ -196,6 +196,11 @@ bool choose(Item item, int index, Values& v) {
             return false;
         const bool was = *on;
         *on = index == 1;
+        // WEB BUTTON and VENOM BUTTON are never the same button: choosing one sets the other.
+        if (item == Item::webButton)
+            v.venomTrigger = !v.triggerWebs;
+        else if (item == Item::venomButton)
+            v.triggerWebs = !v.venomTrigger;
         return *on != was;
     }
     const auto s = steps(item);

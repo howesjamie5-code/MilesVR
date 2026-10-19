@@ -82,19 +82,16 @@ The launcher's **Controls** tab lists every control. The basics:
 
 ### Venom powers
 
-With a venom bar full, the venom hand's (the right one, unless you set VENOM HAND to LEFT) two
-buttons split. Pick which with **Venom button** (launcher Play tab, or VENOM BUTTON in the game's
-MILES VR settings):
+The venom hand (the right one, unless you set VENOM HAND to LEFT) has a **web button** and a
+**venom button**, always opposite buttons (launcher Play tab, or WEB BUTTON / VENOM BUTTON in the
+game's MILES VR settings; change one and the other switches):
 
-| Venom button | Charges the venom (hold) | Shoots webs: hold to swing, tap for a web ball |
-|---|---|---|
-| **Grip** (default) | Grip | Trigger |
-| **Trigger** | Trigger | Grip |
+| Web button | Venom button | Web button does, always (both hands) | Venom button does |
+|---|---|---|---|
+| **Grip** (default) | **Trigger** | Tap: web ball. Hold: web-swing | Web balls and reel as normal; with a bar full, hold to charge |
+| **Trigger** | **Grip** | Tap: web ball. Hold: web-swing | Web balls and reel as normal; with a bar full, hold to charge |
 
-With a web attached, the venom button reels in. Until a bar is full, the buttons work as normal:
-the grip shoots webs and the trigger shoots web balls - and on **Trigger**, a tap of the grip is a
-web ball too, always.
-Hold the venom button until the fist glows and the controller buzzes, then:
+With a web attached, the venom button reels in. Hold the venom button until the fist glows and the controller buzzes, then:
 
 | Venom power | How | Cost |
 |---|---|---|

@@ -537,6 +537,14 @@ struct SessionOptions {
     int monitorRate = static_cast<int>(defaultMonitorRate);
     bool operator==(const SessionOptions&) const = default;
 };
+// The web button and the venom button are never the same button (MilesVR 0.1.47, the user: "disable the
+// option for trigger venom button and web button to be trigger at the same time and vise versa"): the web
+// button stands, and the venom goes to the other one. Settings from before (both on the grip, the old
+// default) come out as the web on the grip and the venom on the trigger.
+inline void pairButtons(SessionOptions& o) {
+    if (o.venomTrigger == o.triggerWebs)
+        o.venomTrigger = !o.triggerWebs;
+}
 
 // Whether `options` hold a T-pose calibration a session takes: both measurements, each within its range.
 inline bool calibrated(const SessionOptions& options) {
@@ -639,6 +647,7 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
     while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' '))
         line.remove_suffix(1);
     SessionOptions next = options;
+    bool buttons = false; // the line names the web or the venom button: they are paired again
     while (!line.empty()) {
         const size_t space = line.find(' ');
         const std::string_view pair = line.substr(0, space);
@@ -691,7 +700,10 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.venomLeftHand = number != 0;
         else if (key == "venom_trigger")
             next.venomTrigger = number != 0;
+        buttons |= key == "trigger_webs" || key == "venom_trigger";
     }
+    if (buttons)
+        pairButtons(next);
     // A calibration is both measurements within their ranges, or none at all; anything else keeps the old one.
     if (!calibrated(next) && (next.eyeHeightMm || next.armLengthMm)) {
         next.eyeHeightMm = options.eyeHeightMm;

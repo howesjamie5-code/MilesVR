@@ -371,8 +371,16 @@ int main() {
                   headsetSettings("VR settings from the headset: venom_left_hand=0", options) && !options.venomLeftHand,
               "the venom hand did not come back from the headset");
         check(headsetSettings("VR settings from the headset: venom_trigger=1", options) && options.venomTrigger &&
-                  headsetSettings("VR settings from the headset: venom_trigger=0", options) && !options.venomTrigger,
+                  headsetSettings("VR settings from the headset: trigger_webs=1 venom_trigger=0", options) &&
+                      !options.venomTrigger && options.triggerWebs,
               "the venom button did not come back from the headset");
+        // Never the same button: the web button stands and the venom goes to the other one.
+        spidy::launcher::SessionOptions both;
+        spidy::launcher::pairButtons(both);
+        check(!both.triggerWebs && both.venomTrigger, "both on the grip: the venom goes to the trigger");
+        both.triggerWebs = true;
+        spidy::launcher::pairButtons(both);
+        check(both.triggerWebs && !both.venomTrigger, "both on the trigger: the venom goes to the grip");
         // Half a calibration, or one out of range, keeps the one there was.
         const auto kept = options;
         check(!headsetSettings("VR settings from the headset: eye_height_mm=1700 arm_length_mm=0", options) &&

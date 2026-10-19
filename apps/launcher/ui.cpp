@@ -1118,12 +1118,14 @@ void App::optionsCard(ImVec2 size) {
                stepCombo("##webStyle", kWebStyles, styles, 2, &arcade);
                o.arcadeWebs = arcade != 0;
            });
-    option("Web button", "Which button shoots and holds a web; the other reels in and shoots web balls.",
+    option("Web button", "Which button shoots and holds a web: tap it for a web ball, hold it to swing. Venom "
+           "button is always the other one.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.triggerWebs ? 1 : 0;
                stepCombo("##webButton", kWebButtons, buttons, 2, &trigger);
                o.triggerWebs = trigger != 0;
+               o.venomTrigger = !o.triggerWebs; // never the same button
            });
     option("Venom punch hand",
            "With the venom meter full, hold this hand's venom button to charge the venom punch, then punch the "
@@ -1135,13 +1137,14 @@ void App::optionsCard(ImVec2 size) {
                o.venomLeftHand = left != 0;
            }, true);
     option("Venom button",
-           "The button that charges the venom fist (hold it) once a bar is full. The other button then shoots "
-           "that hand's webs: hold it to swing, tap it for a web ball.",
+           "The button that charges the venom fist (hold it) once a bar is full. Always the other one from Web "
+           "button: changing one changes the other.",
            S(150), [&] {
                static constexpr int buttons[] = {0, 1};
                int trigger = o.venomTrigger ? 1 : 0;
                stepCombo("##venomButton", kVenomButtons, buttons, 2, &trigger);
                o.venomTrigger = trigger != 0;
+               o.triggerWebs = !o.venomTrigger; // never the same button
            }, true);
     {
         // What the venom hand's two buttons do with venom full, for the choice above, where no one can miss
@@ -1152,11 +1155,13 @@ void App::optionsCard(ImVec2 size) {
             format("VENOM CONTROLS - YOUR %s HAND, WITH A VENOM BAR FULL", o.venomLeftHand ? "LEFT" : "RIGHT");
         const std::string lines[] = {
             "If Web button is on Grip and Venom button is on Trigger: tap the grip to web up enemies and hold the "
-            "grip to web-swing, always. With a venom bar full, hold the trigger to charge your venom fist.",
+            "grip to web-swing, always, on both hands. With a venom bar full, hold the trigger to charge your "
+            "venom fist.",
             "If Web button is on Trigger and Venom button is on Grip, it is the other way round: tap the trigger to "
-            "web up enemies, hold the trigger to web-swing, and hold the grip to charge your venom fist.",
-            "Until a venom bar is full, the trigger works as normal too: it shoots web balls, and with a web "
-            "attached it reels in.",
+            "web up enemies and hold the trigger to web-swing, always, on both hands. With a venom bar full, hold "
+            "the grip to charge your venom fist.",
+            "Until a venom bar is full, the venom button works as normal too: it shoots web balls, and with a web "
+            "attached it reels in. Web button and Venom button are always opposite buttons.",
         };
         const size_t chosen = o.venomTrigger ? 0 : 1;
         auto* draw = ImGui::GetWindowDrawList();
@@ -1550,10 +1555,12 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Click both sticks", "Pad layer: the whole gamepad for a moment. Click both again to leave",
            "Pad layer on - your grips are the game's LB and RB, ..."}}},
         {"WEBS",
-         {{"Grip", "Shoot a web where the hand points; hold to swing, let go to release. (Web button: Trigger "
-                   "swaps the grip and the trigger everywhere here)"},
-          {"Trigger, web attached", "Reel in"},
-          {"Trigger, no web", "Shoot a web ball"},
+         {{"Web button, hold", "Shoot a web where the hand points and swing; let go to release. The web button is "
+                               "the grip unless you set Web button to Trigger"},
+          {"Web button, tap", "A web ball: web up an enemy"},
+          {"Other button, web attached", "Reel in"},
+          {"Other button, no web", "A web ball too (on the venom hand, once a bar is full, it charges the venom "
+                                   "instead)"},
           {"Pull the hand sharply", "Zip toward the web's anchor"},
           {"Pull the hand in", "The web is a rope: you go where you pull it"},
           {"Other hand on the web, grip", "Take hold of the same web and climb it hand over hand"},
@@ -1607,6 +1614,14 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const std::string buttonLine = format("Venom button: %s", vo.venomTrigger ? "trigger" : "grip");
     const std::string chargedLine = format("Venom charged - punch the marked enemy with your %s fist", venomHand);
     const std::string releaseLine = format("Venom let go - the %s hand's venom meter is empty", venomHand);
+    const char* webName = vo.triggerWebs ? "trigger" : "grip";
+    const char* venomName = vo.venomTrigger ? "trigger" : "grip";
+    const std::string buttonsText = format(
+        "Yours: Web button %s, Venom button %s (always opposite: change one on the Play tab or in the game's MILES "
+        "VR settings and the other switches). Both hands: tap the %s for a web ball, hold it to web-swing. The "
+        "%s shoots web balls and reels as normal; once a bar is full, holding the %s %s charges the venom",
+        vo.triggerWebs ? "TRIGGER" : "GRIP", vo.venomTrigger ? "TRIGGER" : "GRIP", webName, venomName, venomHand,
+        venomName);
     struct Power {
         const char* name;
         const char* description;
@@ -1616,11 +1631,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"Venom Meter", "Land blows to fill it: ten hits fill a bar (heavy blows and finishers more). Up to three "
                         "bars",
          fullLine.c_str()},
-        {"Venom Button", "Which button charges the venom: Play tab > Venom button, or VENOM BUTTON in the game's "
-                         "MILES VR settings. On Trigger the grip always webs: hold to swing, tap for a web ball. "
-                         "On Grip, with a bar full, the trigger does that. Until a bar is full the trigger shoots "
-                         "web balls as normal (the orange box on the Play tab)",
-         buttonLine.c_str()},
+        {"Web And Venom Buttons", buttonsText.c_str(), buttonLine.c_str()},
         {"Venom Charge", "Hold the venom button until your fist glows and the controller buzzes. With a web "
                          "attached it reels instead. The charge lasts about 1.5 s after you let go",
          chargedLine.c_str()},

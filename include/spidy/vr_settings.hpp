@@ -70,7 +70,9 @@ struct Values {
     // launcher's Venom button): false the grip, true the trigger. On the
     // hand's web button (WEB BUTTON) its webs are off while the meter is full;
     // on the other one the webs stay, and that button's reel and web balls go.
-    bool venomTrigger = false;
+    // Since 0.1.47 never the web button's (choose() keeps them apart): the
+    // trigger, as the web button's default is the grip.
+    bool venomTrigger = true;
     // Arcade webs (the tab's WEB STYLE: ARCADE; SwingConfig::arcade): webs go
     // through lamp posts, signs, cars and other thin or loose things, and
     // swings stay above the street. Off, REALISTIC: webs are ropes that bend

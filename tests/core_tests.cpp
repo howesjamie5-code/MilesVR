@@ -9935,9 +9935,12 @@ int main() {
                   std::strcmp(all[10].choices[0], "GRIP") == 0 && std::strcmp(all[10].choices[1], "TRIGGER") == 0,
               "the venom button under the venom hand: GRIP, or TRIGGER");
         Values v;
-        check(choice(Item::venomButton, v) == 0 && choose(Item::venomButton, 1, v) && v.venomTrigger &&
-                  choice(Item::venomButton, v) == 1,
-              "VENOM BUTTON: TRIGGER sets the venom on the trigger");
+        check(choice(Item::venomButton, v) == 1 && v.venomTrigger && !v.triggerWebs,
+              "by default the venom on the trigger, the webs on the grip");
+        check(choose(Item::webButton, 1, v) && v.triggerWebs && !v.venomTrigger && choice(Item::venomButton, v) == 0,
+              "WEB BUTTON: TRIGGER moves the venom to the grip");
+        check(choose(Item::venomButton, 1, v) && v.venomTrigger && !v.triggerWebs,
+              "VENOM BUTTON: TRIGGER moves the webs to the grip");
         check(all[23].item == Item::flips && all[23].choices.empty() && std::strcmp(all[22].title, "EXPERIMENTAL") == 0,
               "the flips: a switch under EXPERIMENTAL");
         check(all.size() == 25 && all[24].item == Item::flipSpeed && all[24].choices.size() == std::size(flipSpeeds),
