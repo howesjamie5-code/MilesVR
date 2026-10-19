@@ -21,7 +21,9 @@ constexpr Shape shapes[] = {
 };
 constexpr float rushSeconds = .22f, rushGain = .2f;
 // The Mega Venom Blast: its charge rises for megaCharge seconds, then the boom.
-constexpr float megaSeconds = 1.6f, megaCharge = .22f;
+// 0.1.59 (the user: "way too loud and the sound cut off abruptly"): half the
+// level, less pressed, two and a half seconds with its last 0.9 faded out.
+constexpr float megaSeconds = 2.5f, megaCharge = .22f, megaFade = .9f, megaDrive = 1.4f, megaGain = .45f;
 // Uniform noise in -1..1, the same every time.
 struct Noise {
     std::uint32_t state = 0x2545f491;
@@ -71,9 +73,12 @@ std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate) {
                     spark = noise.next() > 0 ? 1.f : -1.f;
                 spark *= .985f;
                 sum += std::sin(phase) * std::exp(-b * 2.6f) * 1.1f + snap * std::exp(-b * 14) * .9f +
-                       rumble * std::exp(-b * 1.7f) * 2.2f + spark * std::exp(-b * 1.2f) * .35f;
+                       rumble * std::exp(-b * 2.2f) * 2.f + spark * std::exp(-b * 1.8f) * .3f;
             }
-            samples[i] = std::tanh(sum * 2.4f) / std::tanh(2.4f) * .92f;
+            // The tail fades out smoothly over its last megaFade seconds.
+            const float left = (megaSeconds - t) / megaFade;
+            const float tail = left >= 1 ? 1.f : left <= 0 ? 0.f : left * left * (3 - 2 * left);
+            samples[i] = std::tanh(sum * megaDrive) / std::tanh(megaDrive) * megaGain * tail;
         }
     } else if (sound == ImpactSound::Rush) {
         // Noise through a band that rises and falls back, swelling and fading.

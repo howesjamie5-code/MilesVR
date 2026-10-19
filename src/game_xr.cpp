@@ -1099,7 +1099,15 @@ DWORD WINAPI run(void*) {
             impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush), impactWave(ImpactSound::Mega)};
         // One at a time, the newest cutting the one before short: a strike's
         // rush ends in its blow.
+        // The Mega Venom Blast's sound is not cut short: nothing else plays until it ends (0.1.59, the
+        // user: its "sound cut off abruptly" - its own hits' sounds stopped it).
+        ULONGLONG megaSoundUntil{};
         auto play = [&](ImpactSound sound) {
+            const ULONGLONG now = GetTickCount64();
+            if (sound != ImpactSound::Mega && now < megaSoundUntil)
+                return;
+            if (sound == ImpactSound::Mega)
+                megaSoundUntil = now + static_cast<ULONGLONG>(impactSeconds(ImpactSound::Mega) * 1000);
             const auto& wave = sounds[static_cast<size_t>(sound)];
             PlaySoundW(reinterpret_cast<LPCWSTR>(wave.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
         };

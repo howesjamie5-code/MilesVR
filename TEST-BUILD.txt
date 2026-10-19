@@ -1,5 +1,18 @@
-MilesVR 0.1.58 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.59 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.58: THE MEGA VENOM BLAST'S SOUND, FIXED
+--------------------------------------------------
+It was far too loud and stopped abruptly. Now:
+- about half as loud, and less distorted;
+- 2.5 seconds long, its rumble fading out smoothly over the last second
+  instead of stopping;
+- nothing cuts it short: the punch sounds of the enemies it hits wait
+  until it has finished.
+
+What to try:
+1. Three full bars, both grips: is the volume right now? Does it fade
+   out smoothly?
 
 What changed since 0.1.57: MEGA VENOM BLAST - BACK TO MILESVR'S, WITH SOUND AND SLOW MOTION
 --------------------------------------------------

@@ -774,10 +774,15 @@ int main() {
         check(wave.size() == 44 + 2 * static_cast<size_t>(std::lround(impactSeconds(ImpactSound::Mega) * 22050)) &&
                   impactSeconds(ImpactSound::Mega) > impactSeconds(ImpactSound::Finisher),
               "its sound: longer than a finisher's");
-        int16_t loudest{};
-        for (size_t i = 44; i + 1 < wave.size(); i += 2)
-            loudest = std::max<int16_t>(loudest, static_cast<int16_t>(std::abs(static_cast<int16_t>(wave[i] | wave[i + 1] << 8))));
-        check(loudest > 20000, "and loud");
+        const auto sample = [&](size_t i) { return std::abs(static_cast<int>(static_cast<int16_t>(wave[44 + 2 * i] | wave[45 + 2 * i] << 8))); };
+        const size_t count = (wave.size() - 44) / 2;
+        int loudest{}, tail{};
+        for (size_t i = 0; i < count; ++i)
+            loudest = std::max(loudest, sample(i));
+        for (size_t i = count - count / 25; i < count; ++i) // its last 0.1 s
+            tail = std::max(tail, sample(i));
+        check(loudest > 8000 && loudest < 17000, "loud, but at half the level (0.1.58's was far too loud)");
+        check(tail < loudest / 30, "its end faded out, not cut off");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;
