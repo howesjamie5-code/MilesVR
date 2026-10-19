@@ -44,7 +44,7 @@ OUTPUT = ROOT/'reports/body-probe'
 STEREO_DLL = ROOT/'build/windows-ninja/spidy_stereo_probe.dll'
 RAY_DLL = ROOT/'build/windows-ninja/spidy_ray_bridge.dll'
 MAX_JOINTS = 256
-STATUS_SIZE, POSES_SIZE = 144, 56 + 64 + 3*MAX_JOINTS*64
+STATUS_SIZE, POSES_SIZE = 208, 56 + 64 + 3*MAX_JOINTS*64
 PROBLEMS = {0: 'none', 1: 'no hero', 2: 'no rig yet', 3: 'unknown rig', 4: 'bad rest pose', 5: 'bad instance'}
 STATES = {0: 'off', 1: 'waiting', 2: 'active', 3: 'failed'}
 SYNC_MACHINE, HEALTH, BOT_HEALTH = 0x57ead40, 0x3d7c6b8, 0x3d7c748
@@ -81,9 +81,9 @@ def body_status(game, address):
     raw = seqlock(game, address, STATUS_SIZE)
     if not raw:
         return None
-    if struct.unpack_from('<3I', raw) != (0x53424453, 2, STATUS_SIZE):
+    if struct.unpack_from('<3I', raw) != (0x53424453, 3, STATUS_SIZE):
         raise RuntimeError('Body status protocol mismatch')
-    v = struct.unpack('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw)
+    v = struct.unpack_from('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw)
     return dict(state=STATES.get(v[3], v[3]), jobs=v[5], hero_jobs=v[6], solved=v[7],
                 problem=PROBLEMS.get(v[8], v[8]), joints=v[9], rig=v[10], instance=v[11], weight=round(v[12], 3),
                 scale=round(v[13], 4), yaw=round(v[14], 4), grounded=v[15],

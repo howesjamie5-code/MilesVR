@@ -234,8 +234,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<I2f', packet, 72), (1, .25, 1))
 
     def test_body_status_decodes_errors_and_turn_and_rejects_torn_reads(self):
-        raw = bytearray(144)
-        struct.pack_into('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw, 0, 0x53424453, 2, 144, 2, 6, 900, 300, 290, 0, 237,
+        raw = bytearray(208)
+        struct.pack_into('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw, 0, 0x53424453, 3, 208, 2, 6, 900, 300, 290, 0, 237,
                          0x1a0, 0x2b0, 1., 1.03125, -.5, 1, .002, .003, .0005, .0125, .0375, 12, 480, 1, 2, 7.5,
                          1.0625, 1)
         result = body_snapshot(Reader(raw, struct.pack('<q', 6)), 0)
@@ -247,6 +247,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual((result['rig'], result['rig_switches'], result['hero_jobs_max']), ('0x1a0', 12, 2))
         # The arms 6% longer than the body's scale makes them, both sized by the player's T-pose calibration.
         self.assertEqual((result['arm_scale'], result['calibrated']), (1.0625, True))
+        # Two rigs the hero was posed with: the full one most of the time, a smaller one now and then.
+        self.assertEqual(result['rigs'], [])
+        struct.pack_into('<4Q4I4I', raw, 144, 0x1a0, 0x2c0, 0, 0, 237, 120, 0, 0, 280, 20, 0, 0)
+        self.assertEqual(body_snapshot(Reader(raw, struct.pack('<q', 6)), 0)['rigs'],
+                         [dict(rig='0x1a0', joints=237, jobs=280), dict(rig='0x2c0', joints=120, jobs=20)])
         struct.pack_into('<2I', raw, 48, 3, 237)
         self.assertEqual(body_snapshot(Reader(raw, struct.pack('<q', 6)), 0)['problem'], 'unknown_rig')
         torn = bytearray(raw)
@@ -567,9 +572,11 @@ class ProtocolTests(unittest.TestCase):
         with patch('run_game_vr.write_rgb_png') as write:
             game = Reader(pixels, raw, struct.pack('<Q', 8))
             files = save_eye_snapshot(game, 0, shot, folder, '0003', view=32, crop=16)
-            self.assertEqual(files, dict(view='0003-view.png', view_scale=2, right_hand='0003-right-hand.png',
+            # Each wrist in view gets its crop (0.1.54): the left too, with no game web on it.
+            self.assertEqual(files, dict(view='0003-view.png', view_scale=2, left_hand='0003-left-hand.png',
+                                         left_hand_origin=[2, 12], right_hand='0003-right-hand.png',
                                          right_hand_origin=[32, 36]))
-            self.assertEqual([call.args[1:3] for call in write.call_args_list], [(32, 32), (16, 16)])
+            self.assertEqual([call.args[1:3] for call in write.call_args_list], [(32, 32), (16, 16), (16, 16)])
             write.reset_mock()
             # A newer copy replaced the pixels while they were read.
             newer = self.eye_header(count=4, sequence=10)
@@ -1065,7 +1072,7 @@ class ProtocolTests(unittest.TestCase):
                                      (motion_snapshot, 0x534d5644, 176), (ray_snapshot, 0x53525944, 784),
                                      (swing_snapshot,0x53574441,272),(timing_snapshot,0x5358544d,344),
                                      (appearance_snapshot,0x53415044,360),(eye_snapshot,0x53455353,112),
-                                     (grab_snapshot,0x53475244,368),(body_snapshot,0x53424453,144),
+                                     (grab_snapshot,0x53475244,368),(body_snapshot,0x53424453,208),
                                      (punch_snapshot,0x53505544,168),(shooter_snapshot,0x53484f44,296),
                                      (strike_snapshot,0x53535452,328)):
             raw = bytearray(size)

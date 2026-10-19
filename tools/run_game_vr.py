@@ -974,21 +974,24 @@ def body_snapshot(game, address):
     the hero's pose jobs changed rig (the body's blend restarted at each change before October 6 evening), the
     body's scale and its arms' on top of it, and whether those are from the player's T-pose calibration."""
     for _ in range(8):
-        raw = game.read(address, 144)
-        if len(raw) != 144:
+        raw = game.read(address, 208)
+        if len(raw) != 208:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53424453, 2, 144):
+        if struct.unpack_from('<3I', raw) != (0x53424453, 3, 208):
             raise RuntimeError('Body protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
-        v = struct.unpack('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw)
+        v = struct.unpack_from('<4Iq3Q2I2Q3fI2ff2fIQ2IdfI', raw)
+        # The rigs the hero was posed with (version 3): joints and jobs each.
+        census = struct.unpack_from('<4Q4I4I', raw, 144)
+        rigs = [dict(rig=hex(census[i]), joints=census[4+i], jobs=census[8+i]) for i in range(4) if census[i]]
         return dict(state=BODY_STATES.get(v[3], v[3]), jobs=v[5], hero_jobs=v[6], solved=v[7],
                     problem=BODY_PROBLEMS.get(v[8], v[8]), joints=v[9], weight=round(v[12], 3),
                     scale=round(v[13], 4), yaw=round(v[14], 4), grounded=bool(v[15]),
                     hand_error_m=[round(v[16], 4), round(v[17], 4)], head_error_m=round(v[18], 4),
                     turn_last=round(v[19], 5), turn_max=round(v[20], 5), rig=hex(v[10]), rig_switches=v[21],
                     renders=v[22], hero_jobs_last_frame=v[23], hero_jobs_max=v[24], solve_ms=round(v[25], 3),
-                    arm_scale=round(v[26], 4), calibrated=bool(v[27]))
+                    arm_scale=round(v[26], 4), calibrated=bool(v[27]), rigs=rigs)
     return None
 
 
@@ -1366,7 +1369,7 @@ def save_eye_snapshot(game, address, shot, folder, name, view=544, crop=512):
     files['view'] = f'{name}-view.png'
     files['view_scale'] = step
     for hand, label in enumerate(('left', 'right')):
-        point = shot['rope_start_px'][hand] or (shot['wrist_px'][hand] if shot['game_web'][hand] else None)
+        point = shot['rope_start_px'][hand] or shot['wrist_px'][hand]
         if not point or not (0 <= point[0] < width and 0 <= point[1] < height):
             continue
         side = min(crop, width, height)
@@ -2208,7 +2211,7 @@ def session(a, startup):
                     if body:
                         sample['body'] = {k: body[k] for k in ('state', 'problem', 'weight', 'hand_error_m',
                                                                'head_error_m', 'turn_last', 'grounded', 'scale',
-                                                               'arm_scale', 'rig', 'rig_switches')}
+                                                               'arm_scale', 'rig', 'rig_switches', 'rigs')}
                     landed = punch_snapshot(game, rays['SpidyPunchData'])
                     if landed:
                         # Thugs within reach of a fist, and each fist's speed relative to the head.

@@ -70,6 +70,9 @@ body::Targets lastTargets;
 // instance is another actor, and the body starts over on it.
 uintptr_t lastInstance{}, lastRig{};
 uint32_t rigSwitches{};
+// The rigs the hero's pose jobs named (Status::rigs), under solveLock.
+uint64_t censusRig[native_body::Status::censusRigs]{};
+uint32_t censusJoints[native_body::Status::censusRigs]{}, censusJobs[native_body::Status::censusRigs]{};
 // The hero actor's heading in the world at the last solve (solveLock): the
 // body's yaw is the model's, and turns back by as much as the actor turns.
 float actorHeading{};
@@ -370,6 +373,18 @@ void solveHero(float* out, uintptr_t job, uintptr_t instance) {
     float scale = 1, armScale = 1;
     const bool capture = captureWanted.exchange(false);
     const uint32_t joints = cache.joints;
+    for (unsigned i = 0; i < native_body::Status::censusRigs; ++i)
+        if (censusRig[i] == rig || !censusRig[i]) {
+            censusRig[i] = rig;
+            censusJoints[i] = joints;
+            ++censusJobs[i];
+            break;
+        }
+    uint64_t rigs[native_body::Status::censusRigs]{};
+    uint32_t rigJoints[native_body::Status::censusRigs]{}, rigJobs[native_body::Status::censusRigs]{};
+    std::memcpy(rigs, censusRig, sizeof(rigs));
+    std::memcpy(rigJoints, censusJoints, sizeof(rigJoints));
+    std::memcpy(rigJobs, censusJobs, sizeof(rigJobs));
     if (capture && joints <= native_body::maxJoints)
         std::memcpy(SpidyBodyPoses.game, out, joints * 64ull);
     if (turned) {
@@ -476,6 +491,9 @@ void solveHero(float* out, uintptr_t job, uintptr_t instance) {
         d.joints = joints;
         d.rig = rig;
         d.rigSwitches = switches;
+        std::memcpy(d.rigs, rigs, sizeof(rigs));
+        std::memcpy(d.rigJoints, rigJoints, sizeof(rigJoints));
+        std::memcpy(d.rigJobs, rigJobs, sizeof(rigJobs));
         d.instance = instance;
         d.state = problem ? native_body::failed : result.solved ? native_body::active : native_body::waiting;
         d.weight = result.weight;
@@ -539,6 +557,9 @@ uint32_t native_body::start(uintptr_t gameBase) {
         state = {};
         lastInstance = lastRig = 0;
         rigSwitches = 0;
+        std::memset(censusRig, 0, sizeof(censusRig));
+        std::memset(censusJoints, 0, sizeof(censusJoints));
+        std::memset(censusJobs, 0, sizeof(censusJobs));
         lastSolve = {};
         ReleaseSRWLockExclusive(&solveLock);
         latestSolved = false;

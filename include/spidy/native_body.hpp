@@ -97,7 +97,7 @@ enum Problem : uint32_t {
     badInstance = 5, // the hero's instance transform is not a rotation
 };
 struct Status {
-    uint32_t magic = 0x53424453, version = 2, bytes = sizeof(Status), state{};
+    uint32_t magic = 0x53424453, version = 3, bytes = sizeof(Status), state{};
     int64_t sequence{};
     // Pose jobs seen, the hero's among them, and those the body changed.
     uint64_t jobs{}, heroJobs{}, solved{};
@@ -122,8 +122,16 @@ struct Status {
     // whether the body's size is from the T-pose calibration (Flags).
     float armScale = 1;
     uint32_t calibrated{};
+    // Version 3 (MilesVR 0.1.54, the players: the hero looks low poly): the
+    // first rigs the hero's pose jobs named, each with its joint count and
+    // the jobs that named it - a model's lower detail levels pose a smaller
+    // rig, so more than one here, or one with fewer joints, is the hero drawn
+    // at less than his full detail.
+    static constexpr unsigned censusRigs = 4;
+    uint64_t rigs[censusRigs]{};
+    uint32_t rigJoints[censusRigs]{}, rigJobs[censusRigs]{};
 };
-static_assert(sizeof(Status) == 144);
+static_assert(sizeof(Status) == 208);
 
 uint32_t start(uintptr_t base);
 // The local player became another actor (zero: none).

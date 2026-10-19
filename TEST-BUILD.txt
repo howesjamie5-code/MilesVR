@@ -1,5 +1,24 @@
-MilesVR 0.1.53 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.54 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.53: LOOKING INTO THE LOW-POLY PLAYER MODEL
+--------------------------------------------------
+Players say Miles looks low poly. Your game is already at its highest
+Level of Detail, and the mod shows the game's own Miles model, so this
+build records what is needed to find the cause:
+- the session report lists every skeleton the game poses Miles with,
+  its joint count and how often (a lower-detail model uses a smaller
+  skeleton);
+- the eye pictures in reports\ now include full-resolution crops round
+  each hand in view (before: only while a hand held a game web), so the
+  model's detail can be seen as the headset shows it.
+Nothing you see or do in the game changed.
+
+What to try:
+1. Play a few minutes in your usual suit: look at your hands and arms,
+   swing, fight.
+2. If you can, switch to two other suits (pause > suits) and do the same.
+3. Close the game. Tell me which suits you used.
 
 What changed since 0.1.52: THE VENOM TARGET ICON
 --------------------------------------------------
