@@ -156,6 +156,9 @@ uint64_t resolve(uintptr_t base, uint32_t handle);
 uint64_t botMover(uintptr_t base, const Candidate&);
 // Position of the candidate's actor (its transform's translation).
 bool position(const Candidate&, Vec3& out);
+// The way the candidate's actor faces: its transform's third row, the axis
+// the hero's own heading is read from (native_body).
+bool forward(const Candidate&, Vec3& out);
 // The candidate's hit points: false, and `out` left as it was, for an actor
 // without a health component or with one that cannot be read.
 bool health(const Candidate&, float& out);

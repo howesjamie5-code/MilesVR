@@ -35,6 +35,7 @@
 #include "spidy/hand_pose.hpp"
 #include "spidy/impact_sound.hpp"
 #include "spidy/web_strike.hpp"
+#include "spidy/stealth.hpp"
 #include "spidy/spider_sense.hpp"
 #include "spidy/prompt_buttons.hpp"
 #include "spidy/xr_layers.hpp"
@@ -783,6 +784,35 @@ int main() {
             tail = std::max(tail, sample(i));
         check(loudest > 8000 && loudest < 17000, "loud, but at half the level (0.1.58's was far too loud)");
         check(tail < loudest / 30, "its end faded out, not cut off");
+    });
+    test("stealth: behind an enemy within reach, and a grab on his back then a yank toward the head", [] {
+        using namespace spidy::stealth;
+        // He faces +z: the player at -z is behind him, at +z in front, at the side neither.
+        check(behind({0,0,0},{0,0,1},{0,0,-1})&&!behind({0,0,0},{0,0,1},{0,0,1})&&!behind({0,0,0},{0,0,1},{1,0,0}),
+              "behind him, not in front or beside");
+        const float dt=1.f/90;
+        Takedown t;
+        Vec3 hand{0,-.3f,-.5f};
+        auto o=t.update(dt,true,0,hand);
+        check(!o.hold&&!o.fire,"nothing before the grip");
+        o=t.update(dt,true,1,hand);
+        check(o.hold&&!o.fire,"the grip on his back holds the hand");
+        // Pulled toward the head at 2 m/s.
+        bool fired=false;
+        for(int k=0;k<20;++k){hand=hand*(1-2*dt/length(hand));o=t.update(dt,true,1,hand);fired|=o.fire;}
+        check(fired&&t.fires()==1,"the yank fired once");
+        o=t.update(dt,true,0,hand);
+        check(!o.hold,"let go: the hand is the swing's again");
+        // The grip down away from his back: no hold, no takedown.
+        Takedown away;
+        away.update(dt,false,0,{0,0,-.5f});
+        check(!away.update(dt,false,1,{0,0,-.5f}).hold,"a grip off his back held the hand");
+        // A hand drawn back slowly fires nothing.
+        Takedown slow;Vec3 h{0,0,-.6f};
+        slow.update(dt,true,0,h);slow.update(dt,true,1,h);
+        bool any=false;
+        for(int k=0;k<30;++k){h=h*(1-.3f*dt/length(h));any|=slow.update(dt,true,1,h).fire;}
+        check(!any,"a slow draw fired a takedown");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;

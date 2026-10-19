@@ -341,6 +341,15 @@ struct VenomTargetView {
     float seconds{};
 };
 void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, Vec3 viewer, float pixelAngle);
+// A stealth takedown is on (stealth.hpp, MilesVR 0.1.66): over the enemy's
+// head, facing the viewer, a pale blue ring with a chevron pointing down at
+// him, breathing gently; a readable size at a distance. `point`: over his
+// head; `seconds` any running clock.
+struct TakedownView {
+    Vec3 point{};
+    float seconds{};
+};
+void appendTakedownMark(std::vector<Vertex>& out, const TakedownView& mark, Vec3 viewer, float pixelAngle);
 // Spider-Sense (spider_sense.hpp): the warning of an attack about to land,
 // printed over the attacker's head, facing the viewer. The comic's lines:
 // five jagged strokes fanned up from his head, in what the warning asks for

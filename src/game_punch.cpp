@@ -8,6 +8,7 @@
 #include "spidy/game_time.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/venom_punch.hpp"
+#include "spidy/stealth.hpp"
 #include "spidy/spider_sense.hpp"
 #include <algorithm>
 #include <atomic>
@@ -97,6 +98,8 @@ Venom venomOut;
 // The venom smash: the drop to the ground, then the blast. And the Mega
 // Venom Blast's double punch.
 venom_punch::SmashDrop smash;
+// Seconds since a blow of the player's landed: no stealth takedown in a fight.
+float sinceBlow = 1e9f;
 // The Mega Venom Blast's requests (Venom::megaRequest), and the one answered.
 std::atomic<uint32_t> megaRequest{};
 uint32_t megaAnswered{};
@@ -534,6 +537,7 @@ void blast(Vec3 centre, Blast kind = Blast::Smash) {
 }
 // One blow, a fist's or a strike's, into the flow and to the game.
 void land(PunchEvent e, bool byStrike) {
+    sinceBlow = 0;
     uint64_t machine{};
     for (const auto& n : nearby)
         if (n.record == e.target)
@@ -814,6 +818,41 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // The attacks the game has warned the player of, before any blow of this
     // sample lands: a blow during a warning counters it.
     readSense(chest);
+    // Stealth takedowns (stealth.hpp): the nearest enemy the player stands
+    // behind, within reach, out of a fight, and the hands on his back.
+    sinceBlow = std::min(sinceBlow + seconds, 1e9f);
+    {
+        uint64_t target{};
+        Vec3 point{};
+        uint32_t onBack{};
+        float best = 1e9f;
+        if (sinceBlow >= stealth::calmSeconds && strike.phase() == WebStrike::Phase::Idle)
+            for (const auto& b : bots) {
+                Vec3 feet{}, facing{};
+                if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
+                    game_targets::held(base, b) || !game_targets::position(b, feet) ||
+                    !game_targets::forward(b, facing))
+                    continue;
+                const Vec3 d = feet - player.feet;
+                const float across = std::hypot(d.x, d.z);
+                if (across > stealth::reach || std::fabs(d.y) > stealth::rise || across >= best ||
+                    !stealth::behind(feet, facing, player.feet) || !game_targets::live(base, b))
+                    continue;
+                best = across;
+                target = b.record;
+                point = feet + Vec3{0, b.size.height(botHeight) + .35f, 0};
+                const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
+                onBack = 0;
+                for (int i = 0; i < 2; ++i)
+                    if (hands[i].tracked && length(hands[i].fist - middle) < stealth::onBack)
+                        onBack |= 1u << i;
+            }
+        AcquireSRWLockExclusive(&output);
+        venomOut.takedownTarget = target;
+        venomOut.takedownPoint = point;
+        venomOut.takedownHands = onBack;
+        ReleaseSRWLockExclusive(&output);
+    }
     // The enemy the next punch goes to: the one a blow locked the player
     // onto, else the one he looks at. A web that holds an enemy makes him
     // the one. And of those his blows landed on, the ones knocked out.

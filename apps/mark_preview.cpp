@@ -189,6 +189,18 @@ int main(int argc, char** argv) {
                      {"VENOM BURST 0.2 S", venomBurst(.2f)},
                      {"VENOM BURST 0.35 S", venomBurst(.35f)},
                      {"VENOM BURST 0.45 S", venomBurst(.45f)}});
+        // The stealth takedown's mark over his head.
+        {
+            const Vec3 head = p + Vec3{0, .95f, 0};
+            const auto mark = [&](float seconds) {
+                std::vector<Vertex> v;
+                appendTakedownMark(v, {head, seconds}, viewer, pixelAngle);
+                return v;
+            };
+            const float mu = camera.cx + camera.f * head.x / -head.z, mv = camera.cy - camera.f * head.y / -head.z;
+            ok &= sheet(name + "takedown.bmp", scene.backdrop, camera, mu, mv, static_cast<int>((i ? 200 : 120) * scale),
+                        3, {{"TAKEDOWN", mark(1)}, {"TAKEDOWN BREATHING", mark(1.4f)}, {"TAKEDOWN LATER", mark(1.8f)}});
+        }
         // The smash's and the Mega's, on the ground at his feet as the player sees them from 4 m.
         {
             const Vec3 feet = p + Vec3{0, -1.2f, 0};

@@ -1,5 +1,26 @@
-MilesVR 0.1.65 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.66 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.65: STEALTH TAKEDOWNS
+--------------------------------------------------
+- Sneak up behind an enemy (out of a fight, no blow of yours for 5 s).
+  Within about 1.8 m behind him, a pale blue ring with an arrow shows over
+  his head and the controllers buzz lightly.
+- Put a hand on his back or shoulder, squeeze its GRIP, then YANK toward
+  you: MilesVR presses the game's own takedown button (Y) straight to the
+  game - not through the step toward where you look, which may be what
+  spoiled ground takedowns before. The panel says "Takedown".
+- While your hand holds him its grip shoots no web, so the web grab does
+  not catch and fling him instead.
+- Perch takedowns: press Y from above, as before (they already worked).
+The game still decides: an enemy who has seen you gets no takedown. The
+mod cannot tell whether he has, so the mark only says you are behind him.
+
+What to try:
+1. Sneak behind an unaware thug: does the blue mark show? Grab and yank:
+   the takedown?
+2. If the mark shows when you are in front of him, tell me (the way he
+   faces may be read the wrong way round).
 
 What changed since 0.1.64: WALL STEPS TURNED OFF
 --------------------------------------------------

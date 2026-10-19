@@ -1569,7 +1569,10 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"An arrow into the ring", "A called blow: swing from the side the arrow comes from. It hits harder"},
           {"Blue Spider-Sense lines", "Throw a fist at him: the counter breaks his attack"},
           {"Red / yellow lines", "Dodge (B) / jump (A)"},
-          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"}}},
+          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"},
+          {"Behind an enemy: grab his back, yank", "Stealth takedown (the game's own). A blue mark shows who you can "
+                                                   "take down", "Takedown"},
+          {"From a perch above him: Y", "Perch takedown (the game's own)"}}},
         {"PHONE",
          {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
                                                     "keep squeezing and bring it up in front of you",

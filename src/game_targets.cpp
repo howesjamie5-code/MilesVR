@@ -304,6 +304,13 @@ bool game_targets::position(const Candidate& c, Vec3& out) {
     out = {m[12], m[13], m[14]};
     return finite(out) && length(out) < 1e6f;
 }
+bool game_targets::forward(const Candidate& c, Vec3& out) {
+    float m[16]{};
+    if (!read(pointer(c.record), m, sizeof(m)))
+        return false;
+    out = {m[8], m[9], m[10]};
+    return finite(out) && length(out) > .5f && length(out) < 2;
+}
 bool game_targets::health(const Candidate& c, float& out) {
     float points{};
     if (!c.health || !read(c.health + 0x88, &points, sizeof(points)) || !std::isfinite(points))
