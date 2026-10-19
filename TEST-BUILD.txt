@@ -1,5 +1,11 @@
-MilesVR 0.1.39 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.40 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.39: VR STARTS WITH VENOM BUTTON: TRIGGER
+--------------------------------------------------
+0.1.39 would not start VR with Venom button set to Trigger ("Spidy VR
+unavailable: Game XR start: 1001"): the game module refused the new
+setting. Fixed.
 
 What changed since 0.1.38: VENOM BUTTON - GRIP OR TRIGGER
 --------------------------------------------------
