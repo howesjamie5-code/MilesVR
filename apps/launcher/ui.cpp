@@ -1557,7 +1557,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"Venom Punch", "Charge, then punch the marked thug within 2 m: the charged fist lands it. Uses one bar"},
         {"Venom Dash", "Charge, then punch out at the marked thug 2 to 15 m away: you shoot straight to him and the "
                        "hit as you arrive is a venom blow. Uses one bar"},
-        {"Venom Jump", "Standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "
+        {"Venom Jump", "In a fight, standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "
                        "jump up with them and hang there a moment to keep hitting them. Uses one bar"},
         {"Venom Smash", "Charge, then punch down. Standing, it goes off where you are; in the air (not on a web) you "
                         "drop and it goes off as you land. Every enemy within 5 m is hit and thrown. Uses one bar"},

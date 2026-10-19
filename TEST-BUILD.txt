@@ -1,5 +1,15 @@
-MilesVR 0.1.33 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.34 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.33: THE VENOM JUMP ONLY IN A FIGHT
+--------------------------------------------------
+Punching up now makes the Venom Jump only in a fight (an enemy near you in
+the last 3 seconds). Out of a fight a charged punch is the game's own
+Venom Punch for story moments, as before, and no longer jumps as well.
+
+What to try:
+1. Out of a fight, charge and punch up: no jump, no bar spent.
+2. In a fight, charge and punch up: the Venom Jump.
 
 What changed since 0.1.32: VENOM JUMP AND VENOM DASH
 --------------------------------------------------

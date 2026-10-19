@@ -100,6 +100,9 @@ venom_punch::SmashDrop smash;
 venom_punch::Spread spreadArms;
 // The Venom Dash in flight (the strike's): its blow is a venom blow.
 bool dashing{};
+// Seconds since an enemy was in the fight (the headset's calm, the same way):
+// the Venom Jump goes off only in a fight.
+float sinceFight = 1e9f;
 // A venom blow: a finisher's damage at least, times this, and his flight.
 constexpr float venomDamage = 3, venomLeast = 28, venomSpeed = 18, venomLift = 5;
 // DamageType kVenom and the venom status: Miles Morales's own, after
@@ -243,6 +246,7 @@ void publishStrikes(uint32_t status) {
 void resetFight() {
     smash.cancel();
     dashing = false;
+    sinceFight = 1e9f;
     punches.reset();
     turnSeen = false;
     strike.cancel();
@@ -826,6 +830,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     for (const uint64_t held : player.holds)
         lock.take(held);
     lock.update(seconds, head, in.look, enemies);
+    sinceFight = !enemies.empty() || lock.target() ? 0.f : sinceFight + seconds;
     knockouts(seconds);
     events.clear();
     punches.update(seconds, hands, inReach, events);
@@ -877,9 +882,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         }
     }
     // The Venom Jump: the venom fist, charged, punched straight up while he
-    // stands (venom_punch.hpp). The enemies around go up, and he with them:
-    // the strike's rise (the game's own jump first), then a hang up there.
-    if (venomArmed() && !smash.active() && player.grounded && hands[side].tracked && !hands[side].busy &&
+    // stands, in a fight (venom_punch.hpp; the user, October 20: "make the
+    // jump only work in a fight" - out of one the punch is the game's own
+    // venom punch). The enemies around go up, and he with them: the
+    // strike's rise (the game's own jump first), then a hang up there.
+    if (venomArmed() && !smash.active() && player.grounded && sinceFight < venom_punch::fightCalmSeconds && hands[side].tracked && !hands[side].busy &&
         !player.swinging && strike.phase() != WebStrike::Phase::Flying &&
         venom_punch::jumping(punches.velocity(side))) {
         venomUsed = venomCharge.load();
