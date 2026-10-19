@@ -1525,7 +1525,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the "
                              "two; while you swing too. No point? Keep holding (time slows as the game "
                              "aims), look at a point and let go to zip there"},
-          {"Hand to your temple, trigger", "Scan your surroundings: the game's R3"},
+          {"Right hand to your temple, trigger", "Scan your surroundings: the game's R3"},
+          {"Left hand to your temple, trigger", "Camouflage: Miles turns invisible (the game's D-pad up)"},
           {"Menu button", "Pause; there SWITCH TO GAME SCREEN plays the game as it is, on a 3D screen, and VR "
                           "settings are in Settings > MILES VR"},
           {"Both sticks held in", "Pause too: under SteamVR a Quest's menu button opens SteamVR's dashboard"},
@@ -1565,6 +1566,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                              "within 10 m is hit hard and thrown far. Uses all three bars"},
         {"Story Venom", "Out of a fight, charge and punch: the game's own Venom Punch (its LB + X) for as long as you "
                         "hold the grip, for story moments such as charging a generator"},
+        {"Camouflage", "Put your LEFT hand to the side of your head and pull its trigger: Miles turns invisible "
+                       "until the game's camouflage meter runs out. Do it again to come out of it early"},
         {"Venom Release", "With a bar full, click the right stick: the meter empties at once, whatever you are doing, "
                           "and the right hand's webs are back"},
     };

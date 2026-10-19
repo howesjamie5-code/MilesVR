@@ -5292,6 +5292,22 @@ int main() {
         game_pad::Walk walk;walk.scan=true;
         check(game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,walk).buttons==game_pad::rightThumb,
               "the scan is not the game's R3");
+        // MilesVR: the right hand's press is the scan, the left's Camouflage (the game's D-pad up).
+        TemplePress rightOnly{2u},leftOnly{1u};
+        grips[1].position={.2f,1.72f,.02f};triggers[1]=0;
+        rightOnly.update(dt,true,head,grips,both,triggers);leftOnly.update(dt,true,head,grips,both,triggers);
+        triggers[1]=1;
+        check(rightOnly.update(dt,true,head,grips,both,triggers)&&rightOnly.hands()==2,"the right hand did not scan");
+        check(!leftOnly.update(dt,true,head,grips,both,triggers)&&!leftOnly.hands(),"the right hand camouflaged");
+        TemplePress camo{1u},noScan{2u};
+        float lefts[2]{0,0};
+        camo.update(dt,true,looking,hands,both,lefts);noScan.update(dt,true,looking,hands,both,lefts);
+        lefts[0]=1;
+        check(camo.update(dt,true,looking,hands,both,lefts)&&camo.hands()==1&&camo.scans()==1,"the left hand did not camouflage");
+        check(!noScan.update(dt,true,looking,hands,both,lefts),"the left hand scanned");
+        game_pad::Walk hidden;hidden.camo=true;
+        check(game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,hidden).buttons==game_pad::dpadUp,
+              "Camouflage is not the game's D-pad up");
     });
     test("called blows: the flow calls its next blow, and the call stands until a fist answers it", [] {
         Cues cues;

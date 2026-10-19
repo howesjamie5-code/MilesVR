@@ -99,7 +99,8 @@ enum class Mapping {
 // on in it turns into (ZipPress). look and lookUp: the virtual controller's
 // own right stick, its X and Y, which turn the game's camera (CameraLook,
 // CameraPitch). scan: the game's R3, held: its scan of the surroundings
-// (TemplePress).
+// (TemplePress). camo: the game's D-pad up, Miles's Camouflage (MilesVR
+// 0.1.35: the left hand's TemplePress, the right's being the scan).
 struct Walk {
     float right{}, forward{};
     bool jump{}, interact{}, dodge{}, pull{}, heal{}, zip{}, aim{};
@@ -110,7 +111,7 @@ struct Walk {
     // either trigger and a held A did nothing; RT + A left it in 0.09 s).
     bool parkour{};
     float look{}, lookUp{};
-    bool scan{};
+    bool scan{}, camo{};
     // What the game is asking for now, sent in place of the interact's Y
     // (ContextPress). {}: nothing is, and interact is the game's Y as before.
     prompt_buttons::Demand demand{};
@@ -233,10 +234,12 @@ class ChargeJump {
 // touches), as the trigger goes down; it may move away while it holds. That
 // trigger is the scan's alone meanwhile: no web ball, no reel (hands()).
 // Outside VR play nothing holds, and a trigger held through that must be let
-// go first.
+// go first. `allowed`: a bit per hand that may press (MilesVR: the right
+// hand's is the scan, the left's Miles's Camouflage).
 class TemplePress {
   public:
     static constexpr float side = .15f, reach = .19f, pressed = .6f, released = .3f, minSeconds = .15f;
+    explicit TemplePress(uint32_t allowed = 3) : allowed_(allowed) {}
     // seconds: since the previous update. play: the controllers play VR.
     // head and grips: the headset's and each hand's grip pose, in one space;
     // tracked and triggers: each hand's. Returns the game's R3: down or not.
@@ -250,7 +253,7 @@ class TemplePress {
             const bool press = down && !down_[i];
             down_[i] = down;
             const uint32_t bit = 1u << i;
-            if (!down || !play) {
+            if (!down || !play || !(allowed_ & bit)) {
                 hands_ &= ~bit;
                 continue;
             }
@@ -287,7 +290,7 @@ class TemplePress {
 
   private:
     bool down_[2]{}, held_{};
-    uint32_t hands_{}, scans_{};
+    uint32_t allowed_, hands_{}, scans_{};
     float left_{};
 };
 // The right thumbstick pushed straight down or up, as Walk::heal and
@@ -1138,6 +1141,8 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
             s.rightTrigger = 255;
         if (walk.scan)
             s.buttons |= rightThumb;
+        if (walk.camo)
+            s.buttons |= dpadUp;
         s.thumbLX = stick(walk.right);
         s.thumbLY = stick(walk.forward);
         s.thumbRX = stick(walk.look);

@@ -1,5 +1,19 @@
-MilesVR 0.1.34 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.35 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.34: CAMOUFLAGE
+--------------------------------------------------
+Put your LEFT controller to the side of your head (by your temple) and
+pull its trigger: that is the game's Camouflage (its D-pad up). The left
+controller gives a short buzz and the panel says "Camouflage".
+The RIGHT controller at the temple + trigger is still the scan. Before
+this build either hand scanned; now the left one is camouflage only.
+
+What to try:
+1. Left hand to your temple, trigger: does Miles go invisible?
+2. Do it again while invisible: does it end early?
+3. Right hand to your temple, trigger: still the scan?
+The session report has camouflage.presses.
 
 What changed since 0.1.33: THE VENOM JUMP ONLY IN A FIGHT
 --------------------------------------------------

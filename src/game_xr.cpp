@@ -136,7 +136,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 46, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 47, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -386,8 +386,10 @@ struct XrData {
     // Version 46: Venom Jumps gone off and the enemies the latest threw up;
     // Venom Dashes that landed, and those that ended without their blow.
     uint32_t venomJumps{}, venomJumpHits{}, venomDashes{}, venomDashesMissed{};
+    // Version 47: Camouflage pressed (the left trigger pulled at the left temple).
+    uint32_t camos{}, camoSpare{};
 };
-static_assert(sizeof(XrData) == 1344);
+static_assert(sizeof(XrData) == 1352);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -920,7 +922,9 @@ DWORD WINAPI run(void*) {
         // its hand at the temple is the game's R3, its scan. leapOut: the
         // leap let go of, for the swing's next commands.
         game_pad::ChargeJump chargeJump;
-        game_pad::TemplePress templePress;
+        // The right hand at the temple scans; the left's is Miles's Camouflage.
+        game_pad::TemplePress templePress{2u}, camoPress{1u};
+        uint32_t camosBefore{};
         uint32_t chargesBefore{}, leapsBefore{}, scansBefore{};
         float leapOut{};
         // The game's camera follows the head's pitch too: it offers a thing
@@ -1474,6 +1478,15 @@ DWORD WINAPI run(void*) {
                             scansBefore = templePress.scans();
                             runtime.haptic(0, .3f);
                             runtime.haptic(1, .3f);
+                        }
+                        camoPress.update(frame.seconds, gesturesPlay, frame.head, grips, gripsTracked, triggers);
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (camoPress.hands() & (1u << i))
+                                controller.hands[i].trigger = 0;
+                        if (camoPress.scans() != camosBefore) {
+                            camosBefore = camoPress.scans();
+                            runtime.haptic(0, .6f, .25f);
+                            message(3, 0, "Camouflage");
                         }
                     }
                     // A grip squeezed at a back pocket draws the phone, and shoots
@@ -2952,6 +2965,7 @@ DWORD WINAPI run(void*) {
                             walk.parkour = onCrawl && (walk.jump || webbed);
                         }
                         walk.scan = templePress.held() && steering;
+                        walk.camo = camoPress.held() && steering;
                         // A perfect dodge: the game slows its own time within a
                         // moment of a B that went down with it at full speed.
                         if (walk.dodge && !dodging)
@@ -3110,6 +3124,7 @@ DWORD WINAPI run(void*) {
                                      (values.standOnWalls ? 128u : 0u) | (values.venomLeftHand ? 256u : 0u);
                                      (values.standOnWalls ? 128u : 0u) | (values.arcadeWebs ? 512u : 0u);
                         d.scans = templePress.scans();
+                        d.camos = camoPress.scans();
                         d.chargeJumps = chargeJump.charges();
                         const auto prompts = game_prompts::live();
                         d.promptInvokes = prompts.invokes;
@@ -4071,7 +4086,7 @@ DWORD WINAPI run(void*) {
                                 // 255 characters, all the message holds.
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts, X: game "
                                   "menu (hold: gadget wheel), menu or both sticks held: pause, left stick "
-                                  "click: slow time, trigger at temple: scan; right stick click: LB + RB "
+                                  "click: slow time, trigger at temple: scan (left: camo); right stick: LB+RB "
                                   "(venom full: let go), down: heal, up: zip");
                 }
             }
