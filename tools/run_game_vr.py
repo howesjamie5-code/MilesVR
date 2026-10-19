@@ -661,10 +661,10 @@ TRACKING_GAP_REASONS = ((1, 'not_playing'), (2, 'unfocused'), (4, 'no_head'), (8
 
 def snapshot(game, address):
     for _ in range(8):
-        raw = game.read(address, 1296)
-        if len(raw) != 1296:
+        raw = game.read(address, 1304)
+        if len(raw) != 1304:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53585244, 42, 1296):
+        if struct.unpack_from('<3I', raw) != (0x53585244, 43, 1304):
             raise RuntimeError('Game XR protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -800,7 +800,8 @@ def snapshot(game, address):
         v_flags, v_fills, v_charges, v_blows, v_spent = struct.unpack_from('<5I', raw, 1164)
         v_candidates, v_other, v_writable = struct.unpack_from('<IfI', raw, 1184)
         v_holder, v_holder_offset, v_route, v_dumps = struct.unpack_from('<4I', raw, 1196)
-        v_smashes, v_smash_hits, v_smash_off = struct.unpack_from('<3I', raw, 1212)
+        v_smashes, v_smash_hits, v_smash_off, v_megas = struct.unpack_from('<4I', raw, 1212)
+        v_mega_hits = struct.unpack_from('<I', raw, 1292)[0]
         # The meter's holder's 16 words around it (the meter is the eighth), as floats and as integers.
         v_around = struct.unpack_from('<16I', raw, 1228)
         v_around_f = struct.unpack_from('<16f', raw, 1228)
@@ -812,7 +813,7 @@ def snapshot(game, address):
                                  holder_offset=hex(v_holder_offset),
                                  route=('none', 'melee_neighbour', 'holder')[v_route] if v_route < 3 else v_route,
                                  let_go=v_dumps, smashes=v_smashes, smash_hits=v_smash_hits,
-                                 smashes_called_off=v_smash_off,
+                                 smashes_called_off=v_smash_off, megas=v_megas, mega_hits=v_mega_hits,
                                  around=[dict(offset=hex(0x10c - 0x1c + 4*i), word=hex(w),
                                               float=round(f, 3) if math.isfinite(f) and abs(f) < 1e7 else None)
                                          for i, (w, f) in enumerate(zip(v_around, v_around_f))]))

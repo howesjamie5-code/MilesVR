@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 42, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 43, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -362,11 +362,14 @@ struct XrData {
     uint32_t venomDumps{};
     // Version 41: venom smashes gone off, the enemies the latest hit, and the
     // drops called off with no ground under him.
-    uint32_t venomSmashes{}, venomSmashHits{}, venomSmashesCalledOff{}, venomSpare{};
+    uint32_t venomSmashes{}, venomSmashHits{}, venomSmashesCalledOff{};
+    // Version 43: Mega Venom Blasts gone off (the enemies the latest hit at the end).
+    uint32_t venomMegas{};
     // Version 42: the meter's holder's 16 words around it (game_venom::Meter::around).
     uint32_t venomAround[16]{};
+    uint32_t venomMegaHits{}, venomSpare{};
 };
-static_assert(sizeof(XrData) == 1296);
+static_assert(sizeof(XrData) == 1304);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -750,7 +753,8 @@ DWORD WINAPI run(void*) {
         game_venom::Meter venomMeter;
         venom_punch::Charge venomCharge;
         uint32_t venomCharges{};
-        uint64_t venomBlowsBefore{}, venomSpentBefore{}, venomSmashesBefore{};
+        uint64_t venomBlowsBefore{}, venomSpentBefore{}, venomSmashesBefore{}, venomMegasBefore{};
+        uint32_t venomMegaHits{};
         uint32_t venomSmashHits{}, venomSmashesCalledOff{};
         float venomGlow{};
         bool venomFullBefore{};
@@ -2406,7 +2410,12 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(venomSide, 1.f, .15f);
                             runtime.haptic(1 - venomSide, .3f, .05f);
                             char text[96];
-                            sprintf_s(text, "Venom charged - punch the marked enemy with your %s fist", venomName);
+                            if (venomMeter.value >= 3 * venom_punch::fullMeter - .01f)
+                                sprintf_s(text, "Venom charged, all three bars - stretch both arms out for the "
+                                                "Mega Venom Blast");
+                            else
+                                sprintf_s(text, "Venom charged - punch the marked enemy with your %s fist",
+                                          venomName);
                             message(3, 0, text);
                         } else if (venom.glow > 0 && !venom.armed) {
                             runtime.haptic(venomSide, .1f + .35f * venom.glow);
@@ -2455,6 +2464,27 @@ DWORD WINAPI run(void*) {
                                     message(3, 0, text);
                                 }
                                 venomSmashesBefore = exchange.smashes;
+                                // The Mega Venom Blast went off: the biggest burst, its ring
+                                // out to the blast's edge, a long rumble in both hands.
+                                venomMegasBefore = std::min(venomMegasBefore, exchange.megas);
+                                if (exchange.megas > venomMegasBefore) {
+                                    venomCharge.spent();
+                                    venomGlow = 0;
+                                    runtime.haptic(0, 1.f, .8f);
+                                    runtime.haptic(1, 1.f, .8f);
+                                    if (finite(exchange.megaPoint)) {
+                                        auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
+                                        burst.view = {exchange.megaPoint + Vec3{0, 1.f, 0}, 0, 8.f,
+                                                      venom_punch::megaRadius};
+                                        burst.since = frame.predictedDisplayTime;
+                                    }
+                                    char text[96];
+                                    sprintf_s(text, "MEGA VENOM BLAST! %u %s", exchange.megaHits,
+                                              exchange.megaHits == 1 ? "enemy hit" : "enemies hit");
+                                    message(3, 0, text);
+                                }
+                                venomMegasBefore = exchange.megas;
+                                venomMegaHits = exchange.megaHits;
                                 venomSmashHits = exchange.smashHits;
                                 venomSmashesCalledOff = exchange.smashesCalledOff;
                                 venomBlowsBefore = exchange.blows;
@@ -2733,6 +2763,8 @@ DWORD WINAPI run(void*) {
                         d.venomSmashes = static_cast<uint32_t>(venomSmashesBefore);
                         d.venomSmashHits = venomSmashHits;
                         d.venomSmashesCalledOff = venomSmashesCalledOff;
+                        d.venomMegas = static_cast<uint32_t>(venomMegasBefore);
+                        d.venomMegaHits = venomMegaHits;
                         std::memcpy(d.venomAround, venomMeter.around, sizeof(d.venomAround));
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];

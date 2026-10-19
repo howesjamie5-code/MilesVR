@@ -603,6 +603,10 @@ int main() {
         const float odd[6] = {70, -5, 1, 2, 3, 4};
         b = bars(odd);
         check(b.count == 1 && b.most[0] == 100 && spidy::venom_punch::total(b) == 70, "no believable most: one bar of 100");
+        check(megaReady(holding(bars(three), 300)) && !megaReady(holding(bars(three), 299)) &&
+                  !megaReady(holding(bars(one), 100)),
+              "the mega blast: three bars, all full");
+        check(spidy::venom_punch::total(paidMega(holding(bars(three), 300))) == 0, "and it spends all three");
         Charge c;
         auto o = c.update(.1f, true, false, 1);
         check(!o.armed && o.glow == 0, "below full the grip charges nothing");
@@ -653,6 +657,18 @@ int main() {
         const Vec3 f = blastFlight(c, {12, 1, 10});
         check(f.x > 11 && std::fabs(f.z) < 1e-4f && f.y == smashLift, "thrown away from the middle, and up");
         check(length(blastFlight(c, c)) > 1, "one on top of it flies too");
+        check(spread({-.75f, -.1f, 0}, {.75f, 0, -.1f}), "arms out wide, a T");
+        check(!spread({-.3f, -.2f, -.3f}, {.3f, -.2f, -.3f}), "fists in front: no");
+        check(!spread({-.75f, -.9f, 0}, {.75f, -.9f, 0}), "arms hanging down: no");
+        Spread wide;
+        check(!wide.update(.05f, true), "not held long enough yet");
+        check(wide.update(.06f, true), "held spreadSeconds: it fires");
+        check(!wide.update(.1f, true), "once, while they stay out");
+        wide.update(.01f, false);
+        check(!wide.update(.05f, true) && wide.update(.06f, true), "in and out again: again");
+        check(inMega(c, {19.5f, 0, 10}) && !inMega(c, {21, 0, 10}), "10 m across");
+        check(megaShare(c, c) == megaDamage && megaShare(c, c) > blastShare(c, c), "twice the smash at the middle");
+        check(megaFlight(c, {12, 0, 10}).x > blastFlight(c, {12, 0, 10}).x, "thrown farther");
         SmashDrop d;
         d.start({1, 0, 2}, true);
         auto s = d.step(.01f, {5, 5, 5}, true);

@@ -104,7 +104,7 @@ static_assert(sizeof(Strikes) == 328);
 // to the game as a venom blow - DamageType kVenom with the venom status, the
 // blow of a finisher and his flight - and the meter is emptied.
 struct Venom {
-    uint32_t magic = 0x5350564e, version = 3, bytes = sizeof(Venom);
+    uint32_t magic = 0x5350564e, version = 4, bytes = sizeof(Venom);
     // In: the charge (a new number each time the fist is charged; 0: none).
     // A charge lands one blow.
     uint32_t charge{};
@@ -129,9 +129,15 @@ struct Venom {
     uint64_t smashes{};
     uint32_t smashHits{};
     Vec3 smashPoint{};
-    uint32_t smashesCalledOff{}, smashSpare{};
+    uint32_t smashesCalledOff{};
+    // Out (version 4): Mega Venom Blasts gone off, the enemies the latest
+    // hit, and where.
+    uint32_t megaHits{};
+    uint64_t megas{};
+    Vec3 megaPoint{};
+    uint32_t megaSpare{};
 };
-static_assert(sizeof(Venom) == 112);
+static_assert(sizeof(Venom) == 136);
 // Starts the bot watch and the main-thread damage requests.
 uint32_t start(uintptr_t base);
 uint32_t stop();

@@ -1,5 +1,23 @@
-MilesVR 0.1.22 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.23 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.22: THE MEGA VENOM BLAST
+--------------------------------------------------
+Your design: with all three venom bars full, hold the right grip to charge
+(as for the venom punch), then stretch both arms out wide to the sides, like
+a T. The message tells you when the charge is a mega one.
+Every enemy within 10 m takes twice a venom punch's damage at the middle
+(less at the edge), is stunned and thrown far up and away. The biggest
+venom burst, a ring out to 10 m, a long rumble in both hands. It uses all
+three bars.
+With fewer than three full bars the arms-out pose does nothing.
+
+What to try, on the 100% save:
+1. Fill all three bars, charge, stretch both arms out: did it go off, how
+   many were hit, are all three bars empty?
+2. Does it go off by accident (arms wide while fighting or landing)?
+3. Venom punch and smash still work as before?
+4. Close the game and keep the reports folder.
 
 What changed since 0.1.21: ALL THREE VENOM BARS
 --------------------------------------------------

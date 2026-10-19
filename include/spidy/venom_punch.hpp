@@ -113,6 +113,15 @@ inline Bars paid(const Bars& b) {
     return holding(b, total(b) - b.most[0]);
 }
 
+// The Mega Venom Blast (0.1.23, the user: "this depletes 3 bars"): ready
+// when Miles has all three bars and all are full; it spends them all.
+inline bool megaReady(const Bars& b) {
+    return b.count >= mostBars && total(b) >= capacity(b) - .01f;
+}
+inline Bars paidMega(const Bars& b) {
+    return holding(b, 0);
+}
+
 // The meter after a venom move: one bar spent (the user, October 19: the
 // punch and the smash "should use only one bar"). Until Miles has more bars
 // that is the whole meter; one of fullMeter's worth comes off a meter above
@@ -212,6 +221,55 @@ inline Vec3 blastFlight(Vec3 centre, Vec3 feet) {
     const float across = length(away);
     away = across > .05f ? away / across : Vec3{1, 0, 0};
     return away * smashThrow + Vec3{0, smashLift, 0};
+}
+// The Mega Venom Blast: the venom fist charged and all three bars full, then
+// both arms stretched out wide (the user, October 19: "i charge with grip
+// then stretch both arms out to trigger it"). Out wide: the fists at least
+// spreadSpan apart across, each within spreadHeight of the head's height (a
+// T, not arms hanging down or held up), held spreadSeconds. A blast of
+// megaRadius and megaHeight, twice the smash's damage, thrown farther.
+constexpr float spreadSpan = 1.3f, spreadHeight = .6f, spreadSeconds = .1f, megaRadius = 10, megaHeight = 5,
+                megaDamage = 2, megaThrow = 16, megaLift = 9;
+// The arms out wide: each fist's place relative to the head, in the world's axes.
+inline bool spread(Vec3 left, Vec3 right) {
+    const Vec3 across = right - left;
+    return finite(left) && finite(right) && std::hypot(across.x, across.z) >= spreadSpan &&
+           std::fabs(left.y) <= spreadHeight && std::fabs(right.y) <= spreadHeight;
+}
+class Spread {
+  public:
+    // True once the arms have been out wide spreadSeconds; again only after
+    // they came in.
+    bool update(float seconds, bool wide) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        if (!wide) {
+            held_ = 0;
+            fired_ = false;
+            return false;
+        }
+        held_ += dt;
+        if (fired_ || held_ < spreadSeconds)
+            return false;
+        fired_ = true;
+        return true;
+    }
+
+  private:
+    float held_{};
+    bool fired_{};
+};
+inline bool inMega(Vec3 centre, Vec3 feet) {
+    const Vec3 d = feet - centre;
+    return std::hypot(d.x, d.z) <= megaRadius && std::fabs(d.y) <= megaHeight;
+}
+inline float megaShare(Vec3 centre, Vec3 feet) {
+    const Vec3 d = feet - centre;
+    const float across = std::clamp(std::hypot(d.x, d.z) / megaRadius, 0.f, 1.f);
+    return megaDamage * (1 - (1 - smashEdge) * across);
+}
+inline Vec3 megaFlight(Vec3 centre, Vec3 feet) {
+    const Vec3 f = blastFlight(centre, feet);
+    return Vec3{f.x, 0, f.z} * (megaThrow / smashThrow) + Vec3{0, megaLift, 0};
 }
 // The drop: from the air straight down at dropSpeed until he stands, the
 // smash then; one that finds no ground within dropSeconds is called off.

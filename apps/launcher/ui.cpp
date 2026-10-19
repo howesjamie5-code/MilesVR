@@ -1413,6 +1413,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Charged fist, punch down", "Venom smash. Standing, it goes off where you are; in the air (not on a web) "
                                        "you drop to the ground and it goes off as you land. Every enemy within 5 m "
                                        "is hit and thrown away. It uses one bar"},
+          {"All three bars full: charge, arms out wide", "Mega Venom Blast. Hold the grip to charge, then stretch "
+                                                         "both arms out to the sides: every enemy within 10 m is "
+                                                         "hit hard and thrown far. It uses all three bars"},
           {"Let go of the grip", "The charge stays for a moment and fades: punch before it does"},
           {"Click the right stick", "With the meter full: let the venom go. The meter empties at once, whatever you "
                                     "are doing, and the right hand's webs are back"},

@@ -92,8 +92,10 @@ std::atomic<uint32_t> venomCharge{}, venomHand{1};
 std::atomic<uint64_t> venomMeter{}, venomHolder{}, venomHolderClass{};
 uint32_t venomUsed{};
 Venom venomOut;
-// The venom smash: the drop to the ground, then the blast.
+// The venom smash: the drop to the ground, then the blast. And the Mega
+// Venom Blast's double punch.
 venom_punch::SmashDrop smash;
+venom_punch::Spread spreadArms;
 // A venom blow: a finisher's damage at least, times this, and his flight.
 constexpr float venomDamage = 3, venomLeast = 28, venomSpeed = 18, venomLift = 5;
 // DamageType kVenom and the venom status: Miles Morales's own, after
@@ -264,16 +266,19 @@ void knockouts(float seconds) {
     }
 }
 // The venom smash goes off at `centre`: a venom blow to every enemy within the blast, each thrown up
-// and away from it, and one bar of the meter spent.
-void blast(Vec3 centre) {
+// and away from it, and one bar of the meter spent. `mega`: the Mega Venom Blast's, bigger and harder,
+// all three bars spent.
+void blast(Vec3 centre, bool mega = false) {
     uint32_t hits{};
     for (const auto& b : bots) {
         Vec3 feet{};
         if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
-            !game_targets::position(b, feet) || !venom_punch::inBlast(centre, feet) || !game_targets::live(base, b))
+            !game_targets::position(b, feet) ||
+            !(mega ? venom_punch::inMega(centre, feet) : venom_punch::inBlast(centre, feet)) ||
+            !game_targets::live(base, b))
             continue;
         const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
-        const Vec3 flight = venom_punch::blastFlight(centre, feet);
+        const Vec3 flight = mega ? venom_punch::megaFlight(centre, feet) : venom_punch::blastFlight(centre, feet);
         Vec3 way{flight.x, 0, flight.z};
         way = length(way) > .1f ? normalized(way) : Vec3{1, 0, 0};
         native_bodies::Damage request;
@@ -282,7 +287,8 @@ void blast(Vec3 centre) {
         request.point = middle - way * b.size.width(botRadius);
         request.direction = way;
         request.normal = way * -1.f;
-        request.amount = venomLeast * venomDamage * venom_punch::blastShare(centre, feet);
+        request.amount = venomLeast * venomDamage *
+                         (mega ? venom_punch::megaShare(centre, feet) : venom_punch::blastShare(centre, feet));
         request.type = venomType;
         request.knockback = static_cast<int32_t>(Knockback::SuperFlyBack);
         request.knockbackAmount = flingAmount * 1.5f;
@@ -308,12 +314,24 @@ void blast(Vec3 centre) {
             struckLately.push_back(struck);
         ++hits;
     }
-    const bool paid = spendBar(venomMeter.load());
+    bool paid{};
+    if (mega) {
+        venom_punch::Bars b;
+        paid = readBars(venomMeter.load(), b) && writeBars(venomMeter.load(), venom_punch::paidMega(b));
+    } else {
+        paid = spendBar(venomMeter.load());
+    }
     tally.blows += hits;
     AcquireSRWLockExclusive(&output);
-    ++venomOut.smashes;
-    venomOut.smashHits = hits;
-    venomOut.smashPoint = centre;
+    if (mega) {
+        ++venomOut.megas;
+        venomOut.megaHits = hits;
+        venomOut.megaPoint = centre;
+    } else {
+        ++venomOut.smashes;
+        venomOut.smashHits = hits;
+        venomOut.smashPoint = centre;
+    }
     venomOut.spent += paid;
     ReleaseSRWLockExclusive(&output);
 }
@@ -587,10 +605,30 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         strike.spent(e.hand);
         land(e, false);
     }
+    // The Mega Venom Blast: the venom fist charged and all three bars full,
+    // then both arms stretched out wide (venom_punch.hpp). It goes off where
+    // he is and takes the charge and all three bars.
+    const int side = venomHand.load() ? 1 : 0;
+    {
+        const bool wide = hands[0].tracked && hands[1].tracked && !hands[0].busy && !hands[1].busy &&
+                          venom_punch::spread(hands[0].relative, hands[1].relative);
+        venom_punch::Bars bars;
+        if (spreadArms.update(seconds, wide) && venomArmed() && !smash.active() &&
+            strike.phase() != WebStrike::Phase::Flying && readBars(venomMeter.load(), bars) &&
+            venom_punch::megaReady(bars)) {
+            if (strike.phase() == WebStrike::Phase::Hanging)
+                strike.cancel();
+            venomUsed = venomCharge.load();
+            for (int i = 0; i < 2; ++i) {
+                punches.spend(i);
+                strike.spent(i);
+            }
+            blast(player.feet, true);
+        }
+    }
     // The venom smash: the venom fist, charged, punched down - standing, or
     // in the air on no web (venom_punch.hpp). It takes the charge, and the
     // punch opens no strike nor venom punch.
-    const int side = venomHand.load() ? 1 : 0;
     if (venomArmed() && !smash.active() && hands[side].tracked && !hands[side].busy && !player.swinging &&
         strike.phase() != WebStrike::Phase::Flying && venom_punch::smashing(punches.velocity(side))) {
         // Held up in the air after a blow: the drop has him from here.
