@@ -1400,6 +1400,20 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                                    "arrives and you hang there. Hit him"},
           {"Slow motion by itself", "Time slows for a moment at a finisher, a called blow, a thug who arrives in "
                                     "front of you in the air, and a perfect dodge"}}},
+        {"VENOM",
+         {{"Land blows", "Each blow fills the venom meter: a hit 10, a heavy blow, launch or slam 15, a finisher 20 "
+                         "(ten hits fill it)"},
+          {"Meter full", "Your right hand shoots no webs or web balls: its grip is your venom now. A web you hold "
+                         "as it fills stays until you let go"},
+          {"Hold the right grip", "Charge your right fist with venom: it glows and the controller buzzes (the "
+                                  "trigger, if Web button is set to it)"},
+          {"Punch the marked thug", "Venom punch: a charged right fist thrown at the ringed thug within 2 m lands "
+                                    "it; farther away, the web strike flies you in and lands it. It empties the "
+                                    "meter"},
+          {"Let go of the grip", "The charge stays for a moment and fades: punch before it does"},
+          {"Click the right stick", "With the meter full: let the venom go. The meter empties at once, whatever you "
+                                    "are doing, and the right hand's webs are back"},
+          {"Venom punch hand", "On the Play tab: Left puts all of this on the left hand and its stick"}}},
         {"MOVING",
          {{"Left stick", "Walk and run"},
           {"A", "Jump. Hold it on the ground to charge a leap and let go: the longer you hold, the higher; with "
@@ -1407,7 +1421,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"B", "Dodge, the way the left stick points: the game's B"},
           {"Y", "Interact with what you look at: the game's Y (backpacks, doors, prompts); web strike in a fight. "
                 "Hold it and you step up to the thing, until the game takes it"},
-          {"Click the right stick", "The game's LB + RB: pull a door or a grate where the game shows the two"},
+          {"Click the right stick", "The game's LB + RB: pull a door or a grate where the game shows the two "
+                                    "(with the venom meter full it lets the venom go: see VENOM)"},
           {"Right stick down", "Heal: the game's D-pad down. Push it right down and hold it a moment"},
           {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the two"},
           {"Hand to your temple, trigger", "Scan your surroundings: the game's R3"},
