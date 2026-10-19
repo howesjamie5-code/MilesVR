@@ -1,5 +1,26 @@
-MilesVR 0.1.25 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.26 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.25: THE MILES MORALES LAUNCHER
+--------------------------------------------------
+The launcher is redone in Miles's colours: black, Miles red and venom
+orange, with comic halftone dots and venom crackles in the header, a new
+mark (Miles's red spider on a black disc, the window icon too) and the
+title MILES VR. Text that meant this mod now says MilesVR; Spidy and its
+creator are still credited.
+Venom is orange everywhere:
+- Controls tab: a full-width VENOM POWERS card at the top, with the
+  meter's three bars. Each power is its name in orange, then what it does
+  and how: Venom Meter, Venom Hand, Venom Charge, Venom Punch, Venom Smash,
+  Mega Venom Blast, Story Venom, Venom Release.
+- Play tab: the Venom punch hand option glows orange.
+- About tab: a line on Miles's venom.
+The game itself is the same as 0.1.25 (the generator test still stands).
+
+What to try:
+1. Open the launcher: look over all three tabs. Anything hard to read,
+   cut off or in the wrong place? Try making the window smaller too.
+2. The generator test from 0.1.25 below, if you haven't done it.
 
 What changed since 0.1.24: THE GENERATOR (the game's own venom punch)
 --------------------------------------------------

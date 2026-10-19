@@ -206,7 +206,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     windowClass.hbrBackground = CreateSolidBrush(RGB(13, 15, 20));
     windowClass.lpszClassName = kClass;
     RegisterClassExW(&windowClass);
-    HWND window = CreateWindowExW(0, kClass, L"Spidy VR", WS_OVERLAPPEDWINDOW,
+    HWND window = CreateWindowExW(0, kClass, L"MilesVR", WS_OVERLAPPEDWINDOW,
                                   info.rcWork.left + (areaWidth - width) / 2, info.rcWork.top + (areaHeight - height) / 2,
                                   width, height, nullptr, nullptr, instance, nullptr);
     // A dark title bar in the window's own colour (Windows 11 takes the colour; 10 only the dark mode).
@@ -216,7 +216,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     DwmSetWindowAttribute(window, 35, &caption, sizeof(caption));
     if (!createDevice(window)) {
         releaseDevice();
-        MessageBoxW(nullptr, L"Spidy's launcher needs DirectX 11 graphics, which this PC did not provide.", L"Spidy VR",
+        MessageBoxW(nullptr, L"The MilesVR launcher needs DirectX 11 graphics, which this PC did not provide.", L"MilesVR",
                     MB_ICONERROR);
         return 1;
     }
@@ -300,7 +300,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (!restartFolder.empty()) {
         std::string error;
         if (!launcher::restartLauncher(restartFolder, error))
-            MessageBoxW(nullptr, launcher::widen(error).c_str(), L"Spidy VR", MB_ICONWARNING);
+            MessageBoxW(nullptr, launcher::widen(error).c_str(), L"MilesVR", MB_ICONWARNING);
     }
     return 0;
 }

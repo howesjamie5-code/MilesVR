@@ -21,10 +21,12 @@ constexpr const char* kDownload = "";
 struct Rgb {
     int r, g, b;
 };
-constexpr Rgb kBackground{13, 15, 20}, kPanel{21, 25, 34}, kPanelHigh{30, 35, 48}, kBorder{38, 44, 59},
-    kText{233, 236, 242}, kMuted{139, 147, 167}, kFaint{90, 98, 117}, kRed{227, 38, 47}, kRedHover{242, 59, 68},
-    kBlue{59, 130, 246}, kGreen{52, 211, 153}, kAmber{251, 191, 36}, kError{248, 113, 113}, kKofi{255, 94, 91},
-    kKofiHover{255, 120, 116}, kWhite{255, 255, 255};
+// Miles Morales: a black suit, Brooklyn red, and venom's orange.
+constexpr Rgb kBackground{9, 9, 11}, kPanel{19, 18, 22}, kPanelHigh{33, 30, 36}, kBorder{46, 39, 45},
+    kText{241, 237, 238}, kMuted{158, 147, 152}, kFaint{102, 93, 99}, kRed{224, 27, 51}, kRedHover{242, 52, 75},
+    kRedDeep{58, 10, 20}, kGreen{52, 211, 153}, kAmber{251, 191, 36}, kError{255, 99, 99},
+    kVenom{255, 138, 20}, kVenomBright{255, 186, 92}, kVenomDeep{44, 24, 10}, kKofi{255, 94, 91},
+    kKofiHover{255, 120, 116}, kLink{255, 112, 128}, kWhite{255, 255, 255};
 
 // A colour faded with the current style alpha, so disabled custom widgets fade too.
 ImU32 col(Rgb c, float alpha = 1) {
@@ -110,24 +112,24 @@ void theme(ImGuiStyle& style) {
     c[ImGuiCol_PopupBg] = vec(kPanel);
     c[ImGuiCol_Border] = vec(kBorder);
     c[ImGuiCol_FrameBg] = vec(kPanelHigh);
-    c[ImGuiCol_FrameBgHovered] = vec({40, 46, 62});
-    c[ImGuiCol_FrameBgActive] = vec({46, 53, 71});
+    c[ImGuiCol_FrameBgHovered] = vec({44, 39, 46});
+    c[ImGuiCol_FrameBgActive] = vec({52, 45, 53});
     c[ImGuiCol_Button] = vec(kPanelHigh);
-    c[ImGuiCol_ButtonHovered] = vec({42, 48, 65});
-    c[ImGuiCol_ButtonActive] = vec({50, 57, 77});
-    c[ImGuiCol_Header] = vec({42, 48, 65});
-    c[ImGuiCol_HeaderHovered] = vec({48, 55, 74});
-    c[ImGuiCol_HeaderActive] = vec({55, 63, 84});
-    c[ImGuiCol_SliderGrab] = vec(kBlue);
-    c[ImGuiCol_SliderGrabActive] = vec({96, 155, 255});
-    c[ImGuiCol_CheckMark] = vec(kBlue);
+    c[ImGuiCol_ButtonHovered] = vec({46, 40, 47});
+    c[ImGuiCol_ButtonActive] = vec({56, 47, 55});
+    c[ImGuiCol_Header] = vec({46, 40, 47});
+    c[ImGuiCol_HeaderHovered] = vec({54, 46, 53});
+    c[ImGuiCol_HeaderActive] = vec({62, 52, 60});
+    c[ImGuiCol_SliderGrab] = vec(kRed);
+    c[ImGuiCol_SliderGrabActive] = vec(kRedHover);
+    c[ImGuiCol_CheckMark] = vec(kRed);
     c[ImGuiCol_ScrollbarBg] = vec(kPanel, 0);
-    c[ImGuiCol_ScrollbarGrab] = vec({50, 57, 75});
-    c[ImGuiCol_ScrollbarGrabHovered] = vec({62, 70, 92});
-    c[ImGuiCol_ScrollbarGrabActive] = vec({74, 84, 110});
+    c[ImGuiCol_ScrollbarGrab] = vec({58, 49, 56});
+    c[ImGuiCol_ScrollbarGrabHovered] = vec({76, 62, 70});
+    c[ImGuiCol_ScrollbarGrabActive] = vec({96, 74, 84});
     c[ImGuiCol_Separator] = vec(kBorder);
     c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.02f, 0.02f, 0.04f, 0.72f);
-    c[ImGuiCol_NavCursor] = vec(kBlue);
+    c[ImGuiCol_NavCursor] = vec(kRed);
 }
 
 App::App(HWND window, Fonts fonts, std::string updatedFrom)
@@ -223,9 +225,9 @@ std::vector<std::string> App::blockers() {
     if (!scan_.done)
         return {"Checking this PC..."};
     if (scan_.root.empty() || !scan_.missing.empty() || scan_.python.empty())
-        reasons.push_back("Spidy's files are incomplete.");
+        reasons.push_back("MilesVR's files are incomplete.");
     else if (!scan_.writable)
-        reasons.push_back("Spidy can't write in its folder.");
+        reasons.push_back("MilesVR can't write in its folder.");
     if (scan_.gameExe.empty())
         reasons.push_back("The game was not found.");
     else if (scan_.build == Build::checking)
@@ -261,11 +263,11 @@ void App::restartElevated() {
 
 // --- Widgets -----------------------------------------------------------------
 
-bool App::beginCard(const char* id, ImVec2 size, int childFlags) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(kPanel));
-    ImGui::PushStyleColor(ImGuiCol_Border, vec(kBorder));
+bool App::beginCard(const char* id, ImVec2 size, int childFlags, bool venom) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(venom ? kVenomDeep : kPanel));
+    ImGui::PushStyleColor(ImGuiCol_Border, vec(venom ? kVenom : kBorder, venom ? 0.75f : 1.f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, S(12));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, venom ? 1.5f : 1.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(18), S(14)));
     const bool open = ImGui::BeginChild(id, size, ImGuiChildFlags_Borders | childFlags, ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar(3);
@@ -275,13 +277,16 @@ bool App::beginCard(const char* id, ImVec2 size, int childFlags) {
 
 void App::endCard() { ImGui::EndChild(); }
 
-void App::cardTitle(const char* title, float rightWidth) {
+void App::cardTitle(const char* title, float rightWidth, bool venom) {
     auto* draw = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
-    float x = at.x;
+    // A short slash before each title: Miles red, or venom orange.
+    draw->AddQuadFilled(ImVec2(at.x + S(3), at.y + S(5)), ImVec2(at.x + S(7), at.y + S(5)),
+                        ImVec2(at.x + S(4), at.y + S(17)), ImVec2(at.x, at.y + S(17)), col(venom ? kVenom : kRed));
+    float x = at.x + S(13);
     const float size = S(12);
     for (const char* c = title; *c; ++c) {
-        draw->AddText(fonts_.bold, size, ImVec2(x, at.y + S(4)), col(kMuted), c, c + 1);
+        draw->AddText(fonts_.bold, size, ImVec2(x, at.y + S(4)), col(venom ? kVenom : kMuted), c, c + 1);
         x += measure(fonts_.bold, size, std::string(1, *c).c_str()).x + S(1.4f);
     }
     // The caller may put buttons on the right of the title line.
@@ -317,9 +322,9 @@ void App::statusMark(ImDrawList* draw, ImVec2 c, Mark mark) {
         draw->AddLine(ImVec2(c.x, c.y - r * 0.08f), ImVec2(c.x, c.y + r * 0.45f), col(kMuted), S(2.1f));
         break;
     case Mark::busy:
-        draw->AddCircle(c, r * 0.7f, col(kBlue, 0.2f), 0, S(2.2f));
+        draw->AddCircle(c, r * 0.7f, col(kRed, 0.2f), 0, S(2.2f));
         draw->PathArcTo(c, r * 0.7f, t * 6.f, t * 6.f + 1.9f, 16);
-        draw->PathStroke(col(kBlue), 0, S(2.2f));
+        draw->PathStroke(col(kRed), 0, S(2.2f));
         break;
     }
 }
@@ -390,66 +395,95 @@ bool App::toggle(const char* id, bool* value) {
     const bool hovered = ImGui::IsItemHovered();
     auto* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(at, ImVec2(at.x + w, at.y + h),
-                        *value ? col(kBlue) : col(hovered ? Rgb{58, 66, 86} : Rgb{44, 50, 66}), h * 0.5f);
+                        *value ? col(kRed) : col(hovered ? Rgb{66, 57, 63} : Rgb{49, 43, 49}), h * 0.5f);
     const float knob = *value ? at.x + w - h * 0.5f : at.x + h * 0.5f;
     draw->AddCircleFilled(ImVec2(knob, at.y + h * 0.5f), h * 0.5f - S(3), col(kWhite), 24);
     return clicked;
 }
 
 bool App::link(const char* label) {
-    ImGui::PushStyleColor(ImGuiCol_Text, vec({125, 168, 255}));
+    ImGui::PushStyleColor(ImGuiCol_Text, vec(kLink));
     ImGui::TextUnformatted(label);
     ImGui::PopStyleColor();
     const bool clicked = ImGui::IsItemClicked();
     if (ImGui::IsItemHovered()) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, max.y), max, col({125, 168, 255}), 1);
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(min.x, max.y), max, col(kLink), 1);
     }
     return clicked;
 }
 
-// Spidy's mark: a red disc with a white web (the window icon is the same picture).
+// The launcher's mark: Miles's red spider on a black disc (the window icon is the same picture).
 void App::badge(ImDrawList* draw, ImVec2 c, float r) {
-    draw->AddCircleFilled(ImVec2(c.x, c.y + S(2)), r + S(2), IM_COL32(0, 0, 0, 90), 48);
-    draw->AddCircleFilled(c, r, col(kRed), 48);
-    draw->AddCircle(c, r - S(0.5f), col({255, 120, 120}, 0.35f), 48, S(1));
-    const ImU32 line = col(kWhite, 0.92f);
-    const float thickness = std::max(1.f, r * 0.055f);
-    constexpr int spokes = 8;
-    for (int i = 0; i < spokes; ++i) {
-        const float a = i * 6.2831853f / spokes + 0.39f;
-        draw->AddLine(c, ImVec2(c.x + std::cos(a) * r * 0.8f, c.y + std::sin(a) * r * 0.8f), line, thickness);
-    }
-    for (float ring : {0.3f, 0.52f, 0.74f})
-        for (int i = 0; i < spokes; ++i) {
-            const float a0 = i * 6.2831853f / spokes + 0.39f, a1 = (i + 1) * 6.2831853f / spokes + 0.39f;
-            const ImVec2 p0(c.x + std::cos(a0) * r * ring, c.y + std::sin(a0) * r * ring);
-            const ImVec2 p1(c.x + std::cos(a1) * r * ring, c.y + std::sin(a1) * r * ring);
-            // Each thread sags a little toward the centre, as a real web does.
-            const float mid = (a0 + a1) * 0.5f, sag = ring * 0.86f;
-            draw->AddBezierQuadratic(p0, ImVec2(c.x + std::cos(mid) * r * sag, c.y + std::sin(mid) * r * sag), p1, line,
-                                     thickness, 8);
+    draw->AddCircleFilled(ImVec2(c.x, c.y + S(2)), r + S(3), IM_COL32(0, 0, 0, 120), 48);
+    draw->AddCircleFilled(c, r + S(1.5f), col(kRed), 48);
+    draw->AddCircleFilled(c, r - std::max(S(1.5f), r * 0.07f), col({14, 13, 16}), 48);
+    const ImU32 red = col(kRed);
+    const auto at = [&](float x, float y) { return ImVec2(c.x + x * r, c.y + y * r); };
+    // Eight angular legs, each a mirrored pair.
+    const float leg = std::max(1.f, r * 0.075f);
+    const float legs[4][6] = {{0.08f, -0.22f, 0.3f, -0.44f, 0.34f, -0.76f},
+                              {0.1f, -0.14f, 0.46f, -0.3f, 0.68f, -0.52f},
+                              {0.1f, -0.04f, 0.46f, 0.1f, 0.68f, 0.4f},
+                              {0.08f, 0.04f, 0.3f, 0.32f, 0.34f, 0.74f}};
+    for (const auto& l : legs)
+        for (float side : {-1.f, 1.f}) {
+            draw->PathLineTo(at(side * l[0], l[1]));
+            draw->PathLineTo(at(side * l[2], l[3]));
+            draw->PathLineTo(at(side * l[4], l[5]));
+            draw->PathStroke(red, 0, leg);
+        }
+    draw->AddCircleFilled(at(0, -0.36f), r * 0.1f, red, 20);
+    draw->AddEllipseFilled(at(0, -0.12f), ImVec2(r * 0.13f, r * 0.19f), red, 0, 24);
+    draw->AddEllipseFilled(at(0, 0.27f), ImVec2(r * 0.12f, r * 0.27f), red, 0, 24);
+}
+
+// Comic-book halftone dots spread from a corner of the header, fading out.
+void App::halftone(ImDrawList* draw, ImVec2 corner, float radius, float alpha) {
+    const float step = S(9);
+    for (float y = 0; y < radius; y += step)
+        for (float x = 0; x < radius; x += step) {
+            const float fall = 1 - std::sqrt(x * x + y * y) / radius;
+            if (fall <= 0)
+                continue;
+            const float shift = (static_cast<int>(y / step) % 2) * step * 0.5f;
+            draw->AddCircleFilled(ImVec2(corner.x + x + shift, corner.y + y), S(0.6f) + fall * S(2.4f),
+                                  col(kRed, alpha * fall), 8);
         }
 }
 
-// A faint web spun from a corner of the header.
-void App::web(ImDrawList* draw, ImVec2 corner, float radius) {
-    const ImU32 line = col(kWhite, 0.055f);
-    constexpr int spokes = 7;
-    for (int i = 0; i < spokes; ++i) {
-        const float a = 1.5707963f * i / (spokes - 1);
-        draw->AddLine(corner, ImVec2(corner.x + std::cos(a) * radius, corner.y + std::sin(a) * radius), line, S(1));
+// A crackle of venom: a jagged line from one point to another; the same seed gives the same bolt.
+void App::bolt(ImDrawList* draw, ImVec2 from, ImVec2 to, float thickness, unsigned seed, float alpha) {
+    constexpr int steps = 9;
+    const float dx = to.x - from.x, dy = to.y - from.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length < 1)
+        return;
+    const float nx = -dy / length, ny = dx / length;
+    ImVec2 points[steps + 1];
+    for (int i = 0; i <= steps; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        // Each kink turns back the other way, as lightning does.
+        const float kink = (0.4f + 0.6f * ((seed >> 16) % 1000 / 1000.f)) * (i % 2 ? 1.f : -1.f);
+        const float jitter = (i == 0 || i == steps) ? 0 : kink * std::min(length * 0.06f, S(6));
+        const float t = static_cast<float>(i) / steps;
+        points[i] = ImVec2(from.x + dx * t + nx * jitter, from.y + dy * t + ny * jitter);
     }
-    for (int ring = 1; ring <= 6; ++ring) {
-        const float r = radius * ring / 6.5f;
-        for (int i = 0; i + 1 < spokes; ++i) {
-            const float a0 = 1.5707963f * i / (spokes - 1), a1 = 1.5707963f * (i + 1) / (spokes - 1);
-            const float mid = (a0 + a1) * 0.5f;
-            draw->AddBezierQuadratic(ImVec2(corner.x + std::cos(a0) * r, corner.y + std::sin(a0) * r),
-                                     ImVec2(corner.x + std::cos(mid) * r * 0.9f, corner.y + std::sin(mid) * r * 0.9f),
-                                     ImVec2(corner.x + std::cos(a1) * r, corner.y + std::sin(a1) * r), line, S(1), 10);
-        }
+    draw->AddPolyline(points, steps + 1, col(kVenom, alpha * 0.25f), 0, thickness * 3.5f);
+    draw->AddPolyline(points, steps + 1, col(kVenom, alpha), 0, thickness);
+    draw->AddPolyline(points, steps + 1, col(kVenomBright, alpha), 0, std::max(1.f, thickness * 0.4f));
+}
+
+// Miles's venom meter: three bars, drawn full.
+void App::venomBars(ImDrawList* draw, ImVec2 at, float barWidth, float height) {
+    for (int i = 0; i < 3; ++i) {
+        const ImVec2 min(at.x + i * (barWidth + S(4)), at.y);
+        const ImVec2 max(min.x + barWidth, at.y + height);
+        draw->AddRectFilled(ImVec2(min.x - S(1.5f), min.y - S(1.5f)), ImVec2(max.x + S(1.5f), max.y + S(1.5f)),
+                            col(kVenom, 0.18f), S(3));
+        draw->AddRectFilled(min, max, col(kVenom), S(2));
+        draw->AddLine(ImVec2(min.x + S(1), min.y + S(1)), ImVec2(max.x - S(1), min.y + S(1)), col(kVenomBright), S(1));
     }
 }
 
@@ -484,24 +518,37 @@ void App::header() {
     auto* draw = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetWindowPos();
     const float width = ImGui::GetWindowWidth(), height = S(96);
-    draw->AddRectFilledMultiColor(at, ImVec2(at.x + width, at.y + height), col({46, 13, 21}), col(kBackground),
-                                  col(kBackground), col({30, 11, 17}));
-    web(draw, at, S(260));
-    const ImVec2 center(at.x + S(24 + 27), at.y + height * 0.5f);
-    badge(draw, center, S(27));
-    const float x = center.x + S(27 + 16);
-    draw->AddText(fonts_.title, S(34), ImVec2(x, at.y + S(13)), col(kText), "SPIDY");
-    const float titleWidth = measure(fonts_.title, S(34), "SPIDY").x;
-    const ImVec2 tag(x + titleWidth + S(10), at.y + S(26));
-    const ImVec2 tagSize = measure(fonts_.bold, S(11.5f), "VR");
-    draw->AddRect(tag, ImVec2(tag.x + tagSize.x + S(14), tag.y + S(20)), col(kRed), S(6), 0, S(1.5f));
-    draw->AddText(fonts_.bold, S(11.5f), ImVec2(tag.x + S(7), tag.y + (S(20) - tagSize.y) * 0.5f), col({255, 120, 120}), "VR");
-    const char* subtitle = "VR mod for Marvel's Spider-Man: Miles Morales (based on Spidy)";
+    draw->AddRectFilledMultiColor(at, ImVec2(at.x + width, at.y + height), col({64, 9, 22}), col(kBackground),
+                                  col(kBackground), col({40, 7, 15}));
+    halftone(draw, at, S(300), 0.22f);
+    // A red slash behind the title, as on a comic's cover.
+    const ImVec2 slash(at.x + S(90), at.y);
+    draw->AddQuadFilled(slash, ImVec2(slash.x + S(210), slash.y), ImVec2(slash.x + S(160), slash.y + height),
+                        ImVec2(slash.x - S(50), slash.y + height), col(kRed, 0.07f));
+    // Venom crackles along the header's foot.
+    bolt(draw, ImVec2(at.x + width * 0.46f, at.y + height - S(10)), ImVec2(at.x + width * 0.62f, at.y + height - S(22)),
+         S(1.4f), 7u, 0.55f);
+    bolt(draw, ImVec2(at.x + width * 0.58f, at.y + height - S(16)), ImVec2(at.x + width * 0.7f, at.y + height - S(6)),
+         S(1.1f), 23u, 0.35f);
+    draw->AddRectFilledMultiColor(ImVec2(at.x, at.y + height - S(2)), ImVec2(at.x + width, at.y + height), col(kRed),
+                                  col(kVenom, 0.8f), col(kVenom, 0.8f), col(kRed));
+    const ImVec2 center(at.x + S(24 + 28), at.y + height * 0.5f);
+    badge(draw, center, S(28));
+    const float x = center.x + S(28 + 18);
+    // The title printed twice, the red copy a little off, as on a misprinted comic.
+    draw->AddText(fonts_.title, S(34), ImVec2(x + S(2.5f), at.y + S(15)), col(kRed, 0.9f), "MILES");
+    draw->AddText(fonts_.title, S(34), ImVec2(x, at.y + S(13)), col(kText), "MILES");
+    const float titleWidth = measure(fonts_.title, S(34), "MILES").x;
+    const ImVec2 tag(x + titleWidth + S(12), at.y + S(25));
+    const ImVec2 tagSize = measure(fonts_.bold, S(12), "VR");
+    draw->AddRectFilled(tag, ImVec2(tag.x + tagSize.x + S(14), tag.y + S(21)), col(kRed), S(5));
+    draw->AddText(fonts_.bold, S(12), ImVec2(tag.x + S(7), tag.y + (S(21) - tagSize.y) * 0.5f), col(kWhite), "VR");
+    const char* subtitle = "VR for Marvel's Spider-Man: Miles Morales";
     const float lineY = at.y + S(58);
     draw->AddText(fonts_.body, S(14.5f), ImVec2(x, lineY), col(kMuted), subtitle);
     float bylineX = x + measure(fonts_.body, S(14.5f), subtitle).x;
-    draw->AddText(fonts_.body, S(14.5f), ImVec2(bylineX, lineY), col(kFaint), "   \xC2\xB7   by ");
-    bylineX += measure(fonts_.body, S(14.5f), "   \xC2\xB7   by ").x;
+    draw->AddText(fonts_.body, S(14.5f), ImVec2(bylineX, lineY), col(kFaint), "   \xC2\xB7   based on Spidy by ");
+    bylineX += measure(fonts_.body, S(14.5f), "   \xC2\xB7   based on Spidy by ").x;
     draw->AddText(fonts_.semibold, S(14.5f), ImVec2(bylineX, lineY), col(kText), kAuthor);
 
     const ImVec2 buttonSize(S(196), S(40));
@@ -509,7 +556,7 @@ void App::header() {
     if (pillButton("##kofi", kHeart, "Support on Ko-fi", col(kKofi), col(kKofiHover), col(kWhite), buttonSize))
         openUrl(kKofiUrl);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Spidy is free. If you enjoy it, a tip helps pay for its development.");
+        ImGui::SetTooltip("Spidy, which MilesVR is built on, is free. A tip to its creator helps pay for its development.");
 }
 
 void App::tabs() {
@@ -590,17 +637,17 @@ void App::shortcutBanner(float width) {
     auto* draw = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const float height = S(48);
-    draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), col({24, 36, 64}), S(12));
-    draw->AddRect(at, ImVec2(at.x + width, at.y + height), col(kBlue, 0.35f), S(12));
+    draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), col(kRedDeep), S(12));
+    draw->AddRect(at, ImVec2(at.x + width, at.y + height), col(kRed, 0.35f), S(12));
     const char* message = shortcutMessage_.empty() ? "Install Spidy on this PC: add Spidy VR to your desktop and Start menu."
                                                    : shortcutMessage_.c_str();
     const ImVec2 textSize = measure(fonts_.semibold, S(14.5f), message);
     draw->AddText(fonts_.semibold, S(14.5f), ImVec2(at.x + S(18), at.y + (height - textSize.y) * 0.5f), col(kText), message);
     const float buttonWidth = S(130);
     ImGui::SetCursorScreenPos(ImVec2(at.x + width - S(12) - buttonWidth * 2 - S(8), at.y + (height - ImGui::GetFrameHeight()) * 0.5f));
-    ImGui::PushStyleColor(ImGuiCol_Button, vec(kBlue));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec({96, 155, 255}));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({45, 110, 220}));
+    ImGui::PushStyleColor(ImGuiCol_Button, vec(kRed));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(kRedHover));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({190, 20, 42}));
     if (secondaryButton("Add shortcuts", buttonWidth)) {
         std::string error;
         if (createShortcuts(error)) {
@@ -627,7 +674,7 @@ std::string App::updateBlocker() {
         vcInstall_.state() == Outcome::running)
         return "Wait for the checks on this PC to finish.";
     if (!scan_.writable)
-        return "Spidy can't write in its folder. Move the Spidy folder somewhere like Documents.";
+        return "MilesVR can't write in its folder. Move the MilesVR folder somewhere like Documents.";
     return {};
 }
 
@@ -689,8 +736,8 @@ float App::updateBanner(float width) {
     const float textWidth = width - S(36) - (buttons.empty() ? 0 : buttonsWidth + S(4));
     const ImVec2 textSize = measure(fonts_.semibold, S(14.5f), message.c_str(), textWidth);
     const float height = std::max(S(48), textSize.y + S(28));
-    draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), failed ? col({48, 36, 18}) : col({24, 36, 64}), S(12));
-    draw->AddRect(at, ImVec2(at.x + width, at.y + height), col(failed ? kAmber : kBlue, 0.35f), S(12));
+    draw->AddRectFilled(at, ImVec2(at.x + width, at.y + height), failed ? col({48, 36, 18}) : col(kRedDeep), S(12));
+    draw->AddRect(at, ImVec2(at.x + width, at.y + height), col(failed ? kAmber : kRed, 0.35f), S(12));
     draw->AddText(fonts_.semibold, S(14.5f), ImVec2(at.x + S(18), at.y + (height - textSize.y) * 0.5f), col(kText),
                   message.c_str(), nullptr, textWidth);
     if (state == UpdateState::downloading && update_.total) {
@@ -698,16 +745,16 @@ float App::updateBanner(float width) {
             std::clamp(static_cast<float>(static_cast<double>(update_.received) / update_.total), 0.f, 1.f);
         const float left = at.x + S(18), right = at.x + width - S(18), y = at.y + height - S(8);
         draw->AddRectFilled(ImVec2(left, y), ImVec2(right, y + S(3)), col(kWhite, 0.1f), S(2));
-        draw->AddRectFilled(ImVec2(left, y), ImVec2(left + (right - left) * done, y + S(3)), col(kBlue), S(2));
+        draw->AddRectFilled(ImVec2(left, y), ImVec2(left + (right - left) * done, y + S(3)), col(kRed), S(2));
     }
     float x = at.x + width - S(12) - buttonsWidth;
     for (const auto& button : buttons) {
         ImGui::SetCursorScreenPos(ImVec2(x, at.y + (height - ImGui::GetFrameHeight()) * 0.5f));
         ImGui::PushID(button.label);
         if (button.primary) {
-            ImGui::PushStyleColor(ImGuiCol_Button, vec(kBlue));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec({96, 155, 255}));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({45, 110, 220}));
+            ImGui::PushStyleColor(ImGuiCol_Button, vec(kRed));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(kRedHover));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({190, 20, 42}));
         }
         ImGui::BeginDisabled(!button.enabled);
         const bool clicked = secondaryButton(button.label, buttonWidth);
@@ -771,9 +818,9 @@ void App::setupCard(float width) {
         const std::string path = narrow(scan_.gameExe);
         if (scan_.done && scan_.gameExe.empty()) {
             mark = Mark::error;
-            detail = scan_.epicFound ? "The Epic Games Store has it installed, but not where. Show Spidy where "
+            detail = scan_.epicFound ? "The Epic Games Store has it installed, but not where. Show MilesVR where "
                                        "MilesMorales.exe is."
-                                     : "Not found in your Steam or Epic Games Store libraries. Show Spidy where "
+                                     : "Not found in your Steam or Epic Games Store libraries. Show MilesVR where "
                                        "MilesMorales.exe is.";
         } else if (scan_.done) {
             switch (scan_.build) {
@@ -787,13 +834,13 @@ void App::setupCard(float width) {
             case Build::sameVersion:
                 mark = Mark::warning;
                 detail = "Version " + scan_.gameVersion + ", but not Steam's file (" + scan_.gameSource +
-                         "): Spidy tries it, and stops with a code if the game's code differs" +
+                         "): MilesVR tries it, and stops with a code if the game's code differs" +
                          (scan_.gameRunning ? ". Running now" : "") + "\n" + path;
                 break;
             case Build::unsupported:
                 mark = Mark::error;
                 detail = scan_.gameSource == "Epic Games Store"
-                             ? "Epic Games Store, version " + scan_.gameVersion + ". Spidy works with version " +
+                             ? "Epic Games Store, version " + scan_.gameVersion + ". MilesVR works with version " +
                                    scan_.expectedVersion + ".\n" + path
                              : spidy::launcher::unsupportedGame(scan_.gameVersion, scan_.expectedVersion,
                                                                 scan_.steamApp) +
@@ -801,7 +848,7 @@ void App::setupCard(float width) {
                 break;
             case Build::unreadable:
                 mark = Mark::error;
-                detail = "Spidy could not read this file.\n" + path;
+                detail = "MilesVR could not read this file.\n" + path;
                 break;
             }
         }
@@ -835,7 +882,7 @@ void App::setupCard(float width) {
             detail = chosen->tested ? "Tested with Quest 3 over Virtual Desktop."
                      : chosen->name == "SteamVR"
                          ? "Played with Quest 3 over Steam Link; other SteamVR headsets should work."
-                         : chosen->name + " has not been tested with Spidy yet. It should work; expect rough edges.";
+                         : chosen->name + " has not been tested with MilesVR yet. It should work; expect rough edges.";
             if (chosen->active)
                 detail += " Windows' active VR runtime.";
         }
@@ -906,7 +953,7 @@ void App::setupCard(float width) {
         const std::string detail =
             format("Visual C++ runtime %s  \xC2\xB7  Python %s", scan_.vcVersion.c_str(),
                    scan_.pythonVersion.empty() ? "found" : scan_.pythonVersion.c_str());
-        setupRow(Mark::ok, "Windows and Spidy's files", detail, S(98), [&] {
+        setupRow(Mark::ok, "Windows and MilesVR's files", detail, S(98), [&] {
             if (secondaryButton("Open folder", S(98)))
                 openPath(scan_.root);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
@@ -933,8 +980,8 @@ void App::setupCard(float width) {
         } else if (scan_.done) {
             mark = Mark::error;
             offer = true;
-            detail = scan_.vcInstalled ? "Version " + scan_.vcVersion + " is too old for Spidy's modules (14.40 or newer)."
-                                       : "Missing. Spidy's modules need Microsoft's Visual C++ runtime.";
+            detail = scan_.vcInstalled ? "Version " + scan_.vcVersion + " is too old for MilesVR's modules (14.40 or newer)."
+                                       : "Missing. MilesVR's modules need Microsoft's Visual C++ runtime.";
             if (install == Outcome::error)
                 detail += " " + vcInstall_.message();
         }
@@ -952,23 +999,23 @@ void App::setupCard(float width) {
         if (scan_.done) {
             mark = Mark::error;
             if (scan_.root.empty()) {
-                detail = "The tools folder is missing. Extract the whole Spidy zip and start the launcher from that folder.";
+                detail = "The tools folder is missing. Extract the whole MilesVR zip and start the launcher from that folder.";
             } else if (!scan_.missing.empty()) {
                 detail = "Missing:";
                 for (const auto& name : scan_.missing)
                     detail += " " + name;
                 detail += ". Extract the zip again; some antivirus programs remove these files.";
             } else if (scan_.python.empty()) {
-                detail = "Python is missing (python\\python.exe in the Spidy folder).";
+                detail = "Python is missing (python\\python.exe in the MilesVR folder).";
             } else if (!scan_.writable) {
-                detail = "Spidy can't write in its folder. Move the Spidy folder somewhere like Documents.";
+                detail = "MilesVR can't write in its folder. Move the MilesVR folder somewhere like Documents.";
             } else {
                 mark = Mark::ok;
                 detail = "All modules present; Python " +
                          (scan_.pythonVersion.empty() ? std::string("found") : scan_.pythonVersion) + ".";
             }
         }
-        setupRow(mark, "Spidy files", detail, S(98), [&] {
+        setupRow(mark, "MilesVR files", detail, S(98), [&] {
             if (secondaryButton("Open folder", S(98)))
                 openPath(scan_.root.empty() ? std::filesystem::current_path().wstring() : scan_.root);
         }, true);
@@ -977,20 +1024,36 @@ void App::setupCard(float width) {
     endCard();
 }
 
-void App::option(const char* title, const char* help, float controlWidth, const std::function<void()>& control) {
+void App::option(const char* title, const char* help, float controlWidth, const std::function<void()>& control,
+                 bool venom) {
     auto* draw = ImGui::GetWindowDrawList();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
     const float textWidth = width - controlWidth - S(16);
     const ImVec2 titleSize = measure(fonts_.semibold, S(14.5f), title, textWidth);
     const ImVec2 helpSize = measure(fonts_.body, S(12.5f), help, textWidth);
-    draw->AddText(fonts_.semibold, S(14.5f), at, col(kText), title, nullptr, textWidth);
-    draw->AddText(fonts_.body, S(12.5f), ImVec2(at.x, at.y + titleSize.y + S(2)), col(kMuted), help, nullptr, textWidth);
     const float height = std::max(titleSize.y + S(2) + helpSize.y, ImGui::GetFrameHeight());
+    if (venom) {
+        // A venom power's option glows orange, with a bar down its left.
+        draw->AddRectFilled(ImVec2(at.x - S(10), at.y - S(6)), ImVec2(at.x + width + S(4), at.y + height + S(6)),
+                            col(kVenom, 0.09f), S(8));
+        draw->AddRectFilled(ImVec2(at.x - S(10), at.y - S(6)), ImVec2(at.x - S(7), at.y + height + S(6)), col(kVenom),
+                            S(2));
+    }
+    draw->AddText(fonts_.semibold, S(14.5f), at, col(venom ? kVenom : kText), title, nullptr, textWidth);
+    draw->AddText(fonts_.body, S(12.5f), ImVec2(at.x, at.y + titleSize.y + S(2)), col(venom ? kVenomBright : kMuted, venom ? 0.8f : 1.f),
+                  help, nullptr, textWidth);
     ImGui::SetCursorScreenPos(ImVec2(at.x + width - controlWidth, at.y + std::max(0.f, (titleSize.y - ImGui::GetFrameHeight()) * 0.5f) - S(1)));
     ImGui::PushID(title);
     ImGui::PushItemWidth(controlWidth);
+    if (venom) {
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, vec({70, 38, 12}));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, vec({92, 50, 16}));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenomBright));
+    }
     control();
+    if (venom)
+        ImGui::PopStyleColor(3);
     ImGui::PopItemWidth();
     ImGui::PopID();
     ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + height + S(13)));
@@ -1055,7 +1118,7 @@ void App::optionsCard(ImVec2 size) {
                int left = o.venomLeftHand ? 1 : 0;
                stepCombo("##venomHand", kVenomHands, hands, 2, &left);
                o.venomLeftHand = left != 0;
-           });
+           }, true);
     option("Webs hold in open air", "With nothing in reach, a web still holds 100 m out; off, it misses.", S(40),
            [&] { changed |= toggle("##air", &o.airWebs); });
     option("Aim markers", "Show where each hand's web would land.", S(40),
@@ -1127,7 +1190,7 @@ void App::optionsCard(ImVec2 size) {
         static constexpr int sizes[] = {0, 1, 2, 3};
         stepCombo("##hud", kHudSizes, sizes, 4, &o.hud);
     });
-    option("Wall running", "On: a wall you swing or fly onto is Spidy's, and you run along it. Stop on any wall "
+    option("Wall running", "On: a wall you swing or fly onto is yours, and you run along it. Stop on any wall "
                            "and the game's own crawl holds you, so its vents, doors and prompts work; push the "
                            "stick up a wall to run up it, the game's own wall run. Off: every wall is the game's "
                            "crawl. Either way you stand upright on the wall and your view turns so the wall is "
@@ -1236,7 +1299,7 @@ void App::startBlock(ImVec2 size) {
             tint = kMuted;
         } else if (*code == spidy::launcher::kNeedsAdministratorExit) {
             title = "VR needs administrator rights";
-            detail = administratorError_.empty() ? "Steam or the game runs as administrator, so Spidy has to as well."
+            detail = administratorError_.empty() ? "Steam or the game runs as administrator, so MilesVR has to as well."
                                                  : administratorError_;
             tint = kError;
             offerAdministrator = true;
@@ -1277,11 +1340,11 @@ void App::startBlock(ImVec2 size) {
         const float detailHeight = measure(fonts_.body, S(13), detail.c_str(), size.x - S(8)).y;
         ImGui::SetCursorScreenPos(ImVec2(at.x + S(4), y + S(22) + detailHeight + S(3)));
         ImGui::PushFont(fonts_.semibold, 13.5f);
-        if (link("Restart Spidy as administrator"))
+        if (link("Restart MilesVR as administrator"))
             restartElevated();
         ImGui::PopFont();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Windows asks you to allow it. Spidy then opens again; close the game and press START VR.");
+            ImGui::SetTooltip("Windows asks you to allow it. MilesVR then opens again; close the game and press START VR.");
     }
     ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + size.y));
     ImGui::Dummy(ImVec2(size.x, 0));
@@ -1308,7 +1371,7 @@ void App::logCard(ImVec2 size) {
         openPath((std::filesystem::path(scan_.root) / L"reports").wstring());
     ImGui::PopStyleVar();
     ImGui::Dummy(ImVec2(0, S(8)));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, vec({15, 18, 25}));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, vec({12, 11, 14}));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, S(8));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(12), S(10)));
     ImGui::BeginChild("##lines", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_HorizontalScrollbar);
@@ -1336,7 +1399,7 @@ void App::logCard(ImVec2 size) {
                 const Rgb tint = line.kind == LineKind::error     ? kError
                                  : line.kind == LineKind::warning ? kAmber
                                  : line.kind == LineKind::good    ? kGreen
-                                                                  : Rgb{196, 202, 214};
+                                                                  : Rgb{206, 198, 202};
                 ImGui::PushStyleColor(ImGuiCol_Text, vec(tint));
                 ImGui::TextUnformatted(line.text.c_str());
                 ImGui::PopStyleColor();
@@ -1400,28 +1463,6 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                                    "arrives and you hang there. Hit him"},
           {"Slow motion by itself", "Time slows for a moment at a finisher, a called blow, a thug who arrives in "
                                     "front of you in the air, and a perfect dodge"}}},
-        {"VENOM",
-         {{"Land blows", "Each blow fills the venom meter: a hit 10, a heavy blow, launch or slam 15, a finisher 20 "
-                         "(ten hits fill it)"},
-          {"Meter full", "Your right hand shoots no webs or web balls: its grip is your venom now. A web you hold "
-                         "as it fills stays until you let go"},
-          {"Hold the right grip", "Charge your right fist with venom: it glows and the controller buzzes (the "
-                                  "trigger, if Web button is set to it)"},
-          {"Punch the marked thug", "Venom punch: a charged right fist thrown at the ringed thug within 2 m lands "
-                                    "it; farther away, the web strike flies you in and lands it. It uses one bar "
-                                    "of the meter"},
-          {"Charged fist, punch down", "Venom smash. Standing, it goes off where you are; in the air (not on a web) "
-                                       "you drop to the ground and it goes off as you land. Every enemy within 5 m "
-                                       "is hit and thrown away. It uses one bar"},
-          {"All three bars full: charge, arms out wide", "Mega Venom Blast. Hold the grip to charge, then stretch "
-                                                         "both arms out to the sides: every enemy within 10 m is "
-                                                         "hit hard and thrown far. It uses all three bars"},
-          {"Out of a fight: grip and punch", "The game's own Venom Punch (its LB + X), for as long as you hold "
-                                             "the grip: for a story moment such as charging a generator"},
-          {"Let go of the grip", "The charge stays for a moment and fades: punch before it does"},
-          {"Click the right stick", "With the meter full: let the venom go. The meter empties at once, whatever you "
-                                    "are doing, and the right hand's webs are back"},
-          {"Venom punch hand", "On the Play tab: Left puts all of this on the left hand and its stick"}}},
         {"MOVING",
          {{"Left stick", "Walk and run"},
           {"A", "Jump. Hold it on the ground to charge a leap and let go: the longer you hold, the higher; with "
@@ -1430,7 +1471,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Y", "Interact with what you look at: the game's Y (backpacks, doors, prompts); web strike in a fight. "
                 "Hold it and you step up to the thing, until the game takes it"},
           {"Click the right stick", "The game's LB + RB: pull a door or a grate where the game shows the two "
-                                    "(with the venom meter full it lets the venom go: see VENOM)"},
+                                    "(with the venom meter full it lets the venom go: see VENOM POWERS)"},
           {"Right stick down", "Heal: the game's D-pad down. Push it right down and hold it a moment"},
           {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the two"},
           {"Hand to your temple, trigger", "Scan your surroundings: the game's R3"},
@@ -1449,6 +1490,29 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"D-pad", "The game's own D-pad: down heals. The right stick's down and up work as above"},
           {"Bumpers", "Not used: the triggers and grips are your webs"}}},
     };
+    // Miles's venom powers: each power's name, then what it does and how to use it.
+    struct Power {
+        const char* name;
+        const char* description;
+    };
+    const Power powers[] = {
+        {"Venom Meter", "Land blows to fill it: a hit 10, a heavy blow, launch or slam 15, a finisher 20 (ten hits "
+                        "fill a bar). Miles has up to three bars"},
+        {"Venom Hand", "With a bar full your right hand shoots no webs or web balls: its grip is your venom now. A "
+                       "web you hold as it fills stays until you let go"},
+        {"Venom Charge", "Hold the right grip (the trigger, if Web button is set to it): your fist glows and the "
+                         "controller buzzes. Let go and the charge fades after a moment, so strike before it does"},
+        {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "
+                        "web strike flies you in and lands it. Uses one bar"},
+        {"Venom Smash", "Charge, then punch down. Standing, it goes off where you are; in the air (not on a web) you "
+                        "drop and it goes off as you land. Every enemy within 5 m is hit and thrown. Uses one bar"},
+        {"Mega Venom Blast", "All three bars full: charge, then stretch both arms out wide to the sides. Every enemy "
+                             "within 10 m is hit hard and thrown far. Uses all three bars"},
+        {"Story Venom", "Out of a fight, charge and punch: the game's own Venom Punch (its LB + X) for as long as you "
+                        "hold the grip, for story moments such as charging a generator"},
+        {"Venom Release", "With a bar full, click the right stick: the meter empties at once, whatever you are doing, "
+                          "and the right hand's webs are back"},
+    };
     const float gap = S(16);
     float columnY[2] = {origin.y, origin.y};
     ImGui::SetCursorScreenPos(origin);
@@ -1457,7 +1521,54 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const ImVec2 base = ImGui::GetCursorScreenPos();
     const float contentWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - S(4);
     const float columnWidth = (contentWidth - gap) * 0.5f;
-    columnY[0] = columnY[1] = base.y;
+    ImGui::SetCursorScreenPos(base);
+    if (beginCard("##venom", ImVec2(contentWidth, 0), ImGuiChildFlags_AutoResizeY, true)) {
+        auto* draw = ImGui::GetWindowDrawList();
+        const ImVec2 titleAt = ImGui::GetCursorScreenPos();
+        const float cardWidth = ImGui::GetContentRegionAvail().x;
+        cardTitle("VENOM POWERS", 0, true);
+        // The meter's three bars and a crackle of venom on the right of the title line.
+        const float barWidth = S(34);
+        const ImVec2 bars(titleAt.x + cardWidth - 3 * barWidth - 2 * S(4), titleAt.y + S(7));
+        venomBars(draw, bars, barWidth, S(8));
+        bolt(draw, ImVec2(bars.x - S(150), bars.y + S(8)), ImVec2(bars.x - S(14), bars.y + S(2)), S(1.3f), 11u, 0.7f);
+        ImGui::Dummy(ImVec2(0, S(6)));
+        const float half = (cardWidth - S(24)) * 0.5f;
+        const int rows = static_cast<int>((std::size(powers) + 1) / 2);
+        for (int row = 0; row < rows; ++row) {
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            float rowHeight = 0;
+            for (int side = 0; side < 2; ++side) {
+                const size_t index = static_cast<size_t>(row * 2 + side);
+                if (index >= std::size(powers))
+                    break;
+                const Power& power = powers[index];
+                const float x = at.x + side * (half + S(24));
+                // The power's name in venom orange, a spark before it, then what it does.
+                const ImVec2 spark(x + S(4), at.y + S(10));
+                draw->AddCircleFilled(spark, S(6), col(kVenom, 0.22f), 12);
+                draw->AddCircleFilled(spark, S(3), col(kVenomBright), 12);
+                const ImVec2 nameSize = measure(fonts_.bold, S(15.5f), power.name);
+                draw->AddText(fonts_.bold, S(15.5f), ImVec2(x + S(16), at.y), col(kVenom), power.name);
+                const float textWidth = half - S(16);
+                const ImVec2 textSize = measure(fonts_.body, S(14), power.description, textWidth);
+                draw->AddText(fonts_.body, S(14), ImVec2(x + S(16), at.y + nameSize.y + S(2)), col({232, 220, 210}),
+                              power.description, nullptr, textWidth);
+                rowHeight = std::max(rowHeight, nameSize.y + S(2) + textSize.y);
+            }
+            ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rowHeight + S(14)));
+            ImGui::Dummy(ImVec2(cardWidth, 0));
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenomBright, 0.7f));
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextUnformatted("Left-handed? Set Venom punch hand to Left on the Play tab: every venom power moves to "
+                               "the left hand and its stick.");
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, S(4)));
+    }
+    endCard();
+    columnY[0] = columnY[1] = ImGui::GetItemRectMax().y + gap;
     for (int g = 0; g < static_cast<int>(std::size(groups)); ++g) {
         const int column = g % 2;
         ImGui::SetCursorScreenPos(ImVec2(base.x + column * (columnWidth + gap), columnY[column]));
@@ -1477,7 +1588,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                     col(kPanelHigh), S(6));
                 draw->AddText(fonts_.semibold, S(13), ImVec2(at.x + S(8), at.y + S(5)), col(kText), entry.control, nullptr,
                               keyWidth - S(16));
-                draw->AddText(fonts_.body, S(14), ImVec2(at.x + keyWidth + S(12), at.y + S(3)), col({200, 205, 216}),
+                draw->AddText(fonts_.body, S(14), ImVec2(at.x + keyWidth + S(12), at.y + S(3)), col({216, 207, 210}),
                               entry.action, nullptr, width - keyWidth - S(12));
                 ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + height));
                 ImGui::Dummy(ImVec2(width, 0));
@@ -1492,9 +1603,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     if (beginCard("##tips", ImVec2(contentWidth, 0), ImGuiChildFlags_AutoResizeY)) {
         cardTitle("GOOD TO KNOW");
         ImGui::Dummy(ImVec2(0, S(4)));
-        ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("Start the game from Spidy, with the game closed: Spidy then gives it the larger render "
+        ImGui::TextUnformatted("Start the game from MilesVR, with the game closed: MilesVR then gives it the larger render "
                                "memory VR needs. Attached to a game that is already running, VR works but may break up.");
         ImGui::Dummy(ImVec2(0, S(10)));
         ImGui::TextUnformatted("The game pauses while another window is in front of it on the desktop. If the headset "
@@ -1525,20 +1636,27 @@ void App::about(ImVec2 origin, ImVec2 size) {
         auto* draw = ImGui::GetWindowDrawList();
         const ImVec2 at = ImGui::GetCursorScreenPos();
         badge(draw, ImVec2(at.x + S(34), at.y + S(36)), S(32));
-        draw->AddText(fonts_.title, S(30), ImVec2(at.x + S(84), at.y + S(6)), col(kText), "Spidy");
-        draw->AddText(fonts_.body, S(15), ImVec2(at.x + S(84), at.y + S(46)), col(kMuted), "Created by");
-        draw->AddText(fonts_.semibold, S(15), ImVec2(at.x + S(84) + measure(fonts_.body, S(15), "Created by ").x, at.y + S(46)),
+        draw->AddText(fonts_.title, S(30), ImVec2(at.x + S(86), at.y + S(8)), col(kRed, 0.9f), "MilesVR");
+        draw->AddText(fonts_.title, S(30), ImVec2(at.x + S(84), at.y + S(6)), col(kText), "MilesVR");
+        draw->AddText(fonts_.body, S(15), ImVec2(at.x + S(84), at.y + S(46)), col(kMuted), "Based on Spidy by");
+        draw->AddText(fonts_.semibold, S(15),
+                      ImVec2(at.x + S(84) + measure(fonts_.body, S(15), "Based on Spidy by ").x, at.y + S(46)),
                       col(kText), kAuthor);
         ImGui::Dummy(ImVec2(0, S(86)));
-        ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted("Spidy puts you inside Marvel's Spider-Man: Miles Morales: your head is the camera, each hand "
+        ImGui::TextUnformatted("MilesVR puts you inside Marvel's Spider-Man: Miles Morales: your head is the camera, each hand "
                                "shoots its own web, and you swing, zip and throw with your own arms.");
         ImGui::Dummy(ImVec2(0, S(8)));
-        ImGui::TextUnformatted("Spidy changes nothing in the game's folder. It attaches to the game while it runs and "
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kVenom));
+        ImGui::TextUnformatted("Miles's venom is yours too: charge your fist with a grip and punch, smash the ground, "
+                               "or throw your arms wide for the Mega Venom Blast. The Controls tab has every power.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, S(8)));
+        ImGui::TextUnformatted("MilesVR changes nothing in the game's folder. It attaches to the game while it runs and "
                                "puts back what it changed when VR stops.");
         ImGui::Dummy(ImVec2(0, S(8)));
-        ImGui::TextUnformatted("Sharing Spidy? Share the original zip with this credit intact, so players get "
+        ImGui::TextUnformatted("Sharing MilesVR? Share the original zip with this credit intact, so players get "
                                "working files and know where to find updates.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
@@ -1548,7 +1666,7 @@ void App::about(ImVec2 origin, ImVec2 size) {
         ImGui::TextUnformatted("A free fan project, not affiliated with or endorsed by Insomniac Games, Sony Interactive "
                                "Entertainment, Marvel or Valve. You need your own copy of the game on Steam.");
         ImGui::Dummy(ImVec2(0, S(8)));
-        ImGui::Text("Spidy %s. Built with the OpenXR loader (Apache 2.0), MinHook (BSD), Dear ImGui (MIT) and Python (PSF).",
+        ImGui::Text("MilesVR %s. Built with the OpenXR loader (Apache 2.0), MinHook (BSD), Dear ImGui (MIT) and Python (PSF).",
                     kVersion);
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
@@ -1562,9 +1680,9 @@ void App::about(ImVec2 origin, ImVec2 size) {
     const float x = origin.x + leftWidth + gap;
     ImGui::SetCursorScreenPos(ImVec2(x, origin.y));
     if (beginCard("##support", ImVec2(rightWidth, 0), ImGuiChildFlags_AutoResizeY)) {
-        cardTitle("SUPPORT SPIDY");
+        cardTitle("SUPPORT SPIDY'S CREATOR");
         ImGui::Dummy(ImVec2(0, S(4)));
-        ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
         ImGui::PushTextWrapPos(0);
         ImGui::TextUnformatted("Spidy is free. It is built with a lot of AI help, and those tokens aren't free. If you "
                                "enjoy swinging through the city in VR, a tip on Ko-fi keeps the updates coming.");
@@ -1597,7 +1715,7 @@ void App::about(ImVec2 origin, ImVec2 size) {
         if (secondaryButton(fonts_.icons ? "  Open the reports folder" : "Open the reports folder", width) &&
             !scan_.root.empty())
             openPath((std::filesystem::path(scan_.root) / L"reports").wstring());
-        if (secondaryButton(fonts_.icons ? "  Open the Spidy folder" : "Open the Spidy folder", width) &&
+        if (secondaryButton(fonts_.icons ? "  Open the MilesVR folder" : "Open the MilesVR folder", width) &&
             !scan_.root.empty())
             openPath(scan_.root);
         ImGui::PopStyleVar();
@@ -1637,7 +1755,7 @@ void App::updatesCard(float width) {
     case UpdateState::installed: status = format("Updating to Spidy %s.", release->version.c_str()); break;
     case UpdateState::installFailed: status = "The update failed. " + update_.message; break;
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
+    ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
     ImGui::TextWrapped("%s", status.c_str());
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, S(10)));
@@ -1652,9 +1770,9 @@ void App::updatesCard(float width) {
         // The Play tab's banner shows how it goes.
         const std::string blocker = updateBlocker();
         ImGui::BeginDisabled(!blocker.empty());
-        ImGui::PushStyleColor(ImGuiCol_Button, vec(kBlue));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec({96, 155, 255}));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({45, 110, 220}));
+        ImGui::PushStyleColor(ImGuiCol_Button, vec(kRed));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, vec(kRedHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, vec({190, 20, 42}));
         if (secondaryButton("Update now", half)) {
             updateLater_ = false;
             tab_ = Tab::play;
@@ -1701,7 +1819,7 @@ void App::modals() {
             ImGui::TextUnformatted(name);
             ImGui::PopFont();
             ImGui::Dummy(ImVec2(0, S(2)));
-            ImGui::PushStyleColor(ImGuiCol_Text, vec({200, 205, 216}));
+            ImGui::PushStyleColor(ImGuiCol_Text, vec({216, 207, 210}));
             ImGui::TextWrapped("%s", message.c_str());
             ImGui::PopStyleColor();
             ImGui::Dummy(ImVec2(0, S(8)));
@@ -1722,7 +1840,7 @@ void App::modals() {
         ImGui::PopStyleVar();
         return answer;
     };
-    if (dialog("VR is running", "Closing Spidy stops VR first: it restores the game and saves the session report. The "
+    if (dialog("VR is running", "Closing MilesVR stops VR first: it restores the game and saves the session report. The "
                                 "game keeps running.",
                "Stop VR and close", "Keep playing") == 1) {
         session_.requestStop();
@@ -1735,7 +1853,7 @@ void App::modals() {
             if (it->text.rfind("Spidy VR unavailable: ", 0) == 0)
                 reason = it->text.substr(22) + "\n\n";
         if (dialog("Administrator rights needed",
-                   reason + "Spidy can start again as administrator now; Windows asks you to allow it.",
+                   reason + "MilesVR can start again as administrator now; Windows asks you to allow it.",
                    "Restart as administrator", "Not now") == 1)
             restartElevated();
     }

@@ -1,4 +1,4 @@
-"""Draw apps/launcher/spidy.ico: the launcher's mark, a red disc with a white web.
+"""Draw apps/launcher/spidy.ico: the launcher's mark, Miles's red spider on a black disc in a red ring.
 
 The same picture as App::badge in apps/launcher/ui.cpp. Standard library only; run it again
 after changing the design.
@@ -9,44 +9,62 @@ import struct
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-RED = (227, 38, 47)
+RED = (224, 27, 51)
+BLACK = (14, 13, 16)
 SIZES = (256, 64, 48, 32, 24, 16)
+# App::badge's legs, in units of the disc's radius (y down): each a bent line, mirrored left and right.
+LEGS = ((0.08, -0.22, 0.3, -0.44, 0.34, -0.76),
+        (0.1, -0.14, 0.46, -0.3, 0.68, -0.52),
+        (0.1, -0.04, 0.46, 0.1, 0.68, 0.4),
+        (0.08, 0.04, 0.3, 0.32, 0.34, 0.74))
+
+
+def segment_distance(px, py, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    t = max(0.0, min(1.0, ((px - ax)*dx + (py - ay)*dy) / (dx*dx + dy*dy)))
+    return math.hypot(px - ax - t*dx, py - ay - t*dy)
+
+
+def spider(x, y, leg):
+    """Whether the point (in units of the radius) is on the spider."""
+    if math.hypot(x, y + 0.36) <= 0.1:
+        return True
+    if (x/0.13)**2 + ((y + 0.12)/0.19)**2 <= 1 or (x/0.12)**2 + ((y - 0.27)/0.27)**2 <= 1:
+        return True
+    ax = abs(x)
+    for l in LEGS:
+        if (segment_distance(ax, y, l[0], l[1], l[2], l[3]) <= leg or
+                segment_distance(ax, y, l[2], l[3], l[4], l[5]) <= leg):
+            return True
+    return False
 
 
 def coverage(size, samples=4):
     """RGBA rows for one icon size."""
     c = (size - 1) / 2
     radius = size * 0.47
-    spokes, rings = (8, (0.3, 0.52, 0.74)) if size > 24 else (6, (0.38, 0.72))
-    half = max(0.55, radius * 0.055 / 2) if size > 24 else 0.6
-    offset = 0.39
+    # Small icons get a thicker rim and legs, so the spider still reads.
+    rim = 0.07 if size > 24 else 0.12
+    leg = 0.0375 if size > 32 else 0.06
     rows = []
     for y in range(size):
         row = bytearray()
         for x in range(size):
-            disc = web = 0
+            disc = red = 0
             for sy in range(samples):
                 for sx in range(samples):
-                    px = x + (sx + .5) / samples - .5 - c
-                    py = y + (sy + .5) / samples - .5 - c
+                    px = (x + (sx + .5) / samples - .5 - c) / radius
+                    py = (y + (sy + .5) / samples - .5 - c) / radius
                     rho = math.hypot(px, py)
-                    if rho > radius:
+                    if rho > 1:
                         continue
                     disc += 1
-                    theta = (math.atan2(py, px) - offset) % (2*math.pi)
-                    step = 2*math.pi/spokes
-                    within = theta % step
-                    if rho <= radius*0.8 and rho*math.sin(min(within, step-within)) <= half:
-                        web += 1
-                        continue
-                    # Threads sag toward the centre between spokes, as App::badge draws them.
-                    sag = math.sin(math.pi*within/step)
-                    if any(abs(rho - radius*ring*(1 - 0.12*sag)) <= half for ring in rings):
-                        web += 1
+                    if rho >= 1 - rim or spider(px, py, leg):
+                        red += 1
             total = samples*samples
             alpha = disc/total
-            white = web/max(disc, 1)
-            rgb = [round(channel*(1-white) + 255*white) for channel in RED]
+            share = red/max(disc, 1)
+            rgb = [round(b*(1-share) + r*share) for r, b in zip(RED, BLACK)]
             row += bytes((*rgb, round(alpha*255)))
         rows.append(bytes(row))
     return rows

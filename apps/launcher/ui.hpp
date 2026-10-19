@@ -58,12 +58,15 @@ private:
     std::string updateBlocker();
     void modals();
 
-    bool beginCard(const char* id, ImVec2 size, int childFlags = 0);
+    // `venom`: the card of Miles's venom powers, edged in venom orange.
+    bool beginCard(const char* id, ImVec2 size, int childFlags = 0, bool venom = false);
     void endCard();
-    void cardTitle(const char* title, float rightWidth = 0);
+    void cardTitle(const char* title, float rightWidth = 0, bool venom = false);
     void setupRow(Mark mark, const char* title, const std::string& detail, float actionWidth,
                   const std::function<void()>& action, bool last = false);
-    void option(const char* title, const char* help, float controlWidth, const std::function<void()>& control);
+    // `venom`: a venom power's option, marked in venom orange.
+    void option(const char* title, const char* help, float controlWidth, const std::function<void()>& control,
+                bool venom = false);
     void statusMark(ImDrawList* draw, ImVec2 center, Mark mark);
     bool pillButton(const char* id, const char* icon, const char* label, ImU32 fill, ImU32 hover, ImU32 text,
                     ImVec2 size, ImFont* font = nullptr, float fontSize = 15);
@@ -72,7 +75,9 @@ private:
     bool toggle(const char* id, bool* value);
     bool link(const char* label);
     void badge(ImDrawList* draw, ImVec2 center, float radius);
-    void web(ImDrawList* draw, ImVec2 corner, float radius);
+    void halftone(ImDrawList* draw, ImVec2 corner, float radius, float alpha);
+    void bolt(ImDrawList* draw, ImVec2 from, ImVec2 to, float thickness, unsigned seed, float alpha = 1);
+    void venomBars(ImDrawList* draw, ImVec2 at, float barWidth, float height);
 
     std::vector<std::string> blockers();
     // The eye size the options ask for: the render scale of the checked headset's recommendation, or of
