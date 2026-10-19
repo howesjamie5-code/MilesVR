@@ -40,5 +40,8 @@ struct Meter {
 };
 // Once a frame: `record` is the player's actor record (0 without one).
 Meter sample(uintptr_t base, uintptr_t record);
+// The meter emptied, if its holder is still there (as the punch module's
+// writes check it): the venom let go. False when nothing was written.
+bool empty(const Meter&);
 void reset();
 } // namespace spidy::game_venom

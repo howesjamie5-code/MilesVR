@@ -202,6 +202,18 @@ spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t rec
     }
     return out;
 }
+bool spidy::game_venom::empty(const Meter& m) {
+    uintptr_t vtable{};
+    if (!m.address || !m.holder || m.address <= m.holder || m.address - m.holder >= mostOwnerOffset ||
+        !read(m.holder, &vtable, 8) || vtable != m.holderClass)
+        return false;
+    __try {
+        *reinterpret_cast<float*>(m.address) = 0;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 void spidy::game_venom::reset() {
     melee.clear();
     holders.clear();

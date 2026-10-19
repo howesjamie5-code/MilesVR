@@ -1,5 +1,22 @@
-MilesVR 0.1.18 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.19 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.18: LET THE VENOM GO WITH THE THUMBSTICK
+--------------------------------------------------
+Your idea: with the venom meter full the right hand shoots no webs, and
+sometimes you need them. Now, with the meter full, click the right thumbstick
+(the venom punch hand's stick, if you set it to Left) and the meter empties
+straight away, whatever you are doing: in a fight, mid-swing, with the fist
+charged. The right hand's webs are back at once. That click does nothing
+else (no LB + RB). The meter fills again from your hits as usual.
+0.1.18's venom bar fix is in this build too (below).
+
+What to try:
+1. Fill the meter, click the right thumbstick: does the bar empty and can
+   you web-swing with the right grip straight away?
+2. Venom punch a few times: does the bar empty every time?
+3. Restart the challenge a couple of times and try both again.
+4. Close the game and keep the reports folder.
 
 What changed since 0.1.17: THE VENOM BAR, FIXED AT THE ROOT
 --------------------------------------------------

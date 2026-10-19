@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 39, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 40, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -357,7 +357,9 @@ struct XrData {
     // Version 39: the class that holds the meter (its vtable, as an offset in
     // the game's image; 0 until known), the meter's offset in it, and where
     // the meter came from (game_venom::Meter::route).
-    uint32_t venomHolderVtable{}, venomHolderOffset{}, venomRoute{}, venomSpare{};
+    uint32_t venomHolderVtable{}, venomHolderOffset{}, venomRoute{};
+    // Version 40: the meter let go with the venom hand's thumbstick click.
+    uint32_t venomDumps{};
 };
 static_assert(sizeof(XrData) == 1216);
 // The game's own prompt and QTE calls, for one play session to say what their
@@ -751,6 +753,9 @@ DWORD WINAPI run(void*) {
         // filled still goes on until it is let go.
         float venomGrip{};
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
+        // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
+        bool venomStickBefore{}, venomStickTaken{};
+        uint32_t venomDumps{};
         uint32_t venomFills{};
         // Seconds since an enemy was last within a strike's reach: in a fight
         // the right stick's click is no LB + RB, which the game takes there
@@ -1647,6 +1652,28 @@ DWORD WINAPI run(void*) {
                     // of a swing.
                     {
                         auto& fist = motion.swing.hands[venomSide];
+                        // The venom hand's thumbstick clicked with the meter full empties
+                        // it there and then, whatever the player is doing: the fist's
+                        // charge is gone and its webs are back (the user, October 19:
+                        // "whenever i need to swing with right grip and venom is charged
+                        // i can press right thumbstick and it instantly depletes").
+                        const bool stick = frame.hands[venomSide].stickClick;
+                        if (stick && !venomStickBefore && venom_punch::full(venomMeter.value) && immersive &&
+                            !calibrationInput && !padLayer.latched()) {
+                            venomStickTaken = true;
+                            if (game_venom::empty(venomMeter)) {
+                                venomMeter.value = 0;
+                                ++venomDumps;
+                                runtime.haptic(venomSide, .6f, .1f);
+                                char text[96];
+                                sprintf_s(text, "Venom let go - the %s hand's webs are back", venomName);
+                                message(3, 0, text);
+                            } else {
+                                message(3, 0, "Venom could not be let go (the meter is not found yet)");
+                            }
+                        }
+                        venomStickBefore = stick;
+                        venomStickTaken = venomStickTaken && stick;
                         const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
                                                !calibrationInput && !padLayer.latched();
                         if (!venomHand)
@@ -1662,11 +1689,15 @@ DWORD WINAPI run(void*) {
                         if (venomHandOn)
                             fist.grip = fist.trigger = 0;
                     }
+                    // A thumbstick's click, but not the venom hand's that let the venom go.
+                    const auto stickClick = [&](unsigned i) {
+                        return frame.hands[i].stickClick && !(venomStickTaken && i == venomSide);
+                    };
                     // Slow motion: the left thumbstick's click, in VR play outside the calibration.
                     const bool slowAllowed = immersive && calibration.phase() == CalibrationPhase::idle;
                     stepSlowMotion(frame.seconds,
-                                   slowPress.update(frame.seconds, slowAllowed, frame.hands[0].stickClick,
-                                                    frame.hands[1].stickClick),
+                                   slowPress.update(frame.seconds, slowAllowed, stickClick(0),
+                                                    stickClick(1)),
                                    slowAllowed);
                     if (motion.active && !raysStarted) {
                         native_rays::Config rays;
@@ -2169,7 +2200,7 @@ DWORD WINAPI run(void*) {
                             std::hypot(frame.hands[1].stickX, frame.hands[1].stickY) > .5f;
                         const bool layerOn =
                             padLayer.update(frame.seconds, playing && !calibrationInput,
-                                            frame.hands[0].stickClick, frame.hands[1].stickClick, layerBusy);
+                                            stickClick(0), stickClick(1), layerBusy);
                         if (padLayer.entries() != padEntriesBefore) {
                             padEntriesBefore = padLayer.entries();
                             runtime.haptic(0, .5f);
@@ -2404,8 +2435,8 @@ DWORD WINAPI run(void*) {
                         }
                         const bool pulled =
                             pullPress.update(frame.seconds, reaching,
-                                             frame.hands[1].stickClick && calmSeconds >= venom_punch::fightCalmSeconds,
-                                             frame.hands[0].stickClick) ||
+                                             stickClick(1) && calmSeconds >= venom_punch::fightCalmSeconds,
+                                             stickClick(0)) ||
                             (yanked && playing);
                         // A yank at a thing the game is prompting for sends what it
                         // asks (its LT + RT for a vent as readily as its LB + RB for a
@@ -2670,6 +2701,7 @@ DWORD WINAPI run(void*) {
                         d.venomHolderVtable = venomMeter.holderVtable;
                         d.venomHolderOffset = venomMeter.holderOffset;
                         d.venomRoute = venomMeter.route;
+                        d.venomDumps = venomDumps;
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];
@@ -3456,7 +3488,7 @@ DWORD WINAPI run(void*) {
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts (hold: step "
                                   "up to it), X opens the game menu (hold: the gadget wheel), the menu button "
                                   "pauses, the left stick's click slows time; a trigger pulled at your temple "
-                                  "scans; right stick: click is the game's LB + RB (not in a fight), down heals, up is its LT + RT (vents)");
+                                  "scans; right stick: click is the game's LB + RB (not in a fight; with venom full it lets the venom go), down heals, up is its LT + RT (vents)");
                 }
             }
             {
