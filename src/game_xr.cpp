@@ -2820,10 +2820,8 @@ DWORD WINAPI run(void*) {
                         if (venomFull && !venomFullBefore && steering) {
                             runtime.haptic(venomSide, .4f, .08f);
                             char text[96];
-                            sprintf_s(text, "Venom full - hold the %s %s to charge your fist; its %s shoots webs "
-                                            "(tap: a web ball)",
-                                      venomName, values.venomTrigger ? "trigger" : "grip",
-                                      values.venomTrigger ? "grip" : "trigger");
+                            sprintf_s(text, "Venom full - %s %s: hold to charge your fist, tap for a web ball",
+                                      venomName, values.venomTrigger ? "trigger" : "grip");
                             message(3, 0, text);
                         }
                         venomFills += venomFull && !venomFullBefore;

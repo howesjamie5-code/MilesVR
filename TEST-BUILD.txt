@@ -1,5 +1,17 @@
-MilesVR 0.1.49 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.50 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.49: TWO DESCRIPTIONS FIXED
+--------------------------------------------------
+The launcher's Web button description and the headset's "Venom full"
+message still spoke of a web ball on the web button. They now read:
+- Web button: "Which button shoots and holds a web, to swing: only that.
+  The other one shoots web balls and reels in."
+- "Venom full - right trigger: hold to charge your fist, tap for a web
+  ball" (your venom button and hand).
+- The game's MILES VR settings, VENOM BUTTON: "Hold it to charge your
+  venom fist, tap it for a web ball. Never the web button."
+Nothing else changed.
 
 What changed since 0.1.48: WEB BALLS OFF THE SWING BUTTON
 --------------------------------------------------
