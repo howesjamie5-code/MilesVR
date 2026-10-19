@@ -1,5 +1,16 @@
-MilesVR 0.1.31 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.32 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.31: THE PHONE'S MUSIC FOLDER
+--------------------------------------------------
+Your songs go in the Music folder right next to "MilesVR Launcher.exe"
+(this folder). Put mp3, wav, wma, m4a or aac files in it; the phone's
+MUSIC app plays them in order (AUTOPLAY goes on to the next).
+Before this build the phone looked for Spidy's launcher name, did not find
+it, and used a Music folder hidden in reportsridge-modules\... instead.
+
+What to try:
+1. Put a few songs in Music, start VR, draw the phone, open MUSIC.
 
 What changed since 0.1.30: THE PHONE IS EASIER TO PULL OUT
 --------------------------------------------------

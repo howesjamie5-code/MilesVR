@@ -371,7 +371,9 @@ std::wstring spidyHome() {
         if (slash == std::wstring::npos)
             break;
         folder.erase(slash);
-        for (const wchar_t* launcher : {L"\\Launch Spidy VR.cmd", L"\\Spidy Launcher.exe"})
+        // MilesVR's launcher is "MilesVR Launcher.exe": without it here the Music folder was made
+        // under reports\bridge-modules\<hash>, where the game loads this module from.
+        for (const wchar_t* launcher : {L"\\Launch Spidy VR.cmd", L"\\Spidy Launcher.exe", L"\\MilesVR Launcher.exe"})
             if (GetFileAttributesW((folder + launcher).c_str()) != INVALID_FILE_ATTRIBUTES)
                 root = folder;
     }
