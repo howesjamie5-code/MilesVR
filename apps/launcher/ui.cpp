@@ -1155,7 +1155,8 @@ void App::optionsCard(ImVec2 size) {
             "to web-swing, and hold the trigger to charge your venom fist.",
             "If Web button is on Trigger and Venom button is on Grip, it is the other way round: tap the trigger to "
             "web up enemies, hold the trigger to web-swing, and hold the grip to charge your venom fist.",
-            "Until a venom bar is full, the grip and trigger work as normal.",
+            "Until a venom bar is full, the buttons work as normal: the grip shoots webs and swings, and the "
+            "trigger shoots web balls (with a web attached it reels in).",
         };
         const size_t chosen = o.venomTrigger ? 0 : 1;
         auto* draw = ImGui::GetWindowDrawList();
@@ -1616,8 +1617,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                         "bars",
          fullLine.c_str()},
         {"Venom Button", "Which button charges the venom: Play tab > Venom button, or VENOM BUTTON in the game's "
-                         "MILES VR settings. With a bar full the other button shoots that hand's webs: hold to "
-                         "swing, tap for a web ball (the orange box on the Play tab)",
+                         "MILES VR settings. Until a bar is full, web balls are the trigger as normal. With a bar "
+                         "full the other button shoots that hand's webs: hold to swing, tap for a web ball (the "
+                         "orange box on the Play tab)",
          buttonLine.c_str()},
         {"Venom Charge", "Hold the venom button until your fist glows and the controller buzzes. With a web "
                          "attached it reels instead. The charge lasts about 1.5 s after you let go",

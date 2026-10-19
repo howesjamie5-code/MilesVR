@@ -1,5 +1,17 @@
-MilesVR 0.1.44 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.45 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.44: WHERE WEB BALLS ARE, SPELLED OUT
+--------------------------------------------------
+The venom box on the Play tab, the VENOM POWERS card, controls.txt and
+the README now say plainly: until a venom bar is full, web balls are the
+trigger (with no web attached), as normal. Only with a bar full does the
+other button's tap become the web ball (the grip, with Venom button:
+Trigger). Nothing in the game changed.
+
+What to try:
+1. With a bar full and Venom button: Trigger, tap the right grip at an
+   enemy: a web ball?
 
 What changed since 0.1.43: THE CONTROLS TAB, CHECKED AGAINST THE LOGS
 --------------------------------------------------
