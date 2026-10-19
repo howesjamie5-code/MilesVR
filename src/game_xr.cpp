@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 43, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 44, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -367,7 +367,9 @@ struct XrData {
     uint32_t venomMegas{};
     // Version 42: the meter's holder's 16 words around it (game_venom::Meter::around).
     uint32_t venomAround[16]{};
-    uint32_t venomMegaHits{}, venomSpare{};
+    uint32_t venomMegaHits{};
+    // Version 44: the game's venom prompts answered by a venom gesture.
+    uint32_t venomPromptPresses{};
 };
 static_assert(sizeof(XrData) == 1304);
 // The game's own prompt and QTE calls, for one play session to say what their
@@ -765,6 +767,13 @@ DWORD WINAPI run(void*) {
         bool venomHandBefore{}, venomKeepWeb{}, venomHandOn{}, venomArmed{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
+        // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
+        // (venom_punch::venomPrompt), for venomPromptLeft seconds; again once the web button is let go.
+        bool venomPromptOn{}, venomPromptSpent{}, venomRelSeen{};
+        float venomPromptLeft{};
+        prompt_buttons::Demand venomPromptDemand{};
+        uint32_t venomPromptPresses{};
+        Vec3 venomRelBefore{}, venomFistVelocity{};
         uint32_t venomDumps{};
         uint32_t venomFills{};
         // Seconds since an enemy was last within a strike's reach: in a fight
@@ -1684,6 +1693,44 @@ DWORD WINAPI run(void*) {
                         }
                         venomStickBefore = stick;
                         venomStickTaken = venomStickTaken && stick;
+                        // The game asking for one of its own venom moves (a generator to
+                        // power, a story beat): the venom hand's web button held and a
+                        // punch out or down, or both arms out wide, send the prompt's own
+                        // buttons, so the game does its move and the story goes on - with
+                        // no meter or marked enemy needed. Its webs are off meanwhile. Y
+                        // still sends any prompt's buttons too (ContextPress).
+                        {
+                            const auto promptAsked =
+                                padLayer.latched() ? prompt_buttons::Demand{} : game_prompts::demand();
+                            venomPromptOn = immersive && !calibrationInput &&
+                                            venom_punch::venomPrompt(promptAsked.buttons);
+                            Vec3 rel[2]{};
+                            for (unsigned i = 0; i < 2; ++i)
+                                rel[i] = frame.hands[i].grip.position - frame.head.position;
+                            const bool seen = frame.hands[venomSide].valid && frame.hands[1 - venomSide].valid &&
+                                              finite(rel[0]) && finite(rel[1]) && frame.seconds > 0;
+                            if (seen && venomRelSeen)
+                                venomFistVelocity = venomFistVelocity * .5f +
+                                                    (rel[venomSide] - venomRelBefore) / frame.seconds * .5f;
+                            else
+                                venomFistVelocity = {};
+                            venomRelSeen = seen;
+                            venomRelBefore = rel[venomSide];
+                            const bool held = fist.grip > venom_punch::gripOn;
+                            if (!held)
+                                venomPromptSpent = false;
+                            if (venomPromptOn && held && !venomPromptSpent && venomPromptLeft <= 0 && seen &&
+                                venom_punch::promptGesture(venomFistVelocity, rel[0], rel[1])) {
+                                venomPromptSpent = true;
+                                venomPromptDemand = promptAsked;
+                                venomPromptLeft = promptAsked.hold ? .8f : .3f;
+                                ++venomPromptPresses;
+                                runtime.haptic(venomSide, 1.f, .2f);
+                                message(3, 0, "Venom - the game's venom move, as its prompt asks");
+                            }
+                            if (venomPromptOn)
+                                fist.grip = fist.trigger = 0;
+                        }
                         const bool venomHand = venom_punch::full(venomMeter.value) && immersive &&
                                                !calibrationInput && !padLayer.latched();
                         if (!venomHand)
@@ -2504,6 +2551,11 @@ DWORD WINAPI run(void*) {
                             walk.demand = asked;
                         else
                             walk.pull = pulled;
+                        // A venom gesture answering the game's venom prompt (above).
+                        if (venomPromptLeft > 0) {
+                            walk.demand = venomPromptDemand;
+                            venomPromptLeft -= frame.seconds;
+                        }
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");
@@ -2765,6 +2817,7 @@ DWORD WINAPI run(void*) {
                         d.venomSmashesCalledOff = venomSmashesCalledOff;
                         d.venomMegas = static_cast<uint32_t>(venomMegasBefore);
                         d.venomMegaHits = venomMegaHits;
+                        d.venomPromptPresses = venomPromptPresses;
                         std::memcpy(d.venomAround, venomMeter.around, sizeof(d.venomAround));
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];

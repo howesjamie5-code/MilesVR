@@ -660,6 +660,13 @@ int main() {
         check(spread({-.75f, -.1f, 0}, {.75f, 0, -.1f}), "arms out wide, a T");
         check(!spread({-.3f, -.2f, -.3f}, {.3f, -.2f, -.3f}), "fists in front: no");
         check(!spread({-.75f, -.9f, 0}, {.75f, -.9f, 0}), "arms hanging down: no");
+        check(venomPrompt(0x100 | 0x4000) && venomPrompt(0x100 | 0x1000) && venomPrompt(0x40 | 0x80),
+              "the game's venom prompts: LB + a face button, both sticks");
+        check(!venomPrompt(0x100 | 0x200) && !venomPrompt(0x4000) && !venomPrompt(0x100) && !venomPrompt(0x80),
+              "not LB + RB (the web throw), a face button alone, LB alone or one stick");
+        check(promptGesture({0, 0, -3}, {}, {}) && promptGesture({0, -3, 0}, {}, {}) &&
+                  promptGesture({}, {-.75f, 0, 0}, {.75f, 0, 0}) && !promptGesture({0, 0, -1}, {}, {}),
+              "a punch out or down, or arms wide, answers it; a slow move does not");
         Spread wide;
         check(!wide.update(.05f, true), "not held long enough yet");
         check(wide.update(.06f, true), "held spreadSeconds: it fires");

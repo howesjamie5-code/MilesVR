@@ -1416,6 +1416,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"All three bars full: charge, arms out wide", "Mega Venom Blast. Hold the grip to charge, then stretch "
                                                          "both arms out to the sides: every enemy within 10 m is "
                                                          "hit hard and thrown far. It uses all three bars"},
+          {"The game asks for a venom move", "Powering something up, a story moment: hold the grip and punch "
+                                             "(or stretch your arms out). The game does its own venom move, as "
+                                             "its prompt asks. Y does it too"},
           {"Let go of the grip", "The charge stays for a moment and fades: punch before it does"},
           {"Click the right stick", "With the meter full: let the venom go. The meter empties at once, whatever you "
                                     "are doing, and the right hand's webs are back"},

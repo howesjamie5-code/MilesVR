@@ -271,6 +271,23 @@ inline Vec3 megaFlight(Vec3 centre, Vec3 feet) {
     const Vec3 f = blastFlight(centre, feet);
     return Vec3{f.x, 0, f.z} * (megaThrow / smashThrow) + Vec3{0, megaLift, 0};
 }
+// The game prompting for one of its own venom moves (the user, October 19:
+// story moments "such as powering stuff up" must go on with the venom punch,
+// the smash and the blast). Miles Morales's venom moves are its LB with a
+// face button (Venom Punch, Smash, Jump, Dash) and both sticks pressed (the
+// Mega Venom Blast); LB with RB is its web throw, not venom. XInput's bits,
+// as prompt_buttons has them.
+inline bool venomPrompt(uint16_t buttons) {
+    constexpr uint16_t lb = 0x100, rb = 0x200, faces = 0x1000 | 0x2000 | 0x4000 | 0x8000, l3 = 0x40, r3 = 0x80;
+    return ((buttons & lb) && !(buttons & rb) && (buttons & faces)) || ((buttons & l3) && (buttons & r3));
+}
+// A venom gesture made for such a prompt, the venom hand's web button held:
+// the fist punched out or down (at least smashSpeed, relative to the head),
+// or both arms out wide. The prompt's own buttons go to the game for it.
+inline bool promptGesture(Vec3 fistVelocity, Vec3 left, Vec3 right) {
+    const float speed = length(fistVelocity);
+    return (std::isfinite(speed) && speed >= smashSpeed) || spread(left, right);
+}
 // The drop: from the air straight down at dropSpeed until he stands, the
 // smash then; one that finds no ground within dropSeconds is called off.
 class SmashDrop {

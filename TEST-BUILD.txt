@@ -1,5 +1,26 @@
-MilesVR 0.1.23 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.24 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.23: VENOM MOVES FOR THE GAME'S OWN PROMPTS
+--------------------------------------------------
+You asked for the venom moves to work where the story needs them (powering
+something up, a scripted moment). The mod's venom moves are its own, so the
+game never counted them. Now, whenever the game shows a prompt for one of
+its venom moves (LB plus a button, or both sticks for the Mega Venom
+Blast):
+- the right grip shoots no web while the prompt shows;
+- hold the right grip and punch (forward or down), or stretch both arms out
+  wide: the mod presses exactly the buttons the prompt shows, so the game
+  does its own venom move and the story goes on. No full meter or marked
+  enemy needed. A buzz and a message tell you it was sent.
+- Y still sends whatever any prompt asks for, as before.
+
+What to try:
+1. At a story moment that asks for a venom move (a generator, a door,
+   anything with a venom prompt): grip + punch. Did the game do its move
+   and carry on?
+2. If it did not: tell me what the prompt showed, and keep the reports
+   folder (it counts how often the mod answered one).
 
 What changed since 0.1.22: THE MEGA VENOM BLAST
 --------------------------------------------------
