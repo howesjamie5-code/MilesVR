@@ -755,6 +755,30 @@ int main() {
         check(o.reel == .8f && o.charge == 0 && o.web == 1, "with a web, it reels");
         check(VenomButtons::tapSeconds < spidy::venom_punch::Charge::chargeSeconds, "a tap never charges");
     });
+    test("the Mega Venom Blast's moment: deepest, longest, and it starts after any other", [] {
+        SlowMoments m;
+        check(m.start(Moment::blow), "a blow's moment");
+        for (int i = 0; i < 120; ++i)
+            m.update(1.f / 90, true);
+        check(!m.start(Moment::called) && m.start(Moment::mega), "in the rest after one: no other, but the mega");
+        for (int i = 0; i < 30; ++i)
+            m.update(1.f / 90, true);
+        check(std::fabs(m.timeScale() - .15f) < .01f && m.count(Moment::mega) == 1, "the deepest slow motion");
+        float held{};
+        while (m.timeScale() < .99f && held < 5) {
+            m.update(1.f / 90, true);
+            held += 1.f / 90;
+        }
+        check(held > .9f && held < 1.6f, "about a second, easing back");
+        const auto wave = impactWave(ImpactSound::Mega);
+        check(wave.size() == 44 + 2 * static_cast<size_t>(std::lround(impactSeconds(ImpactSound::Mega) * 22050)) &&
+                  impactSeconds(ImpactSound::Mega) > impactSeconds(ImpactSound::Finisher),
+              "its sound: longer than a finisher's");
+        int16_t loudest{};
+        for (size_t i = 44; i + 1 < wave.size(); i += 2)
+            loudest = std::max<int16_t>(loudest, static_cast<int16_t>(std::abs(static_cast<int16_t>(wave[i] | wave[i + 1] << 8))));
+        check(loudest > 20000, "and loud");
+    });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;
         check(jumping({0, 3, 0}) && jumping({1, 3, 0}), "fast and steeply up");

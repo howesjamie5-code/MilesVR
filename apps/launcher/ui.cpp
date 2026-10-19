@@ -1621,8 +1621,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!"},
         {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up"},
         {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit"},
-        {"Mega Venom Blast", "3 bars full: squeeze both grips together. The game's own blast, slow motion and sound. 3 "
-                             "bars", "MEGA VENOM BLAST - the game's own (its L3 + R3)"},
+        {"Mega Venom Blast", "3 bars full: squeeze both grips together. A boom and a slow-motion moment. 3 bars",
+         "MEGA VENOM BLAST! 5 enemies hit"},
         {"Story Venom", "Out of a fight: hold the venom button and punch",
          "Venom - the game's own venom punch (its LB + X), for as long as you hold the venom button"},
         {"Venom Release", "Venom full: click the venom hand's stick to empty the meter", releaseLine.c_str()},

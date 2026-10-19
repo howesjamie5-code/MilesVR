@@ -16,6 +16,9 @@ enum class ImpactSound : std::uint8_t {
     Heavy,    // one that sends him flying, lifts him or slams him
     Finisher, // the flow's
     Rush,     // a web strike's flight
+    // The Mega Venom Blast (MilesVR 0.1.58): a rising rush of charge, then a
+    // deep boom with an electric crackle over a long rumble.
+    Mega,
 };
 // The sound as a WAV file in memory: 16-bit mono at `rate` samples a second.
 std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate = 22050);

@@ -20,6 +20,8 @@ constexpr Shape shapes[] = {
     {.42f, 110, 34, 9, 1.f, 2000, 45, .8f, 2.8f, .86f},
 };
 constexpr float rushSeconds = .22f, rushGain = .2f;
+// The Mega Venom Blast: its charge rises for megaCharge seconds, then the boom.
+constexpr float megaSeconds = 1.6f, megaCharge = .22f;
 // Uniform noise in -1..1, the same every time.
 struct Noise {
     std::uint32_t state = 0x2545f491;
@@ -31,7 +33,9 @@ struct Noise {
 } // namespace
 
 float impactSeconds(ImpactSound sound) {
-    return sound == ImpactSound::Rush ? rushSeconds : shapes[static_cast<unsigned>(sound) & 3].seconds;
+    return sound == ImpactSound::Rush   ? rushSeconds
+           : sound == ImpactSound::Mega ? megaSeconds
+                                        : shapes[static_cast<unsigned>(sound) & 3].seconds;
 }
 std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate) {
     rate = std::clamp(rate, 8000u, 48000u);
@@ -39,7 +43,39 @@ std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate) {
     const auto count = static_cast<std::uint32_t>(std::lround(seconds * static_cast<float>(rate)));
     std::vector<float> samples(count);
     Noise noise;
-    if (sound == ImpactSound::Rush) {
+    if (sound == ImpactSound::Mega) {
+        // A rush of noise rising into the boom; the boom a low tone falling to
+        // a growl over a burst of noise, pressed hard; a crackle of sparks; and
+        // the rumble the boom leaves, dying over the last second.
+        float low{}, band{}, phase{}, snap{}, rumble{}, spark{};
+        const float r = static_cast<float>(rate);
+        const float snapSmooth = 1 - std::exp(-2 * pi * 2200 / r), rumbleSmooth = 1 - std::exp(-2 * pi * 120 / r);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const float t = static_cast<float>(i) / r;
+            float sum = 0;
+            if (t < megaCharge) {
+                const float u = t / megaCharge;
+                const float centre = 400 + 2400 * u * u;
+                const float f = 2 * std::sin(pi * centre / r);
+                const float high = noise.next() - low - .6f * band;
+                band += f * high;
+                low += f * band;
+                sum += band * u * u * .55f;
+            } else {
+                const float b = t - megaCharge;
+                phase += 2 * pi * (32 + 90 * std::exp(-b * 9)) / r;
+                snap += (noise.next() - snap) * snapSmooth;
+                rumble += (noise.next() - rumble) * rumbleSmooth;
+                // Sparks: now and then a click that rings for a moment.
+                if (noise.next() > .9993f - .0006f * std::exp(-b * 2))
+                    spark = noise.next() > 0 ? 1.f : -1.f;
+                spark *= .985f;
+                sum += std::sin(phase) * std::exp(-b * 2.6f) * 1.1f + snap * std::exp(-b * 14) * .9f +
+                       rumble * std::exp(-b * 1.7f) * 2.2f + spark * std::exp(-b * 1.2f) * .35f;
+            }
+            samples[i] = std::tanh(sum * 2.4f) / std::tanh(2.4f) * .92f;
+        }
+    } else if (sound == ImpactSound::Rush) {
         // Noise through a band that rises and falls back, swelling and fading.
         float low{}, band{};
         for (std::uint32_t i = 0; i < count; ++i) {

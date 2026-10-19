@@ -1,5 +1,20 @@
-MilesVR 0.1.57 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.58 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.57: MEGA VENOM BLAST - BACK TO MILESVR'S, WITH SOUND AND SLOW MOTION
+--------------------------------------------------
+Sending the game its own Mega Venom Blast did not work, so it is
+MilesVR's own blast again (as in 0.1.56: three full bars, squeeze both
+grips). Now it also has:
+- its own sound: a rush of charge, a deep boom, crackling sparks and a
+  long rumble (made by MilesVR - the game's own sound cannot be taken
+  out of its audio engine);
+- its own slow motion: the game slows to 15% for about a second, then
+  eases back, every time.
+
+What to try:
+1. Three full bars, squeeze both grips: the boom and the slow motion?
+   Too long, too short, too loud?
 
 What changed since 0.1.56: THE GAME'S OWN MEGA VENOM BLAST
 --------------------------------------------------

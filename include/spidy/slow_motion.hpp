@@ -87,15 +87,21 @@ enum class Moment : std::uint8_t {
     // this one is done. (The user, October 12: "its not clear when they're
     // dead (maybe a light slow motion or visual)".)
     knockout,
+    // The Mega Venom Blast (MilesVR 0.1.58, the user: "put in your own slow
+    // motion" as the flat game has): the deepest and the longest, and it
+    // starts whatever came just before.
+    mega,
 };
-inline constexpr unsigned momentKinds = 5;
+inline constexpr unsigned momentKinds = 6;
 struct MomentTuning {
     // The game's time in a moment, per real second (a knockout's: `light`);
     // real seconds easing into it and back out.
     float scale = .3f, light = .55f, in = .07f, out = .35f;
+    // The Mega Venom Blast's: deeper than `scale`.
+    float deep = .15f;
     // Real seconds each kind holds (Moment's order).
     // A thug brought to a player in the air: long enough to land a blow.
-    float hold[momentKinds] = {.3f, .35f, 1.2f, .6f, .2f};
+    float hold[momentKinds] = {.3f, .35f, 1.2f, .6f, .2f, .9f};
     // No moment starts this soon after the last one ended: a flurry of blows
     // is not one long slow motion. A dodge's starts all the same.
     float rest = 1.5f;

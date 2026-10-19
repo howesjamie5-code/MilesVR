@@ -802,12 +802,6 @@ DWORD WINAPI run(void*) {
         venom_punch::BothGrips bothGrips;
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
-        // 0.1.57 (the user: the Mega Venom Blast "a quick slow motion like its flat screen counterpart with
-        // the same soundfx"): the squeeze sends the game its own Mega Venom Blast, its L3 + R3, for
-        // megaPadLeft seconds; if the bars are still full megaFallbackMs later the game did not take it
-        // (no skill, a story moment), and the mod's own blast goes off instead.
-        float megaPadLeft{};
-        ULONGLONG megaFallbackAt{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
         bool venomStickBefore{}, venomStickTaken{};
         // The game prompting for one of its venom moves: the venom gesture sends the prompt's buttons
@@ -1100,9 +1094,9 @@ DWORD WINAPI run(void*) {
         uint32_t senseShown{}, senseFrames{}, senseSightFrames{}, senseTingles{};
         uint32_t senseBroken{}, senseDodges{};
         // (They outlive the session: one may still be playing as it ends.)
-        static const std::vector<uint8_t> sounds[5] = {
-            impactWave(ImpactSound::Light), impactWave(ImpactSound::Firm), impactWave(ImpactSound::Heavy),
-            impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush)};
+        static const std::vector<uint8_t> sounds[6] = {
+            impactWave(ImpactSound::Light),    impactWave(ImpactSound::Firm), impactWave(ImpactSound::Heavy),
+            impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush), impactWave(ImpactSound::Mega)};
         // One at a time, the newest cutting the one before short: a strike's
         // rush ends in its blow.
         auto play = [&](ImpactSound sound) {
@@ -1925,20 +1919,10 @@ DWORD WINAPI run(void*) {
                                            !calibrationInput && !padLayer.latched();
                         const auto both = bothGrips.update(frame.seconds, ready, frame.hands[0].squeeze,
                                                            frame.hands[1].squeeze);
-                        constexpr ULONGLONG megaFallbackMs = 1500;
-                        if (both.fire) {
-                            megaPadLeft = .35f;
-                            megaFallbackAt = GetTickCount64() + megaFallbackMs;
-                            runtime.haptic(0, 1.f, .3f);
-                            runtime.haptic(1, 1.f, .3f);
-                            message(3, 0, "MEGA VENOM BLAST - the game's own (its L3 + R3)");
-                        }
-                        megaPadLeft = std::max(0.f, megaPadLeft - static_cast<float>(frame.seconds));
-                        if (megaFallbackAt && GetTickCount64() >= megaFallbackAt) {
-                            megaFallbackAt = 0;
-                            if (venom_punch::megaFull(venomMeter.value))
-                                venomMegaRequests = venomMegaRequests + 1 ? venomMegaRequests + 1 : 1;
-                        }
+                        // 0.1.57 sent the game its own L3 + R3 here; the user: "it didnt work just
+                        // restore it" - the mod's own blast, with a sound and a slow moment (below).
+                        if (both.fire)
+                            venomMegaRequests = venomMegaRequests + 1 ? venomMegaRequests + 1 : 1;
                         for (unsigned i = 0; i < 2; ++i)
                             if (both.hold[i])
                                 (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
@@ -2943,6 +2927,9 @@ DWORD WINAPI run(void*) {
                                         burst.since = frame.predictedDisplayTime;
                                     }
                                     char text[96];
+                                    // Its boom and its slow moment (0.1.58).
+                                    play(ImpactSound::Mega);
+                                    moments.start(Moment::mega);
                                     sprintf_s(text, "MEGA VENOM BLAST! %u %s", exchange.megaHits,
                                               exchange.megaHits == 1 ? "enemy hit" : "enemies hit");
                                     message(3, 0, text);
@@ -2992,9 +2979,6 @@ DWORD WINAPI run(void*) {
                         // A venom gesture sending the game's own venom move (above).
                         if (venomPromptLeft > 0)
                             walk.demand = venomPromptDemand;
-                        // The Mega Venom Blast: the game's own L3 + R3 (above).
-                        if (megaPadLeft > 0)
-                            walk.demand.buttons |= prompt_buttons::padLeftThumb | prompt_buttons::padRightThumb;
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");

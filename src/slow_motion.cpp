@@ -91,6 +91,7 @@ SlowMoments::SlowMoments(const MomentTuning& tuning) : tuning_(tuning) {
     const MomentTuning defaults;
     tuning_.scale = std::isfinite(tuning.scale) ? std::clamp(tuning.scale, .05f, 1.f) : defaults.scale;
     tuning_.light = std::isfinite(tuning.light) ? std::clamp(tuning.light, tuning_.scale, 1.f) : defaults.light;
+    tuning_.deep = std::isfinite(tuning.deep) ? std::clamp(tuning.deep, .05f, tuning_.scale) : defaults.deep;
     scale_ = tuning_.scale;
     tuning_.in = positive(tuning.in, defaults.in);
     tuning_.out = positive(tuning.out, defaults.out);
@@ -101,11 +102,11 @@ SlowMoments::SlowMoments(const MomentTuning& tuning) : tuning_(tuning) {
 bool SlowMoments::start(Moment kind) {
     const unsigned k = static_cast<unsigned>(kind) % momentKinds;
     const bool going = left_ > 0;
-    if (!going && kind != Moment::dodge && sinceEnd_ < tuning_.rest)
+    if (!going && kind != Moment::dodge && kind != Moment::mega && sinceEnd_ < tuning_.rest)
         return false;
     if (!going)
         sinceStart_ = 0;
-    const float scale = kind == Moment::knockout ? tuning_.light : tuning_.scale;
+    const float scale = kind == Moment::knockout ? tuning_.light : kind == Moment::mega ? tuning_.deep : tuning_.scale;
     scale_ = going || level_ > 0 ? std::min(scale_, scale) : scale;
     left_ = std::max(left_, tuning_.hold[k]);
     ++counts_[k];
