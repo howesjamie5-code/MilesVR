@@ -584,6 +584,25 @@ int main() {
         check(filled(250, 10) == 250, "a meter of more bars than one is not cut back");
         check(spent(100) == 0 && spent(60) == 0 && spent(300) == 200 && spent(250) == 150,
               "a venom move takes one bar");
+        // The 100% save's words at the meter: three bars of 100, the first full, the second at 8.1.
+        const float three[6] = {100, 100, 8.1f, 100, 0, 100};
+        auto b = bars(three);
+        check(b.count == 3 && std::fabs(spidy::venom_punch::total(b) - 108.1f) < 1e-3f && capacity(b) == 300, "three bars read");
+        b = gained(b, 10);
+        check(b.value[0] == 100 && std::fabs(b.value[1] - 18.1f) < 1e-3f && b.value[2] == 0, "a hit fills the next bar");
+        b = gained(holding(b, 295), 20);
+        check(b.value[0] == 100 && b.value[1] == 100 && b.value[2] == 100, "never past the last");
+        b = paid(holding(b, 250));
+        check(b.value[0] == 100 && b.value[1] == 50 && b.value[2] == 0, "a venom move takes one bar off the whole");
+        b = paid(holding(b, 60));
+        check(spidy::venom_punch::total(b) == 0, "less than a bar: all of it");
+        const float one[6] = {40, 100, 0, 0, 0, 0};
+        b = bars(one);
+        check(b.count == 1 && spidy::venom_punch::total(b) == 40 && capacity(b) == 100, "early in the story: one bar");
+        check(spidy::venom_punch::total(gained(b, 90)) == 100 && spidy::venom_punch::total(paid(holding(b, 100))) == 0, "one bar fills and empties");
+        const float odd[6] = {70, -5, 1, 2, 3, 4};
+        b = bars(odd);
+        check(b.count == 1 && b.most[0] == 100 && spidy::venom_punch::total(b) == 70, "no believable most: one bar of 100");
         Charge c;
         auto o = c.update(.1f, true, false, 1);
         check(!o.armed && o.glow == 0, "below full the grip charges nothing");

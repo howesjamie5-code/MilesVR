@@ -125,29 +125,42 @@ bool read(uintptr_t p, void* out, size_t n) {
 }
 // The meter set to `value`, if the component it lies in (game_venom) is still there. 0.1.15 wrote
 // into whatever the game had put after the HeroMeleeManager and crashed it.
-bool writeMeter(uint64_t meter, float value) {
+bool holderThere(uint64_t meter) {
     const uint64_t holder = venomHolder.load(), expected = venomHolderClass.load();
     uintptr_t vtable{};
-    if (!meter || !holder || meter <= holder || meter - holder >= 0x1000 || !read(holder, &vtable, 8) ||
-        vtable != expected)
+    return meter && holder && meter > holder && meter - holder < 0x1000 && read(holder, &vtable, 8) &&
+           vtable == expected;
+}
+// Miles's bars at the meter (venom_punch::Bars: one early in the story, three later).
+bool readBars(uint64_t meter, venom_punch::Bars& out) {
+    float words[venom_punch::mostBars * 2]{};
+    if (!meter || !read(meter, words, sizeof(words)))
+        return false;
+    out = venom_punch::bars(words);
+    return true;
+}
+// The bars' values written back, the holder checked first.
+bool writeBars(uint64_t meter, const venom_punch::Bars& b) {
+    if (!holderThere(meter))
         return false;
     __try {
-        *reinterpret_cast<float*>(meter) = value;
+        for (unsigned i = 0; i < b.count; ++i)
+            reinterpret_cast<float*>(meter)[i * 2] = b.value[i];
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
-// A venom move's cost: one bar (venom_punch::spent).
+// A venom move's cost: one bar off the whole (venom_punch::paid).
 bool spendBar(uint64_t meter) {
-    float now{};
-    return meter && read(meter, &now, 4) && std::isfinite(now) && writeMeter(meter, venom_punch::spent(now));
+    venom_punch::Bars b;
+    return readBars(meter, b) && writeBars(meter, venom_punch::paid(b));
 }
-// A blow of the player's charges the meter (venom_punch::gain).
+// A blow of the player's charges the bars in order (venom_punch::gain).
 void chargeMeter(uint64_t meter, float amount) {
-    float now{};
-    if (meter && read(meter, &now, 4) && std::isfinite(now))
-        writeMeter(meter, venom_punch::filled(now, amount));
+    venom_punch::Bars b;
+    if (readBars(meter, b))
+        writeBars(meter, venom_punch::gained(b, amount));
 }
 template <class F> void publish(F change) {
     AcquireSRWLockExclusive(&output);

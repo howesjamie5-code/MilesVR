@@ -48,6 +48,71 @@ inline float filled(float meter, float amount) {
     return std::min(fullMeter, meter + std::max(0.f, amount));
 }
 
+// Miles's bars (0.1.22, from the user's 100% save, October 19): the meter
+// is bar one of up to mostBars, each a value and its most, side by side - the
+// value at the meter's address, its most 4 bytes on, the next bar 8 bytes on.
+// A save early in the story has one bar (the others' most is 0); the 100%
+// save had three of 100. The game fills them in order: its hits went into
+// the second once the first was full (the user: "punching a guy wouldnt fill
+// the 2nd or 3rd bar up only the first" - 0.1.21 wrote the first alone).
+constexpr unsigned mostBars = 3;
+struct Bars {
+    float value[mostBars]{}, most[mostBars]{};
+    unsigned count = 1;
+};
+// The bars from the words at the meter (value, most, value, most, ...). A
+// first bar without a believable most is one of fullMeter.
+inline Bars bars(const float (&words)[mostBars * 2]) {
+    Bars b;
+    b.count = 0;
+    for (unsigned i = 0; i < mostBars; ++i) {
+        const float value = words[i * 2], most = words[i * 2 + 1];
+        const bool real = std::isfinite(most) && most > 1 && most <= mostMeter && std::isfinite(value) &&
+                          value >= 0 && value <= most + .01f;
+        if (!real) {
+            if (i == 0) {
+                b.value[0] = std::isfinite(value) ? std::clamp(value, 0.f, fullMeter) : 0.f;
+                b.most[0] = fullMeter;
+                b.count = 1;
+            }
+            break;
+        }
+        b.value[i] = value;
+        b.most[i] = most;
+        b.count = i + 1;
+    }
+    return b;
+}
+inline float total(const Bars& b) {
+    float t = 0;
+    for (unsigned i = 0; i < b.count; ++i)
+        t += b.value[i];
+    return t;
+}
+inline float capacity(const Bars& b) {
+    float t = 0;
+    for (unsigned i = 0; i < b.count; ++i)
+        t += b.most[i];
+    return t;
+}
+// The bars holding `amount` in all, filled in order.
+inline Bars holding(Bars b, float amount) {
+    float left = std::isfinite(amount) ? std::clamp(amount, 0.f, capacity(b)) : 0.f;
+    for (unsigned i = 0; i < b.count; ++i) {
+        b.value[i] = std::min(left, b.most[i]);
+        left -= b.value[i];
+    }
+    return b;
+}
+// A blow's gain, into the bars in order; a venom move's cost, one bar (the
+// first's worth) off the whole.
+inline Bars gained(const Bars& b, float amount) {
+    return holding(b, total(b) + std::max(0.f, amount));
+}
+inline Bars paid(const Bars& b) {
+    return holding(b, total(b) - b.most[0]);
+}
+
 // The meter after a venom move: one bar spent (the user, October 19: the
 // punch and the smash "should use only one bar"). Until Miles has more bars
 // that is the whole meter; one of fullMeter's worth comes off a meter above

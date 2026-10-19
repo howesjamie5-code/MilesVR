@@ -1,5 +1,22 @@
-MilesVR 0.1.21 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.22 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.21: ALL THREE VENOM BARS
+--------------------------------------------------
+Your 0.1.21 test: your punches only ever filled the first bar. The report
+showed how the game keeps the bars: three side by side, each with its own
+value and size. The mod only knew the first.
+Now your blows fill bar 1, then bar 2, then bar 3. A venom punch or a
+venom smash takes one bar; the thumbstick let-go empties all of them. On a
+save early in the story (one bar) nothing changes.
+The right hand's webs switch off once the first bar is full (a venom move is
+ready), as before.
+
+What to try, on the 100% save:
+1. Fight until all three bars are full: does each fill in turn?
+2. Venom punch once: two bars left? Smash once: one left?
+3. Thumbstick click with bars left: all empty, webs back?
+4. Close the game and keep the reports folder.
 
 What changed since 0.1.20: READY FOR THE EXTRA VENOM BARS
 --------------------------------------------------

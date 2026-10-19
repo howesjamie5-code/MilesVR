@@ -194,6 +194,12 @@ spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t rec
         moved = false;
     }
     moved = moved || bestValue != chosenAt;
+    // The whole of Miles's bars (venom_punch::Bars): the first alone early in the story.
+    {
+        float words[venom_punch::mostBars * 2]{};
+        if (read(best + offset, words, sizeof(words)))
+            bestValue = venom_punch::total(venom_punch::bars(words));
+    }
     out.value = bestValue;
     // The fields around the meter, for the report: how the game keeps Miles's later bars.
     for (unsigned i = 0; i < std::size(out.around); ++i)
@@ -210,8 +216,13 @@ bool spidy::game_venom::empty(const Meter& m) {
     if (!m.address || !m.holder || m.address <= m.holder || m.address - m.holder >= mostOwnerOffset ||
         !read(m.holder, &vtable, 8) || vtable != m.holderClass)
         return false;
+    float words[venom_punch::mostBars * 2]{};
+    if (!read(m.address, words, sizeof(words)))
+        return false;
+    const auto b = venom_punch::bars(words);
     __try {
-        *reinterpret_cast<float*>(m.address) = 0;
+        for (unsigned i = 0; i < b.count; ++i)
+            reinterpret_cast<float*>(m.address)[i * 2] = 0;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
