@@ -1616,7 +1616,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const Power powers[] = {
         {"Venom Meter", "Land blows to fill it. Up to 3 bars", fullLine.c_str()},
         {"Your Buttons", buttonsText.c_str(), buttonLine.c_str()},
-        {"Venom Charge", "Venom full: hold the venom button until it glows and buzzes", chargedLine.c_str()},
+        {"Venom Charge", "Venom full: hold the venom button until it glows and buzzes. An orange lightning icon marks "
+                         "the enemy you will hit", chargedLine.c_str()},
         {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!"},
         {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up"},
         {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit"},

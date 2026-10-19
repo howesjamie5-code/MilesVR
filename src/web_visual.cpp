@@ -1016,11 +1016,13 @@ void AimMarkerMotion::markers(const AimMarker* wanted, Vec3 origin, Vec3 directi
 namespace {
 // Venom's gold, and its white-hot core (linear RGB).
 constexpr Vec3 venomGold{1.f, .62f, .06f}, venomCore{1.f, .93f, .62f};
+// The venom target's orange (0.1.53, the user: "an orange venom electro styled icon"), and its hot core.
+constexpr Vec3 venomOrange{1.f, .33f, .02f}, venomOrangeCore{1.f, .66f, .28f};
 // A bolt from `from` along `way` (unit) for `reach` metres: a jagged line of
 // `kinks` pieces, each knocked sideways at random, a faint wide glow under a
 // thin bright core.
 void venomBolt(std::vector<Vertex>& out, Vec3 from, Vec3 way, float reach, Vec3 view, float px, float alpha,
-               float seed, int kinks = 4) {
+               float seed, int kinks = 4, Vec3 glow = venomGold, Vec3 core = venomCore) {
     const Vec3 a = perpendicular(way), b = cross(way, a);
     Vec3 at = from;
     for (int k = 1; k <= kinks; ++k) {
@@ -1029,8 +1031,8 @@ void venomBolt(std::vector<Vertex>& out, Vec3 from, Vec3 way, float reach, Vec3 
         const Vec3 next = from + way * (reach * u) +
                           (a * (hash(seed, k) - .5f) + b * (hash(seed, k + 40) - .5f)) * (reach * jag);
         const float thin = 1 - .6f * u;
-        softBar(out, at, next, view, std::max(3.f * px, .004f) * thin, venomGold, .35f * alpha, 2 * px);
-        softBar(out, at, next, view, std::max(.9f * px, .0012f) * thin, venomCore, alpha, px);
+        softBar(out, at, next, view, std::max(3.f * px, .004f) * thin, glow, .35f * alpha, 2 * px);
+        softBar(out, at, next, view, std::max(.9f * px, .0012f) * thin, core, alpha, px);
         at = next;
     }
 }
@@ -1107,6 +1109,46 @@ void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec
         const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
         const float reach = (.2f + .35f * u) * (.6f + .4f * hash(seed, 3)) * s;
         venomBolt(out, burst.point + way * .05f * s, way, reach, view, px, fade, seed);
+    }
+}
+void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, Vec3 viewer, float pixelAngle) {
+    const float strength = std::isfinite(target.strength) ? std::clamp(target.strength, 0.f, 1.f) : 0.f;
+    // Over his head: the cue's point is his chest.
+    const Vec3 c = target.point + Vec3{0, .75f, 0};
+    const float distance = length(viewer - c);
+    if (strength <= .02f || !finite(target.point) || !finite(viewer) || !std::isfinite(pixelAngle) ||
+        pixelAngle <= 0 || !(distance >= .3f && distance <= 60))
+        return;
+    const Vec3 view = (viewer - c) / distance;
+    Vec3 right = cross(Vec3{0, 1, 0}, view);
+    right = length(right) > .1f ? normalized(right) : perpendicular(view);
+    const Vec3 up = cross(view, right);
+    const float px = pixelAngle * distance;
+    // A readable size: 0.16 m, and never under 22 pixels across its radius.
+    const float r = std::max(.16f, 22 * px);
+    const float t = std::isfinite(target.seconds) ? target.seconds : 0.f;
+    const float a = strength * (.85f + .15f * std::sin(t * 8));
+    // The glow, the ring and its white-hot edge.
+    softArc(out, c, right, up, 0, r * 1.35f, 0, 2 * pi, venomOrange, .22f * a, r * .6f, 40);
+    softArc(out, c, right, up, r * .8f, r, 0, 2 * pi, venomOrange, .85f * a, 1.5f * px, 48);
+    softArc(out, c, right, up, r * .88f, r * .93f, 0, 2 * pi, venomOrangeCore, .9f * a, px, 48);
+    // The lightning bolt in it: a jagged stroke, wide gold under a bright core.
+    const auto at = [&](float x, float y) { return c + right * (x * r) + up * (y * r); };
+    const Vec3 glyph[] = {at(.16f, .58f), at(-.14f, .04f), at(.12f, .04f), at(-.16f, -.58f)};
+    for (int k = 0; k + 1 < 4; ++k) {
+        softBar(out, glyph[k], glyph[k + 1], view, r * .11f, venomOrange, .95f * a, 1.5f * px);
+        softBar(out, glyph[k], glyph[k + 1], view, r * .045f, venomOrangeCore, a, px);
+    }
+    // Bolts crackling off the ring, new ones twenty times a second.
+    const int frame = static_cast<int>(t * 20);
+    const float seedBase = target.point.x * 3.1f + target.point.z * 7.7f;
+    constexpr int bolts = 6;
+    for (int i = 0; i < bolts; ++i) {
+        const float seed = seedBase + static_cast<float>(frame * 11 + i) * .618f;
+        const float angle = 2 * pi * (static_cast<float>(i) + hash(seed, 1)) / bolts;
+        const Vec3 way = right * std::cos(angle) + up * std::sin(angle);
+        venomBolt(out, c + way * r, way, r * (.35f + .45f * hash(seed, 2)), view, px, .8f * a, seed, 3, venomOrange,
+                  venomOrangeCore);
     }
 }
 } // namespace spidy

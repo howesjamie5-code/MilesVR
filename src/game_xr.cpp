@@ -3930,6 +3930,13 @@ DWORD WINAPI run(void*) {
                                 view.age = static_cast<float>(static_cast<double>(shown - burst.since) * 1e-9);
                                 appendImpact(translucent, view, viewer, pixelAngle);
                             }
+                        // The enemy the charged venom fist will hit: the marked one, the
+                        // venom's orange icon over his head while the fist glows.
+                        if (!saved->flatScreen && cue.left > 0 && saved->venomGlow > 0)
+                            appendVenomTarget(translucent,
+                                              {cue.point, saved->venomGlow,
+                                               static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 1000.))},
+                                              viewer, pixelAngle);
                         // The called blow's arrow, over its thug.
                         if (!saved->flatScreen && cue.left > 0) {
                             auto view = cue;

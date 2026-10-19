@@ -189,6 +189,25 @@ int main(int argc, char** argv) {
                      {"VENOM BURST 0.2 S", venomBurst(.2f)},
                      {"VENOM BURST 0.35 S", venomBurst(.35f)},
                      {"VENOM BURST 0.45 S", venomBurst(.45f)}});
+        // The venom target (MilesVR): the icon over the marked enemy's head while the fist charges and once
+        // charged, its crackle at a few moments. The cells are about the icon's own centre.
+        {
+            const auto target = [&](float strength, float seconds) {
+                std::vector<Vertex> v;
+                appendVenomTarget(v, {p, strength, seconds}, viewer, pixelAngle);
+                return v;
+            };
+            const Vec3 iconCentre = p + Vec3{0, .75f, 0};
+            const float iconU = camera.cx + camera.f * iconCentre.x / -iconCentre.z;
+            const float iconV = camera.cy - camera.f * iconCentre.y / -iconCentre.z;
+            ok &= sheet(name + "venomtarget.bmp", scene.backdrop, camera, iconU, iconV,
+                        static_cast<int>((i ? 230 : 150) * scale), 5,
+                        {{"CHARGING 30%", target(.3f, 1)},
+                         {"CHARGING 70%", target(.7f, 1.05f)},
+                         {"CHARGED", target(1, 1.1f)},
+                         {"CHARGED LATER", target(1, 1.25f)},
+                         {"FADING", target(.4f, 1.4f)}});
+        }
         // Spider-Sense (spider_sense.hpp): the warning over his head as it lands, as its ring closes on the
         // blow, as each answer, with no time set, and as a counter breaks it. The cells are about the mark's
         // own centre, which stands over his head.

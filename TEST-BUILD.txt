@@ -1,5 +1,17 @@
-MilesVR 0.1.52 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.53 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.52: THE VENOM TARGET ICON
+--------------------------------------------------
+While your venom fist charges and once it is charged, an orange electric
+icon - a glowing ring with a lightning bolt in it, sparks crackling off
+it - floats over the head of the enemy your venom punch will hit (the
+marked one). It grows in as you charge and fades with the charge.
+
+What to try:
+1. Fill a bar, look at an enemy, hold the venom button: does the icon
+   show over him? Look at another enemy: does it move to him?
+2. Is it easy to see, too big, too small?
 
 What changed since 0.1.51: "SWINGING", NOT "WEBS"
 --------------------------------------------------

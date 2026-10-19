@@ -321,6 +321,19 @@ struct VenomBurstView {
     float scale = 1, ring = 0;
 };
 void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle);
+// The enemy a charged venom fist will hit (MilesVR 0.1.53, the user: "an
+// orange venom electro styled icon that shows which enemy is about to be
+// venom punched"): over his head, facing the viewer, an orange ring with a
+// lightning bolt in it and bolts crackling off its edge, pulsing. It keeps a
+// readable size at a distance. `point`: the marked enemy's chest (the cue's
+// point); `strength` 0..1 the fist's glow (it grows in as the fist charges);
+// `seconds` any running clock, for the crackle and the pulse.
+struct VenomTargetView {
+    Vec3 point{};
+    float strength{};
+    float seconds{};
+};
+void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, Vec3 viewer, float pixelAngle);
 // Spider-Sense (spider_sense.hpp): the warning of an attack about to land,
 // printed over the attacker's head, facing the viewer. The comic's lines:
 // five jagged strokes fanned up from his head, in what the warning asks for
