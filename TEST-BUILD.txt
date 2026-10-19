@@ -1,5 +1,21 @@
-MilesVR 0.1.43 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.44 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.43: THE CONTROLS TAB, CHECKED AGAINST THE LOGS
+--------------------------------------------------
+The launcher's Controls tab is rewritten so every control is as MilesVR
+really does it, checked against the code and your session logs. Where a
+control writes a line to the headset panel and the SESSION LOG, that
+exact line shows in a small box under it, so you can look in the log to
+see whether it worked. The venom lines follow your own Venom punch hand
+and Venom button settings.
+New on the tab: slow motion (left stick click), the gadget wheel (hold
+X), the pad layer (click both sticks), web balls, the web pull, body
+calibration. Old entries are gone (the venom hand's webs no longer turn
+off, so nothing says they do).
+Two log lines were out of date and are fixed: letting the venom go now
+says "Venom let go - the right hand's venom meter is empty", and the
+story venom punch says "for as long as you hold the venom button".
 
 What changed since 0.1.42: THE VENOM CONTROLS BOX, REWORDED
 --------------------------------------------------

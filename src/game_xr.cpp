@@ -1937,7 +1937,7 @@ DWORD WINAPI run(void*) {
                                 ++venomDumps;
                                 runtime.haptic(venomSide, .6f, .1f);
                                 char text[96];
-                                sprintf_s(text, "Venom let go - the %s hand's webs are back", venomName);
+                                sprintf_s(text, "Venom let go - the %s hand's venom meter is empty", venomName);
                                 message(3, 0, text);
                             } else {
                                 message(3, 0, "Venom could not be let go (the meter is not found yet)");
@@ -2002,7 +2002,7 @@ DWORD WINAPI run(void*) {
                                 runtime.haptic(venomSide, 1.f, .2f);
                                 message(3, 0, venomPromptOn ? "Venom - the game's venom move, as its prompt asks"
                                                             : "Venom - the game's own venom punch (its LB + X), "
-                                                              "for as long as you hold the grip");
+                                                              "for as long as you hold the venom button");
                             }
                             // Sent while the web button is held: at least a tap's worth,
                             // at most venomGameMost; the hand shoots no web meanwhile.

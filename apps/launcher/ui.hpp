@@ -45,6 +45,7 @@ private:
     void tabs();
     void play(ImVec2 origin, ImVec2 size);
     void controls(ImVec2 origin, ImVec2 size);
+    float logLine(ImDrawList* draw, ImVec2 at, const char* text, float width, bool venom);
     void about(ImVec2 origin, ImVec2 size);
     void setupCard(float width);
     void optionsCard(ImVec2 size);

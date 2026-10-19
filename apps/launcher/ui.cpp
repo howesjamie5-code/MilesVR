@@ -1501,128 +1501,147 @@ void App::logCard(ImVec2 size) {
     endCard();
 }
 
+// A line of the session log, in a small dark box like the log's own, at `at`, wrapped to `width`; its height.
+float App::logLine(ImDrawList* draw, ImVec2 at, const char* text, float width, bool venom) {
+    const float inner = width - S(12);
+    const ImVec2 size = measure(fonts_.semibold, S(12.5f), text, inner);
+    draw->AddRectFilled(at, ImVec2(at.x + std::min(size.x + S(12), width), at.y + size.y + S(8)),
+                        col(venom ? kVenomDeep : kPanelHigh, venom ? 1.f : 0.7f), S(5));
+    draw->AddRectFilled(at, ImVec2(at.x + S(2.5f), at.y + size.y + S(8)), col(venom ? kVenom : kGreen, 0.8f), S(1));
+    draw->AddText(fonts_.semibold, S(12.5f), ImVec2(at.x + S(8), at.y + S(4)),
+                  col(venom ? kVenomBright : kText, 0.9f), text, nullptr, inner);
+    return size.y + S(8);
+}
+
 void App::controls(ImVec2 origin, ImVec2 size) {
+    // Every control as the mod does it, and - where it writes one - the line the headset's panel and the
+    // session log (the Play tab's SESSION LOG, and reports\) show when it worked (the user, October 20:
+    // "work alongside the logs so the info is accurate on the launcher"). The lines are game_xr.cpp's own.
     struct Entry {
         const char* control;
         const char* action;
+        const char* log = nullptr;
     };
     struct Group {
         const char* title;
         std::vector<Entry> entries;
     };
     const Group groups[] = {
-        {"SWINGING",
-         {{"Squeeze a grip", "Shoot that hand's web where the controller points; hold to swing"},
-          {"Release the grip", "Let go"},
-          {"Trigger", "Reel in while the web is attached"},
-          {"Pull the hand sharply", "Zip toward the web's anchor"},
-          {"Pull the hand in", "The web is a rope in your hand: you go where you pull it"},
-          {"Other hand on the web, grip", "It takes hold of the same web. The upper hand carries you: pull with "
-                                          "it, or climb hand over hand"},
-          {"A corner in the way", "The web bends round it and holds; swing back and it lies straight again"}}},
-        {"GRABBING",
-         {{"Grip, aimed at a prop or thug", "Catch it with your web"},
-          {"Trigger", "Reel it in"},
-          {"Pull the hand sharply", "Yank it to your hand"},
-          {"Release the grip", "Throw it: the harder you swing, the faster it flies"}}},
-        {"FIGHTING",
-         {{"Punch a thug", "A fist that meets him fast lands a blow, as hard as it moved. You feel it, hear it and see "
-                           "it, and time stops for a moment"},
-          {"Punch at a thug across the room", "Web strike: you fly to him and the blow lands as you arrive. Up to "
-                                              "10 m, from the ground, a jump or a swing"},
-          {"Punch along your web at the thug it holds", "The same: you go to him. A sharp pull still yanks him to you"},
-          {"Uppercut", "Lifts him into the air. Strike up after him: you hang beside him while your blows land"},
-          {"Punch down at a thug in the air", "Slams him into the ground"},
-          {"Blows in a row", "Count up (X2, X3...): each hits harder, and the fifth is a finisher that sends him "
-                             "flying, if you throw it the way its arrow points"},
-          {"A ring over a thug", "Your next punch goes to him and to nobody else: the one you look at, up to 10 m "
-                                 "away. Hit him and the ring locks on (four ticks) until he is down"},
-          {"Change target", "Look squarely at another enemy for a third of a second"},
-          {"KO!", "A thug your blow knocked out: the ring is free, look at the next one"},
-          {"An arrow into the ring", "A called blow, from your second blow on. It comes in from the side your fist "
-                                     "comes from: swing a hook from that side, an uppercut from below or a blow "
-                                     "down from above, at arm's reach or at the marked thug across the room. It hits "
-                                     "harder and throws him that way; the yellow arrow into a jagged red ring calls "
-                                     "the finisher"},
-          {"Spider-Sense lines over a thug", "He is about to hit you, as the game itself warns you. The ring closes "
-                                             "on the blow; the yellow burst is now. Out of view his mark shows near "
-                                             "the middle of your view, its arrowhead pointing to him"},
-          {"Blue lines: throw a fist at him", "The counter: his attack breaks, he is your target, and you fly to "
-                                              "him if he is out of reach. The blow sends him flying"},
-          {"Red lines / yellow lines", "Dodge (B) / jump (A): no counter breaks this attack"},
-          {"Yank a thug while you are in the air", "He flies to you and floats in front of you; time slows as he "
-                                                   "arrives and you hang there. Hit him"},
-          {"Slow motion by itself", "Time slows for a moment at a finisher, a called blow, a thug who arrives in "
-                                    "front of you in the air, and a perfect dodge"}}},
-        {"PHONE",
-         {{"Grip behind a hip, bring it up", "Draw the phone from your back pocket: put a hand on your back "
-                                             "pocket (behind your hip, not at your side), squeeze its grip - a "
-                                             "short buzz says it caught - and keep squeezing as you bring it up "
-                                             "in front of your chest within 2.5 seconds"},
-          {"Stick  /  A  /  B", "Pick an app or button  /  press it  /  put the phone away"},
-          {"Triggers", "Music volume: left down, right up"},
-          {"Apps", "Music (the files in the Music folder beside the launcher), map, and GEAR: your gadgets"}}},
-        {"MOVING",
+        {"THE BASICS",
          {{"Left stick", "Walk and run"},
-          {"A", "Jump. Hold it on the ground to charge a leap and let go: the longer you hold, the higher; with "
-                "the left stick, forward too"},
-          {"B", "Dodge, the way the left stick points: the game's B"},
-          {"Y", "Interact with what you look at: the game's Y (backpacks, doors, prompts); web strike in a "
-                "fight, while you swing too (a car in a chase). Hold it and you step up to the thing, until "
-                "the game takes it"},
-          {"Click the right stick", "The game's LB + RB: pull a door or a grate where the game shows the two "
-                                    "(with the venom meter full it lets the venom go: see VENOM POWERS)"},
-          {"Right stick down", "Heal: the game's D-pad down. Push it right down and hold it a moment"},
-          {"Right stick up", "The game's LT + RT: zip to a point, enter a vent, where the game shows the "
-                             "two; while you swing too. No point? Keep holding (time slows as the game "
-                             "aims), look at a point and let go to zip there"},
-          {"Right hand to your temple, trigger", "Scan your surroundings: the game's R3"},
-          {"Left hand to your temple, trigger", "Camouflage: Miles turns invisible (the game's D-pad up)"},
-          {"Menu button", "Pause; there SWITCH TO GAME SCREEN plays the game as it is, on a 3D screen, and VR "
-                          "settings are in Settings > MILES VR"},
-          {"Both sticks held in", "Pause too: under SteamVR a Quest's menu button opens SteamVR's dashboard"},
-          {"X", "Game menu: map, suits, skills"}}},
-        {"MENUS AND CUTSCENES",
-         {{"Left stick", "Move through menus (they show on a screen in the headset)"},
-          {"A  /  B", "Select  /  Back"},
+          {"Click the left stick", "Slow motion on; click again to end it. The ring on your left wrist shows the "
+                                   "focus left"},
+          {"A", "Jump. Hold it on the ground for a charged leap: the longer, the higher"},
+          {"B", "Dodge, the way the left stick points"},
+          {"Y", "Interact with what you look at (doors, backpacks, any button the game asks for). Hold it to step "
+                "up to the thing",
+           "The game would not take that from here - come closer to it and press again"},
+          {"X", "Game menu: map, suits, skills. Hold X: the gadget wheel; pick a gadget and the free hand's "
+                "trigger fires it"},
+          {"Right stick left / right", "Turn"},
+          {"Right stick down (hold)", "Heal: the game's D-pad down"},
+          {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT"},
+          {"Click the right stick", "Pull a door or a grate: the game's LB + RB. With a venom bar full it lets the "
+                                    "venom go instead (see VENOM POWERS)"},
+          {"Right hand to your temple, trigger", "Scan: the game's R3"},
+          {"Left hand to your temple, trigger", "Camouflage: the game's D-pad up", "Camouflage"},
+          {"Menu, or both sticks held in", "Pause. Settings > MILES VR has the VR settings"},
+          {"Click both sticks", "Pad layer: the whole gamepad for a moment. Click both again to leave",
+           "Pad layer on - your grips are the game's LB and RB, ..."}}},
+        {"WEBS",
+         {{"Grip", "Shoot a web where the hand points; hold to swing, let go to release. (Web button: Trigger "
+                   "swaps the grip and the trigger everywhere here)"},
+          {"Trigger, web attached", "Reel in"},
+          {"Trigger, no web", "Shoot a web ball"},
+          {"Pull the hand sharply", "Zip toward the web's anchor"},
+          {"Pull the hand in", "The web is a rope: you go where you pull it"},
+          {"Other hand on the web, grip", "Take hold of the same web and climb it hand over hand"},
+          {"Both grips at a door, yank", "Tear it off: the game's LB + RB",
+           "Web pull - the game's LB + RB, for as long as you hold both web buttons"},
+          {"Grip at a prop or thug", "Catch it. Trigger reels it in, a sharp pull yanks it to you, letting go "
+                                     "throws it"}}},
+        {"FIGHTING",
+         {{"Punch a thug", "A fast fist lands a blow, as hard as it moved"},
+          {"Punch at a thug up to 10 m away", "Web strike: you fly to him and the blow lands as you arrive"},
+          {"A ring over a thug", "Your next punch goes to him: the one you look at. Look squarely at another for "
+                                 "a third of a second to change"},
+          {"Uppercut / punch down", "Lift him into the air / slam him into the ground"},
+          {"Blows in a row", "X2, X3...: each hits harder; the fifth is a finisher"},
+          {"An arrow into the ring", "A called blow: swing from the side the arrow comes from. It hits harder"},
+          {"Blue Spider-Sense lines", "Throw a fist at him: the counter breaks his attack"},
+          {"Red / yellow lines", "Dodge (B) / jump (A)"},
+          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"}}},
+        {"PHONE",
+         {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
+                                                    "keep squeezing and bring it up in front of you",
+           "Phone out - the stick, A, B and the triggers are the phone's until B puts it away"},
+          {"Stick  /  A", "Pick an app or button  /  press it"},
+          {"B", "Put the phone away", "Phone away - each control is the game's again once let go of"},
+          {"Triggers", "Music volume: left down, right up"},
+          {"Apps", "Music (the songs in the Music folder beside the launcher), map, GEAR (your gadgets)"}}},
+        {"MENUS, CUTSCENES, BODY",
+         {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset: point a hand at it for "
+                          "the mouse (its trigger clicks); the other controls work as an Xbox controller",
+           "Game screen (menus, loading, cutscenes): point a hand at it for the mouse - ..."},
+          {"Left stick  /  A  /  B", "Move  /  select  /  back"},
           {"Grips", "Switch menu tabs"},
-          {"Menu button  /  both sticks held in", "Start"}}},
+          {"T-pose, hold both triggers", "Body calibration when VR starts (B skips it)",
+           "Body calibration: stand in a T-pose and hold both triggers (B skips)"},
+          {"Back in play", "VR takes over again as soon as you play",
+           "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts, ..."}}},
         {"STEAM FRAME CONTROLLERS",
          {{"A, B, X, Y", "All four are on the right controller, each the button of that name above: jump, dodge, "
                          "game menu, interact"},
           {"Menu  /  View", "Pause  /  Game menu, as X"},
-          {"D-pad", "The game's own D-pad: down heals. The right stick's down and up work as above"},
+          {"D-pad", "The game's own D-pad: down heals"},
           {"Bumpers", "Not used: the triggers and grips are your webs"}}},
     };
-    // Miles's venom powers: each power's name, then what it does and how to use it.
+    // Miles's venom powers: each power's name, what it does and how, and its line in the log - for this
+    // launcher's own Venom punch hand and Venom button, as the headset words them.
+    const auto& vo = settings_.options;
+    const char* venomHand = vo.venomLeftHand ? "left" : "right";
+    const std::string fullLine = format("Venom full - hold the %s %s to charge your fist; its %s shoots webs (tap: "
+                                        "a web ball)",
+                                        venomHand, vo.venomTrigger ? "trigger" : "grip", vo.venomTrigger ? "grip" : "trigger");
+    const std::string buttonLine = format("Venom button: %s", vo.venomTrigger ? "trigger" : "grip");
+    const std::string chargedLine = format("Venom charged - punch the marked enemy with your %s fist", venomHand);
+    const std::string releaseLine = format("Venom let go - the %s hand's venom meter is empty", venomHand);
     struct Power {
         const char* name;
         const char* description;
+        const char* log = nullptr;
     };
     const Power powers[] = {
-        {"Venom Meter", "Land blows to fill it: a hit 10, a heavy blow, launch or slam 15, a finisher 20 (ten hits "
-                        "fill a bar). Miles has up to three bars"},
-        {"Venom Hand", "With a bar full your right hand's two buttons split: the venom button charges venom, the "
-                       "other shoots webs. A web you hold as it fills stays until you let go"},
-        {"Venom Button", "Play tab > Venom button, or VENOM BUTTON in the game's MILES VR settings. GRIP (the "
-                         "default): hold the grip to charge, the trigger shoots webs (hold: swing, tap: web ball). "
-                         "TRIGGER: hold the trigger to charge, the grip shoots webs (hold: swing, tap: web ball)"},
-        {"Venom Charge", "Hold the venom button: your fist glows and the controller buzzes. With a web attached "
-                         "it reels instead. Let go and the charge fades after a moment, so strike before it does"},
-        {"Venom Punch", "Charge, then punch the marked thug. Within 2 m the charged fist lands it; farther away the "
-                        "web strike flies you in and lands it. Uses one bar"},
-        {"Venom Jump", "In a fight, standing, charge, then punch straight up. Every enemy within 5 m is hit and thrown up, you "
-                       "jump up with them and hang there a moment to keep hitting them. Uses one bar"},
-        {"Venom Smash", "Charge, then punch down. Standing, it goes off where you are; in the air (not on a web) you "
-                        "drop and it goes off as you land. Every enemy within 5 m is hit and thrown. Uses one bar"},
-        {"Mega Venom Blast", "All three bars full: charge, then stretch both arms out wide to the sides. Every enemy "
-                             "within 10 m is hit hard and thrown far. Uses all three bars"},
-        {"Story Venom", "Out of a fight, charge and punch: the game's own Venom Punch (its LB + X) for as long as you "
-                        "hold the grip, for story moments such as charging a generator"},
-        {"Camouflage", "Put your LEFT hand to the side of your head and pull its trigger: Miles turns invisible "
-                       "until the game's camouflage meter runs out. Do it again to come out of it early"},
-        {"Venom Release", "With a bar full, click the right stick: the meter empties at once, whatever you are doing, "
-                          "and the right hand's webs are back"},
+        {"Venom Meter", "Land blows to fill it: ten hits fill a bar (heavy blows and finishers more). Up to three "
+                        "bars",
+         fullLine.c_str()},
+        {"Venom Button", "Which button charges the venom: Play tab > Venom button, or VENOM BUTTON in the game's "
+                         "MILES VR settings. With a bar full the other button shoots that hand's webs: hold to "
+                         "swing, tap for a web ball (the orange box on the Play tab)",
+         buttonLine.c_str()},
+        {"Venom Charge", "Hold the venom button until your fist glows and the controller buzzes. With a web "
+                         "attached it reels instead. The charge lasts about 1.5 s after you let go",
+         chargedLine.c_str()},
+        {"Venom Punch", "Charged, punch the marked thug: within 2 m your fist lands it, farther away the web "
+                        "strike flies you in. One bar",
+         "Venom punch!"},
+        {"Venom Jump", "In a fight, standing: charged, punch straight up. Enemies within 5 m go up and you jump "
+                       "with them. One bar",
+         "Venom jump! 3 enemies up"},
+        {"Venom Smash", "Charged, punch straight down, standing or in the air (not on a web). Everyone within 5 m "
+                        "is hit and thrown. One bar",
+         "Venom smash! 3 enemies hit"},
+        {"Mega Venom Blast", "All three bars full: charged, stretch both arms out wide. Everyone within 10 m. All "
+                             "three bars",
+         "MEGA VENOM BLAST! 5 enemies hit"},
+        {"Story Venom", "Out of a fight, hold the venom button and punch: the game's own Venom Punch, for story "
+                        "moments such as a generator",
+         "Venom - the game's own venom punch (its LB + X), for as long as you hold the venom button"},
+        {"Venom Release", "With a bar full, click the venom hand's stick: the meter empties at once",
+         releaseLine.c_str()},
+        {"Camouflage", "Left hand to the side of your head, pull its trigger: invisible until the game's "
+                       "camouflage meter runs out",
+         "Camouflage"},
     };
     const float gap = S(16);
     float columnY[2] = {origin.y, origin.y};
@@ -1633,6 +1652,18 @@ void App::controls(ImVec2 origin, ImVec2 size) {
     const float contentWidth = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize - S(4);
     const float columnWidth = (contentWidth - gap) * 0.5f;
     ImGui::SetCursorScreenPos(base);
+    {
+        // What the quoted lines are.
+        auto* draw = ImGui::GetWindowDrawList();
+        const char* note = "Each control below is as MilesVR does it. A line in a box after it is what the headset "
+                           "shows, and the SESSION LOG on the Play tab writes, when that control worked: look for it "
+                           "there to check.";
+        const float noteHeight = measure(fonts_.body, S(14), note, contentWidth - S(8)).y;
+        draw->AddText(fonts_.body, S(14), ImVec2(base.x + S(4), base.y), col({216, 207, 210}), note, nullptr,
+                      contentWidth - S(8));
+        ImGui::SetCursorScreenPos(ImVec2(base.x, base.y + noteHeight + S(12)));
+        ImGui::Dummy(ImVec2(contentWidth, 0));
+    }
     if (beginCard("##venom", ImVec2(contentWidth, 0), ImGuiChildFlags_AutoResizeY, true)) {
         auto* draw = ImGui::GetWindowDrawList();
         const ImVec2 titleAt = ImGui::GetCursorScreenPos();
@@ -1665,7 +1696,10 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                 const ImVec2 textSize = measure(fonts_.body, S(14), power.description, textWidth);
                 draw->AddText(fonts_.body, S(14), ImVec2(x + S(16), at.y + nameSize.y + S(2)), col({232, 220, 210}),
                               power.description, nullptr, textWidth);
-                rowHeight = std::max(rowHeight, nameSize.y + S(2) + textSize.y);
+                float height = nameSize.y + S(2) + textSize.y;
+                if (power.log)
+                    height += S(5) + logLine(draw, ImVec2(x + S(16), at.y + height + S(5)), power.log, textWidth, true);
+                rowHeight = std::max(rowHeight, height);
             }
             ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + rowHeight + S(14)));
             ImGui::Dummy(ImVec2(cardWidth, 0));
@@ -1694,7 +1728,11 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                 const float width = ImGui::GetContentRegionAvail().x;
                 const ImVec2 keySize = measure(fonts_.semibold, S(13), entry.control, keyWidth - S(16));
                 const ImVec2 actionSize = measure(fonts_.body, S(14), entry.action, width - keyWidth - S(12));
-                const float height = std::max(keySize.y + S(10), actionSize.y) + S(10);
+                float actionHeight = actionSize.y;
+                if (entry.log)
+                    actionHeight += S(5) + logLine(draw, ImVec2(at.x + keyWidth + S(12), at.y + S(3) + actionSize.y + S(5)),
+                                                   entry.log, width - keyWidth - S(12), false);
+                const float height = std::max(keySize.y + S(10), actionHeight) + S(10);
                 draw->AddRectFilled(at, ImVec2(at.x + std::min(keySize.x + S(16), keyWidth), at.y + keySize.y + S(10)),
                                     col(kPanelHigh), S(6));
                 draw->AddText(fonts_.semibold, S(13), ImVec2(at.x + S(8), at.y + S(5)), col(kText), entry.control, nullptr,
