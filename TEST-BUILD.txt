@@ -1,5 +1,11 @@
-MilesVR 0.1.64 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.65 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.64: WALL STEPS TURNED OFF
+--------------------------------------------------
+0.1.64's stepping legs on walls looked silly and buggy, so they are off:
+on a wall Miles's feet stand under his hips as in 0.1.63. The feet still
+step after you on the ground in your room, and the perch stays.
 
 What changed since 0.1.63: WALKING LEGS ON WALLS
 --------------------------------------------------

@@ -560,11 +560,13 @@ Result solve(Pose& pose, const Rig& rig, const Targets& targets, const Config& c
             const Vec3 side = i == 0 ? left : left * -1.f;
             const bool perch = state.perched && !t.kneel;
             Vec3 foot = hip - up * (height - ankle) - forward * back + side * (perch ? c.perchStance * s : 0.f);
-            // A planted foot stays where it stands in the world, and steps
-            // once the hips have carried its place far enough - the player
-            // walking about his room, or walking a wall - one foot at a time,
-            // landing ahead of the way he goes, quicker the faster he goes.
-            if (!t.kneel) {
+            // On his own ground a planted foot stays where it stands in the
+            // world, and steps once the hips have carried its place far
+            // enough (the player walking about his room), one foot at a time.
+            // Not on a wall: 0.1.64 stepped there as he walked it, and the
+            // user: "the legs move quite fast and overall it looks silly" -
+            // turned off; a wall's feet stand under the hips as before.
+            if (t.ground && !t.kneel) {
                 auto& f = state.feet[static_cast<size_t>(i)];
                 const auto& other = state.feet[static_cast<size_t>(1 - i)];
                 const float reach = c.stepReach * s;

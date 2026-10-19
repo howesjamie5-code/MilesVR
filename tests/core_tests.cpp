@@ -8617,31 +8617,23 @@ int main() {
             check(foot.y<.2f,"a foot did not land on the floor");
         }
     });
-    test("body: walking a wall the planted feet step after him, alternating, never sliding", [] {
-        // MilesVR 0.1.64: the hero's model travels along the wall (Targets::travel) and the feet stay where
-        // they stand in the world until each steps after him.
+    test("body: a wall's planted feet stand under the hips as he walks it (no steps there since 0.1.65)", [] {
         auto b=testBody();
         body::Targets t;t.head=true;t.plant=true;t.floor={};t.eyes={0,1.6f,0};t.facing={};
         body::State s;body::Result r;
         solved(b,t,s,{},1,&r);
         solved(b,t,s,{},1,&r);
-        // 1.5 m/s along x for two seconds, a tenth of a second a frame: the model moves under the feet.
         t.travel={.15f,0,0};
-        int stepping[2]{},both{};
-        float lifted{};
-        for(int k=0;k<20;++k){
+        for(int k=0;k<10;++k){
             std::vector<float> pose=b.rest;
             body::Pose view(pose.data(),static_cast<int>(b.rig.parent.size()));
             r=body::solve(view,b.rig,t,{},s,true,.1f,1,1);
             for(int i=0;i<2;++i){
-                stepping[i]+=s.feet[i].step>=0;
-                lifted=std::max(lifted,b.at(pose,b.rig.legs[i].foot).y);
+                check(s.feet[i].step<0,"a foot stepped on a wall");
+                const Vec3 hip=b.at(pose,b.rig.legs[i].upper),foot=b.at(pose,b.rig.legs[i].foot);
+                check(std::fabs(foot.x-hip.x)<.12f,"a wall's foot is not under its hip");
             }
-            both+=s.feet[0].step>=0&&s.feet[1].step>=0;
         }
-        check(stepping[0]>0&&stepping[1]>0,"a foot never stepped");
-        check(both==0,"both feet in the air at once");
-        check(lifted>.1f,"no foot lifted in a step");
     });
     test("body: on a wall the body stands up in the world and plants no feet", [] {
         auto b=testBody(true);
