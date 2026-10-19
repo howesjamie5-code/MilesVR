@@ -313,13 +313,20 @@ void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3
 void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewer, float pixelAngle, float seconds);
 // A venom punch landed: a flash, and bolts thrown out from where it hit.
 struct VenomBurstView {
-    static constexpr float seconds = .6f;
+    // The longest a burst lasts (the Mega Venom Blast's); a punch's lasts
+    // 0.6 s, a bigger one longer (venomBurstSeconds).
+    static constexpr float seconds = 1.2f;
     Vec3 point{};
     float age = -1; // seconds since it landed; below 0, or past `seconds`: nothing
     // The venom smash's (0.1.20): this many times the punch's burst, and a
     // ring that spreads along the ground to `ring` metres (0: none).
     float scale = 1, ring = 0;
+    // How far `point` is above the ground the ring and its effects lie on.
+    float lift = 0;
 };
+// How long this burst lasts: 0.6 s for a punch, about 0.8 for a smash, 1.1
+// for the Mega Venom Blast.
+float venomBurstSeconds(const VenomBurstView& burst);
 void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle);
 // The enemy a charged venom fist will hit (MilesVR 0.1.53, the user: "an
 // orange venom electro styled icon that shows which enemy is about to be

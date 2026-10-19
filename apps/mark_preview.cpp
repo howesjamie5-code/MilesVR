@@ -189,6 +189,28 @@ int main(int argc, char** argv) {
                      {"VENOM BURST 0.2 S", venomBurst(.2f)},
                      {"VENOM BURST 0.35 S", venomBurst(.35f)},
                      {"VENOM BURST 0.45 S", venomBurst(.45f)}});
+        // The smash's and the Mega's, on the ground at his feet as the player sees them from 4 m.
+        {
+            const Vec3 feet = p + Vec3{0, -1.2f, 0};
+            const auto big = [&](float age, float scale, float ring) {
+                std::vector<Vertex> v;
+                const float lift = scale > 6 ? 1.f : .3f;
+                appendVenomBurst(v, {feet + Vec3{0, lift, 0}, age, scale, ring, lift}, viewer, pixelAngle);
+                return v;
+            };
+            const float bigU = camera.cx + camera.f * feet.x / -feet.z;
+            const float bigV = camera.cy - camera.f * feet.y / -feet.z;
+            ok &= sheet(name + "venomground.bmp", scene.backdrop, camera, bigU, bigV,
+                        static_cast<int>((i ? 520 : 360) * scale), 4,
+                        {{"SMASH 0.05 S", big(.05f, 4, 5)},
+                         {"SMASH 0.2 S", big(.2f, 4, 5)},
+                         {"SMASH 0.4 S", big(.4f, 4, 5)},
+                         {"SMASH 0.65 S", big(.65f, 4, 5)},
+                         {"MEGA 0.05 S", big(.05f, 8, 10)},
+                         {"MEGA 0.25 S", big(.25f, 8, 10)},
+                         {"MEGA 0.55 S", big(.55f, 8, 10)},
+                         {"MEGA 0.9 S", big(.9f, 8, 10)}});
+        }
         // The venom target (MilesVR): the icon over the marked enemy's head while the fist charges and once
         // charged, its crackle at a few moments. The cells are about the icon's own centre.
         {

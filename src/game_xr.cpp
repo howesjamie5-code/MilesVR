@@ -2911,7 +2911,7 @@ DWORD WINAPI run(void*) {
                                     if (finite(exchange.smashPoint)) {
                                         auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
                                         burst.view = {exchange.smashPoint + Vec3{0, .3f, 0}, 0, 4.f,
-                                                      venom_punch::smashRadius};
+                                                      venom_punch::smashRadius, .3f};
                                         burst.since = frame.predictedDisplayTime;
                                     }
                                     char text[96];
@@ -2931,7 +2931,7 @@ DWORD WINAPI run(void*) {
                                     if (finite(exchange.megaPoint)) {
                                         auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
                                         burst.view = {exchange.megaPoint + Vec3{0, 1.f, 0}, 0, 8.f,
-                                                      venom_punch::megaRadius};
+                                                      venom_punch::megaRadius, 1.f};
                                         burst.since = frame.predictedDisplayTime;
                                     }
                                     char text[96];
@@ -2954,7 +2954,7 @@ DWORD WINAPI run(void*) {
                                     if (finite(exchange.jumpPoint)) {
                                         auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
                                         burst.view = {exchange.jumpPoint + Vec3{0, .3f, 0}, 0, 4.f,
-                                                      venom_punch::smashRadius};
+                                                      venom_punch::smashRadius, .3f};
                                         burst.since = frame.predictedDisplayTime;
                                     }
                                     char text[96];

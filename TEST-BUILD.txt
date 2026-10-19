@@ -1,5 +1,19 @@
-MilesVR 0.1.60 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.61 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.60: BIG GROUND EXPLOSIONS FOR THE SMASH AND THE MEGA
+--------------------------------------------------
+Venom Smash (punch down): a white-hot flash on the ground where you land,
+three orange shockwave rings racing out across the ground to the blast's
+5 m edge, and electric cracks splitting along the ground.
+Mega Venom Blast: the same out to its 10 m edge, plus a tall pillar of
+orange light shooting up from where you stand with bolts arcing up out of
+it, and a bigger flash. It lasts about a second.
+(The Venom Jump gets the smash's ground effect too.)
+
+What to try:
+1. Venom smash, then a Mega Venom Blast: do they look like big
+   explosions now? Too bright to see through?
 
 What changed since 0.1.59: A BIGGER, BRIGHTER VENOM PUNCH
 --------------------------------------------------
