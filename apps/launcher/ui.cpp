@@ -1408,8 +1408,11 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Hold the right grip", "Charge your right fist with venom: it glows and the controller buzzes (the "
                                   "trigger, if Web button is set to it)"},
           {"Punch the marked thug", "Venom punch: a charged right fist thrown at the ringed thug within 2 m lands "
-                                    "it; farther away, the web strike flies you in and lands it. It empties the "
-                                    "meter"},
+                                    "it; farther away, the web strike flies you in and lands it. It uses one bar "
+                                    "of the meter"},
+          {"Charged fist, punch down", "Venom smash. Standing, it goes off where you are; in the air (not on a web) "
+                                       "you drop to the ground and it goes off as you land. Every enemy within 5 m "
+                                       "is hit and thrown away. It uses one bar"},
           {"Let go of the grip", "The charge stays for a moment and fades: punch before it does"},
           {"Click the right stick", "With the meter full: let the venom go. The meter empties at once, whatever you "
                                     "are doing, and the right hand's webs are back"},

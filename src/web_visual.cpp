@@ -900,11 +900,21 @@ void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec
     const Vec3 up = cross(view, right);
     const float px = pixelAngle * distance;
     const float u = burst.age / VenomBurstView::seconds, fade = 1 - u * u;
+    const float s = std::isfinite(burst.scale) ? std::clamp(burst.scale, .1f, 10.f) : 1.f;
     // The flash, gone in a sixth of a second.
     const float flash = std::max(0.f, 1 - burst.age / .16f);
     if (flash > 0) {
-        softArc(out, burst.point, right, up, 0, .35f, 0, 2 * pi, venomGold, .45f * flash, .25f, 40);
-        softArc(out, burst.point, right, up, 0, .14f, 0, 2 * pi, venomCore, .7f * flash, .08f, 32);
+        softArc(out, burst.point, right, up, 0, .35f * s, 0, 2 * pi, venomGold, .45f * flash, .25f * s, 40);
+        softArc(out, burst.point, right, up, 0, .14f * s, 0, 2 * pi, venomCore, .7f * flash, .08f * s, 32);
+    }
+    // The smash's ring on the ground, out to its edge.
+    if (std::isfinite(burst.ring) && burst.ring > 0) {
+        const float r = burst.ring * std::sqrt(u);
+        const Vec3 ground = burst.point + Vec3{0, .05f, 0};
+        softArc(out, ground, {1, 0, 0}, {0, 0, 1}, std::max(0.f, r - .35f), r, 0, 2 * pi, venomGold, .5f * fade,
+                .25f, 64);
+        softArc(out, ground, {1, 0, 0}, {0, 0, 1}, std::max(0.f, r - .12f), r, 0, 2 * pi, venomCore, .7f * fade,
+                .08f, 64);
     }
     // Bolts thrown out, longer as it goes, new ones every 1/30 s.
     const int frame = static_cast<int>(burst.age * 30);
@@ -913,8 +923,8 @@ void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec
     for (int i = 0; i < bolts; ++i) {
         const float seed = seedBase + static_cast<float>(frame * 13 + i) * .618f;
         const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
-        const float reach = (.2f + .35f * u) * (.6f + .4f * hash(seed, 3));
-        venomBolt(out, burst.point + way * .05f, way, reach, view, px, fade, seed);
+        const float reach = (.2f + .35f * u) * (.6f + .4f * hash(seed, 3)) * s;
+        venomBolt(out, burst.point + way * .05f * s, way, reach, view, px, fade, seed);
     }
 }
 } // namespace spidy

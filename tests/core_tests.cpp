@@ -581,6 +581,9 @@ int main() {
         check(gain(true, false) > gain(false, false) && gain(false, true) > gain(true, false),
               "a hard blow gives more, a finisher most");
         check(filled(-1, 10) == 10, "an unread meter counts from empty");
+        check(filled(250, 10) == 250, "a meter of more bars than one is not cut back");
+        check(spent(100) == 0 && spent(60) == 0 && spent(300) == 200 && spent(250) == 150,
+              "a venom move takes one bar");
         Charge c;
         auto o = c.update(.1f, true, false, 1);
         check(!o.armed && o.glow == 0, "below full the grip charges nothing");
@@ -615,6 +618,38 @@ int main() {
             c.update(.1f, true, true, 1);
         o = c.update(.1f, true, false, 1);
         check(!o.armed && o.glow == 0, "a meter no longer full drops the charge");
+    });
+    test("venom smash: a charged fist punched down, a blast around where it goes off", [] {
+        using namespace spidy::venom_punch;
+        check(smashing({0, -3, 0}) && smashing({1, -3, 0}), "fast and steeply down");
+        check(!smashing({0, -2, 0}), "not too slow");
+        check(!smashing({3, -1, 0}) && !smashing({0, 0, -4}) && !smashing({0, 4, 0}),
+              "not forward, a hook or an uppercut: those are the venom punch");
+        const Vec3 c{10, 0, 10};
+        check(inBlast(c, {14.9f, 0, 10}) && inBlast(c, {10, -2.5f, 13}) && !inBlast(c, {15.2f, 0, 10}) &&
+                  !inBlast(c, {10, 3.5f, 10}),
+              "5 m across, 3 m up or down");
+        check(blastShare(c, c) == 1 && std::fabs(blastShare(c, {15, 0, 10}) - smashEdge) < 1e-4f,
+              "full at the middle, less at the edge");
+        const Vec3 f = blastFlight(c, {12, 1, 10});
+        check(f.x > 11 && std::fabs(f.z) < 1e-4f && f.y == smashLift, "thrown away from the middle, and up");
+        check(length(blastFlight(c, c)) > 1, "one on top of it flies too");
+        SmashDrop d;
+        d.start({1, 0, 2}, true);
+        auto s = d.step(.01f, {5, 5, 5}, true);
+        check(s.blast && s.at.x == 1 && s.at.z == 2 && !s.drive && !d.active(), "standing: at once, where he stood");
+        d.start({0, 6, 0}, false);
+        s = d.step(.01f, {0, 6, 0}, false);
+        check(s.drive && s.velocity.y < -10 && !s.blast && d.active(), "in the air: he drops");
+        s = d.step(.01f, {0, .1f, 0}, true);
+        check(s.blast && s.at.y == .1f && !d.active(), "landed: it goes off there");
+        d.start({0, 50, 0}, false);
+        for (int i = 0; i < 25 && !s.calledOff; ++i)
+            s = d.step(.1f, {0, 50, 0}, false);
+        check(s.calledOff && !s.blast && !d.active(), "no ground in time: called off");
+        d.start({0, 6, 0}, false);
+        d.cancel();
+        check(!d.active() && !d.step(.01f, {}, true).blast, "cancelled: nothing");
     });
     test("native view conversion preserves identity and meter scale", [] {
         const Mat4 original{1,0,0,0, 0,-1,0,0, 0,0,-1,0, 10,20,30,1};

@@ -661,10 +661,10 @@ TRACKING_GAP_REASONS = ((1, 'not_playing'), (2, 'unfocused'), (4, 'no_head'), (8
 
 def snapshot(game, address):
     for _ in range(8):
-        raw = game.read(address, 1216)
-        if len(raw) != 1216:
+        raw = game.read(address, 1232)
+        if len(raw) != 1232:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53585244, 40, 1216):
+        if struct.unpack_from('<3I', raw) != (0x53585244, 41, 1232):
             raise RuntimeError('Game XR protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -800,6 +800,7 @@ def snapshot(game, address):
         v_flags, v_fills, v_charges, v_blows, v_spent = struct.unpack_from('<5I', raw, 1164)
         v_candidates, v_other, v_writable = struct.unpack_from('<IfI', raw, 1184)
         v_holder, v_holder_offset, v_route, v_dumps = struct.unpack_from('<4I', raw, 1196)
+        v_smashes, v_smash_hits, v_smash_off = struct.unpack_from('<3I', raw, 1212)
         result.update(venom=dict(meter=round(v_meter, 2), grip=round(v_grip, 2), glow=round(v_glow, 2),
                                  full=bool(v_flags & 1), right_webs_off=bool(v_flags & 2), charged=bool(v_flags & 4),
                                  web_kept=bool(v_flags & 8), fills=v_fills, charges=v_charges, blows=v_blows,
@@ -807,7 +808,8 @@ def snapshot(game, address):
                                  writable=bool(v_writable), holder_vtable=hex(v_holder),
                                  holder_offset=hex(v_holder_offset),
                                  route=('none', 'melee_neighbour', 'holder')[v_route] if v_route < 3 else v_route,
-                                 let_go=v_dumps))
+                                 let_go=v_dumps, smashes=v_smashes, smash_hits=v_smash_hits,
+                                 smashes_called_off=v_smash_off))
         result.update(crawl=dict(frames=crawl_frames, stood=crawl_stood, stick_samples=crawl_stick,
                                  stick_turn_degrees=round(math.degrees(crawl_turn), 1),
                                  stick_agreement=round(crawl_agreement, 3),

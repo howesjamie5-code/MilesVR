@@ -132,7 +132,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 40, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 41, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -360,8 +360,11 @@ struct XrData {
     uint32_t venomHolderVtable{}, venomHolderOffset{}, venomRoute{};
     // Version 40: the meter let go with the venom hand's thumbstick click.
     uint32_t venomDumps{};
+    // Version 41: venom smashes gone off, the enemies the latest hit, and the
+    // drops called off with no ground under him.
+    uint32_t venomSmashes{}, venomSmashHits{}, venomSmashesCalledOff{}, venomSpare{};
 };
-static_assert(sizeof(XrData) == 1216);
+static_assert(sizeof(XrData) == 1232);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -745,7 +748,8 @@ DWORD WINAPI run(void*) {
         game_venom::Meter venomMeter;
         venom_punch::Charge venomCharge;
         uint32_t venomCharges{};
-        uint64_t venomBlowsBefore{}, venomSpentBefore{};
+        uint64_t venomBlowsBefore{}, venomSpentBefore{}, venomSmashesBefore{};
+        uint32_t venomSmashHits{}, venomSmashesCalledOff{};
         float venomGlow{};
         bool venomFullBefore{};
         // The venom hand's web button while the meter is full (the venom
@@ -2429,6 +2433,28 @@ DWORD WINAPI run(void*) {
                                                       ? "Venom punch!"
                                                       : "Venom punch! (the meter could not be emptied)");
                                 }
+                                // The venom smash went off (venom_punch.hpp): a big burst
+                                // with its ring on the ground, and both hands feel it.
+                                venomSmashesBefore = std::min(venomSmashesBefore, exchange.smashes);
+                                if (exchange.smashes > venomSmashesBefore) {
+                                    venomCharge.spent();
+                                    venomGlow = 0;
+                                    runtime.haptic(0, 1.f, .45f);
+                                    runtime.haptic(1, 1.f, .45f);
+                                    if (finite(exchange.smashPoint)) {
+                                        auto& burst = venomBursts[nextVenomBurst++ % venomBursts.size()];
+                                        burst.view = {exchange.smashPoint + Vec3{0, .3f, 0}, 0, 4.f,
+                                                      venom_punch::smashRadius};
+                                        burst.since = frame.predictedDisplayTime;
+                                    }
+                                    char text[96];
+                                    sprintf_s(text, "Venom smash! %u %s", exchange.smashHits,
+                                              exchange.smashHits == 1 ? "enemy hit" : "enemies hit");
+                                    message(3, 0, text);
+                                }
+                                venomSmashesBefore = exchange.smashes;
+                                venomSmashHits = exchange.smashHits;
+                                venomSmashesCalledOff = exchange.smashesCalledOff;
                                 venomBlowsBefore = exchange.blows;
                                 venomSpentBefore = exchange.spent;
                             }
@@ -2702,6 +2728,9 @@ DWORD WINAPI run(void*) {
                         d.venomHolderOffset = venomMeter.holderOffset;
                         d.venomRoute = venomMeter.route;
                         d.venomDumps = venomDumps;
+                        d.venomSmashes = static_cast<uint32_t>(venomSmashesBefore);
+                        d.venomSmashHits = venomSmashHits;
+                        d.venomSmashesCalledOff = venomSmashesCalledOff;
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];

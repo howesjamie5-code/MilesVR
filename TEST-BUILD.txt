@@ -1,5 +1,28 @@
-MilesVR 0.1.19 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.20 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.19: THE VENOM SMASH
+--------------------------------------------------
+Your design: charge the venom fist as for the venom punch, then punch
+straight DOWN.
+- Standing: the smash goes off right where you are.
+- In the air (jumping or falling, not on a web): you drop straight to the
+  ground and it goes off as you land.
+Every enemy within 5 m takes a venom blow and is thrown up and away. A big
+venom burst and a ring spread along the ground, and both controllers buzz.
+Any other charged punch at the marked thug is still the venom punch.
+The venom punch and the smash each use one bar of the meter (all of it
+for now; later, when Miles has more bars, just one). The thumbstick let-go
+still empties it all, so the webs come back.
+
+What to try:
+1. In a group of thugs, standing: charge, punch down. How many were hit?
+   Does the bar empty?
+2. Jump, charge, punch down: do you drop and smash on landing?
+3. Check the venom punch still works (a charged punch forward at the
+   marked thug).
+4. Tell me if the drop feels too fast or too slow, and if 5 m feels right.
+5. Close the game and keep the reports folder.
 
 What changed since 0.1.18: LET THE VENOM GO WITH THE THUMBSTICK
 --------------------------------------------------

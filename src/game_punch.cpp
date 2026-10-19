@@ -92,6 +92,8 @@ std::atomic<uint32_t> venomCharge{}, venomHand{1};
 std::atomic<uint64_t> venomMeter{}, venomHolder{}, venomHolderClass{};
 uint32_t venomUsed{};
 Venom venomOut;
+// The venom smash: the drop to the ground, then the blast.
+venom_punch::SmashDrop smash;
 // A venom blow: a finisher's damage at least, times this, and his flight.
 constexpr float venomDamage = 3, venomLeast = 28, venomSpeed = 18, venomLift = 5;
 // DamageType kVenom and the venom status: Miles Morales's own, after
@@ -136,8 +138,10 @@ bool writeMeter(uint64_t meter, float value) {
         return false;
     }
 }
-bool emptyMeter(uint64_t meter) {
-    return writeMeter(meter, 0);
+// A venom move's cost: one bar (venom_punch::spent).
+bool spendBar(uint64_t meter) {
+    float now{};
+    return meter && read(meter, &now, 4) && std::isfinite(now) && writeMeter(meter, venom_punch::spent(now));
 }
 // A blow of the player's charges the meter (venom_punch::gain).
 void chargeMeter(uint64_t meter, float amount) {
@@ -190,6 +194,7 @@ void publishStrikes(uint32_t status) {
     ReleaseSRWLockExclusive(&output);
 }
 void resetFight() {
+    smash.cancel();
     punches.reset();
     turnSeen = false;
     strike.cancel();
@@ -244,6 +249,60 @@ void knockouts(float seconds) {
         }
         it = out || !bot || it->age > struckSeconds ? struckLately.erase(it) : it + 1;
     }
+}
+// The venom smash goes off at `centre`: a venom blow to every enemy within the blast, each thrown up
+// and away from it, and one bar of the meter spent.
+void blast(Vec3 centre) {
+    uint32_t hits{};
+    for (const auto& b : bots) {
+        Vec3 feet{};
+        if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
+            !game_targets::position(b, feet) || !venom_punch::inBlast(centre, feet) || !game_targets::live(base, b))
+            continue;
+        const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
+        const Vec3 flight = venom_punch::blastFlight(centre, feet);
+        Vec3 way{flight.x, 0, flight.z};
+        way = length(way) > .1f ? normalized(way) : Vec3{1, 0, 0};
+        native_bodies::Damage request;
+        request.victim = b.record;
+        request.damager = fighter.record;
+        request.point = middle - way * b.size.width(botRadius);
+        request.direction = way;
+        request.normal = way * -1.f;
+        request.amount = venomLeast * venomDamage * venom_punch::blastShare(centre, feet);
+        request.type = venomType;
+        request.knockback = static_cast<int32_t>(Knockback::SuperFlyBack);
+        request.knockbackAmount = flingAmount * 1.5f;
+        request.impulse = flingImpulse * 1.5f;
+        request.statusType = venomStatus;
+        request.statusAmount = venomStatusAmount;
+        request.statusDuration = venomStatusSeconds;
+        native_bodies::damage(request);
+        if (b.machine) {
+            const auto waiting = std::find_if(launches.begin(), launches.end(),
+                                              [&](const Launch& l) { return l.record == b.record; });
+            if (waiting != launches.end())
+                *waiting = {b.record, b.machine, flight};
+            else
+                launches.push_back({b.record, b.machine, flight});
+        }
+        const auto known = std::find_if(struckLately.begin(), struckLately.end(),
+                                        [&](const Struck& s) { return s.record == b.record; });
+        const Struck struck{b.record, middle, 0};
+        if (known != struckLately.end())
+            *known = struck;
+        else
+            struckLately.push_back(struck);
+        ++hits;
+    }
+    const bool paid = spendBar(venomMeter.load());
+    tally.blows += hits;
+    AcquireSRWLockExclusive(&output);
+    ++venomOut.smashes;
+    venomOut.smashHits = hits;
+    venomOut.smashPoint = centre;
+    venomOut.spent += paid;
+    ReleaseSRWLockExclusive(&output);
 }
 // One blow, a fist's or a strike's, into the flow and to the game.
 void land(PunchEvent e, bool byStrike) {
@@ -339,7 +398,7 @@ void land(PunchEvent e, bool byStrike) {
         chargeMeter(venomMeter.load(), venom_punch::gain(d.kind != BlowKind::Hit && d.kind != BlowKind::Finisher,
                                                          d.kind == BlowKind::Finisher));
     if (venom) {
-        const bool emptied = emptyMeter(venomMeter.load());
+        const bool emptied = spendBar(venomMeter.load());
         AcquireSRWLockExclusive(&output);
         ++venomOut.blows;
         venomOut.spent += emptied;
@@ -515,10 +574,27 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         strike.spent(e.hand);
         land(e, false);
     }
+    // The venom smash: the venom fist, charged, punched down - standing, or
+    // in the air on no web (venom_punch.hpp). It takes the charge, and the
+    // punch opens no strike nor venom punch.
+    const int side = venomHand.load() ? 1 : 0;
+    if (venomArmed() && !smash.active() && hands[side].tracked && !hands[side].busy && !player.swinging &&
+        strike.phase() != WebStrike::Phase::Flying && venom_punch::smashing(punches.velocity(side))) {
+        // Held up in the air after a blow: the drop has him from here.
+        if (strike.phase() == WebStrike::Phase::Hanging)
+            strike.cancel();
+        venomUsed = venomCharge.load();
+        punches.spend(side);
+        strike.spent(side);
+        smash.start(player.feet, player.grounded);
+        if (player.grounded) {
+            smash.step(seconds, player.feet, true);
+            blast(player.feet);
+        }
+    }
     // The venom punch: the venom fist, charged, thrown out at the marked
     // enemy within venomReach, as a strike's fist is thrown (fast enough,
     // out from the neck, his way). The blow lands on him.
-    const int side = venomHand.load() ? 1 : 0;
     if (venomArmed() && hands[side].tracked && !hands[side].busy && strike.phase() == WebStrike::Phase::Idle) {
         const auto& sc = strike.config();
         const Vec3 velocity = punches.velocity(side);
@@ -616,7 +692,23 @@ Flight game_punch::fly(float seconds, Vec3 feet, bool grounded, bool waiting) {
             ReleaseSRWLockShared(&updating);
         }
     } release;
-    if (!enabled || strike.phase() == WebStrike::Phase::Idle)
+    if (!enabled)
+        return out;
+    // The venom smash's drop: straight down until he stands, then the blast there.
+    if (smash.active()) {
+        const auto step = smash.step(seconds, feet, grounded);
+        out.drive = step.drive;
+        out.velocity = step.velocity;
+        if (step.blast)
+            blast(step.at);
+        if (step.calledOff) {
+            AcquireSRWLockExclusive(&output);
+            ++venomOut.smashesCalledOff;
+            ReleaseSRWLockExclusive(&output);
+        }
+        return out;
+    }
+    if (strike.phase() == WebStrike::Phase::Idle)
         return out;
     if (waiting && strike.phase() == WebStrike::Phase::Flying) {
         strike.wait(seconds);

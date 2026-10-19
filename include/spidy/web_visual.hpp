@@ -315,6 +315,9 @@ struct VenomBurstView {
     static constexpr float seconds = .5f;
     Vec3 point{};
     float age = -1; // seconds since it landed; below 0, or past `seconds`: nothing
+    // The venom smash's (0.1.20): this many times the punch's burst, and a
+    // ring that spreads along the ground to `ring` metres (0: none).
+    float scale = 1, ring = 0;
 };
 void appendVenomBurst(std::vector<Vertex>& out, const VenomBurstView& burst, Vec3 viewer, float pixelAngle);
 } // namespace spidy

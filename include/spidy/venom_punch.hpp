@@ -1,4 +1,5 @@
 #pragma once
+#include "math.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -33,11 +34,26 @@ constexpr float hitGain = 10, hardGain = 15, finisherGain = 20;
 inline float gain(bool hard, bool finisher) {
     return finisher ? finisherGain : hard ? hardGain : hitGain;
 }
-// The meter after `amount` more, never past full.
+// The meter after `amount` more, never past full. A meter the game holds
+// above fullMeter (later in the story Miles has two more bars) is left as it
+// is: a blow must not cut it back to one bar.
 inline float filled(float meter, float amount) {
     if (!std::isfinite(meter) || meter < 0)
         meter = 0;
+    if (meter >= fullMeter)
+        return meter;
     return std::min(fullMeter, meter + std::max(0.f, amount));
+}
+
+// The meter after a venom move: one bar spent (the user, October 19: the
+// punch and the smash "should use only one bar"). Until Miles has more bars
+// that is the whole meter; one of fullMeter's worth comes off a meter above
+// it. (The thumbstick's let-go empties it all: with a bar left the meter
+// would still be full and the hand's webs still off.)
+inline float spent(float meter) {
+    if (!std::isfinite(meter) || meter <= fullMeter)
+        return 0;
+    return meter - fullMeter;
 }
 
 // The web button pressed past `on` and let go below `off`.
@@ -91,5 +107,94 @@ class Charge {
   private:
     float charge_{}, keep_{};
     bool held_{}, spent_{};
+};
+
+// The venom smash (MilesVR 0.1.20, the user's design, October 19): the
+// charged venom fist punched DOWN - in the air (no web holding him) Miles
+// drops to the ground and the smash goes off as he lands; standing, it goes
+// off where he is. A venom blast hits every enemy within smashRadius and
+// throws him up and away, and the meter is spent. Any other charged punch is
+// still the venom punch.
+//
+// A punch down: the fist, relative to the player, at least smashSpeed and
+// within smashCone of straight down (its downward share at least
+// smashSteep, the cosine).
+constexpr float smashSpeed = 2.6f, smashSteep = .82f;
+inline bool smashing(Vec3 fist) {
+    const float speed = length(fist);
+    return std::isfinite(speed) && speed >= smashSpeed && fist.y <= -smashSteep * speed;
+}
+// The blast: every enemy whose feet are within smashRadius across and
+// smashHeight up or down of where it goes off. Its damage is a venom
+// punch's at the middle, smashEdge of that at the edge; he flies away from
+// the middle at smashThrow and up at smashLift.
+constexpr float smashRadius = 5, smashHeight = 3, smashEdge = .6f, smashThrow = 12, smashLift = 7;
+inline bool inBlast(Vec3 centre, Vec3 feet) {
+    const Vec3 d = feet - centre;
+    return std::hypot(d.x, d.z) <= smashRadius && std::fabs(d.y) <= smashHeight;
+}
+inline float blastShare(Vec3 centre, Vec3 feet) {
+    const Vec3 d = feet - centre;
+    const float across = std::clamp(std::hypot(d.x, d.z) / smashRadius, 0.f, 1.f);
+    return 1 - (1 - smashEdge) * across;
+}
+// Away from the middle across the ground (any way for one on top of it), and up.
+inline Vec3 blastFlight(Vec3 centre, Vec3 feet) {
+    Vec3 away{feet.x - centre.x, 0, feet.z - centre.z};
+    const float across = length(away);
+    away = across > .05f ? away / across : Vec3{1, 0, 0};
+    return away * smashThrow + Vec3{0, smashLift, 0};
+}
+// The drop: from the air straight down at dropSpeed until he stands, the
+// smash then; one that finds no ground within dropSeconds is called off.
+class SmashDrop {
+  public:
+    static constexpr float dropSpeed = 20, dropSeconds = 2;
+    struct Step {
+        bool drive{};    // the player moves at `velocity` this step
+        Vec3 velocity{};
+        bool blast{};    // the smash goes off at `at`, this step
+        bool calledOff{};
+        Vec3 at{};
+    };
+    bool active() const {
+        return dropping_ || ready_;
+    }
+    // The punch down: on the ground the smash goes off at the next step, in
+    // the air he drops first.
+    void start(Vec3 feet, bool grounded) {
+        dropping_ = !grounded;
+        ready_ = grounded;
+        at_ = feet;
+        elapsed_ = 0;
+    }
+    Step step(float seconds, Vec3 feet, bool grounded) {
+        Step out;
+        if (ready_ || (dropping_ && grounded)) {
+            out.blast = true;
+            out.at = ready_ ? at_ : feet;
+            dropping_ = ready_ = false;
+            return out;
+        }
+        if (!dropping_)
+            return out;
+        elapsed_ += std::isfinite(seconds) ? std::max(0.f, seconds) : 0.f;
+        if (elapsed_ >= dropSeconds) {
+            dropping_ = false;
+            out.calledOff = true;
+            return out;
+        }
+        out.drive = true;
+        out.velocity = {0, -dropSpeed, 0};
+        return out;
+    }
+    void cancel() {
+        dropping_ = ready_ = false;
+    }
+
+  private:
+    bool dropping_{}, ready_{};
+    Vec3 at_{};
+    float elapsed_{};
 };
 } // namespace spidy::venom_punch
