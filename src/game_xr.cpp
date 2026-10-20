@@ -813,6 +813,10 @@ DWORD WINAPI run(void*) {
         uint64_t wrapTarget{};
         uint32_t wrapHits{}, wrapDone{};
         float takedownPress{};
+        // The web wrap's walk in (0.1.75): the stick toward his back for takedownTurn seconds,
+        // harder while he is more than a step away, so the game's takedown reaches him.
+        float takedownTurn{};
+        Vec3 takedownAim{};
         bool takedownHolding{}; // the web wrap or the web hang has the hands: no punches (0.1.74)
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
@@ -1936,8 +1940,10 @@ DWORD WINAPI run(void*) {
                             hand.trigger = hand.grip = 0;
                     }
                     // The stealth takedowns (0.1.73): on the ground both grips and a push of both
-                    // hands toward him starts the web wrap, held for 1.5 s while the game's webbing
-                    // builds up on him; from a perch both hands at him, both grips and a pull with
+                    // hands toward him: the game's own takedown, its X, played out on the body
+                    // while the view stays the headset's (0.1.75; the user: "i want it to be a
+                    // physical animation" - "while still being in vr view but arkham style";
+                    // 0.1.73's webbing hits only sprayed webs and stuck him to the ground); from a perch both hands at him, both grips and a pull with
                     // each, hand over hand: the game's stealth web takedown, its X. Their grips shoot
                     // no web meanwhile.
                     {
@@ -1951,21 +1957,19 @@ DWORD WINAPI run(void*) {
                         const auto hang = webHang.update(frame.seconds, play && perch && (takedownOnBack & 3u) == 3u,
                                                          frame.hands[0].squeeze, frame.hands[1].squeeze, rel[0],
                                                          rel[1]);
-                        if (wrap.start)
-                            wrapTarget = takedownTarget;
-                        if (wrap.hit) {
-                            wrapHits = wrapHits + 1;
-                            runtime.haptic(0, .5f, .06f);
-                            runtime.haptic(1, .5f, .06f);
-                        }
-                        if (wrap.done) {
-                            wrapDone = wrapDone + 1;
+                        if (wrap.start) {
+                            takedownPress = 1.f;
+                            takedownTurn = 1.f;
+                            takedownAim = takedownPoint;
                             runtime.haptic(0, 1.f, .25f);
                             runtime.haptic(1, 1.f, .25f);
-                            message(3, 0, "Webbed up - the web wrap took him down");
+                            message(3, 0, "Web wrap - the game's takedown (its X)");
                         }
-                        if (wrap.lost)
-                            message(3, 0, "Web wrap let go too soon");
+                        // The grips held through it: a soft pulse while the takedown plays.
+                        if (wrap.hit && takedownTurn <= 0) {
+                            runtime.haptic(0, .3f, .05f);
+                            runtime.haptic(1, .3f, .05f);
+                        }
                         if (hang.fire) {
                             takedownPress = .6f;
                             runtime.haptic(0, 1.f, .2f);
@@ -1980,6 +1984,9 @@ DWORD WINAPI run(void*) {
                                 (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
                     }
                     takedownPress = std::max(0.f, takedownPress - static_cast<float>(frame.seconds));
+                    takedownTurn = std::max(0.f, takedownTurn - static_cast<float>(frame.seconds));
+                    if (takedownTarget && takedownTurn > 0 && finite(takedownPoint))
+                        takedownAim = takedownPoint;
                     // The Mega Venom Blast (0.1.56): all three bars full, both grips
                     // squeezed together. A grip alone waits a moment for the other
                     // before the swing sees it, so the blast's squeeze shoots no webs.
@@ -2875,6 +2882,21 @@ DWORD WINAPI run(void*) {
                                 walk.right = stepIn * dot(look, cross(ahead, {0, 1, 0}));
                             }
                         }
+                        // The web wrap: the stick toward his back - a walk while he is more
+                        // than a step off, then a nudge that turns the hero to face him.
+                        if (takedownTurn > 0 && finite(takedownAim) && finite(swingState.position)) {
+                            Vec3 toward{takedownAim.x - swingState.position.x, 0,
+                                        takedownAim.z - swingState.position.z};
+                            Vec3 ahead{camera[8], 0, camera[10]};
+                            const float off = length(toward);
+                            if (off > .1f && length(ahead) > .3f) {
+                                toward = normalized(toward);
+                                ahead = normalized(ahead);
+                                const float stick = off > 1.f ? 1.f : .5f;
+                                walk.forward = stick * dot(toward, ahead);
+                                walk.right = stick * dot(toward, cross(ahead, {0, 1, 0}));
+                            }
+                        }
                         // While a use is under way the game's crawl is where the
                         // offer was checked: the stick does not walk him off it.
                         if (offerUse.busy())
@@ -3065,8 +3087,8 @@ DWORD WINAPI run(void*) {
                         // A venom gesture sending the game's own venom move (above).
                         if (venomPromptLeft > 0)
                             walk.demand = venomPromptDemand;
-                        // The web hang: the game's X, its stealth web takedown from a perch (the
-                        // purple Square).
+                        // The web wrap's and the web hang's: the game's X (its ground takedown;
+                        // from a perch its stealth web takedown, the purple Square).
                         if (takedownPress > 0)
                             walk.demand.buttons |= prompt_buttons::padX;
                         if (walk.pull && !pulling_)

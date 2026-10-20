@@ -1551,10 +1551,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         {"STEALTH",
          {{"In position", "Behind an enemy who hasn't seen you, or above him on a perch: a soft buzz, and your "
                           "hands glow faint blue"},
-          {"Behind him: both grips, push both hands at him", "Starts the web wrap. Keep both grips held 1.5 s while "
-                                                             "webbing builds up on him: he's webbed up and out",
-           "Webbed up - the web wrap took him down"},
-          {"Let go during the wrap", "It stops; he isn't taken down", "Web wrap let go too soon"},
+          {"Behind him (3 m): both grips, push both hands at him", "Miles steps in and does the takedown, "
+                                                                   "seen from your own eyes",
+           "Web wrap - the game's takedown (its X)"},
           {"From a perch: both hands at him, both grips, pull up hand over hand", "The web hang: he's left "
                                                                                  "hanging in a web (the game's own)",
            "Web hang - the game's stealth web takedown (its X)"},

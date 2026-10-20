@@ -1,5 +1,13 @@
-MilesVR 0.1.74 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.75 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.74: THE WEB WRAP IS A REAL TAKEDOWN
+--------------------------------------------------
+0.1.74's web wrap only sprayed webbing hits at him and stuck him to the
+ground. Now the push (both grips, both hands at him) does the game's own
+takedown: Miles walks in, turns to his back and takes him down with the
+real animation, while you stay in your own eyes. No more web spray.
+The range is now 3 m behind him (was 1.5 m).
 
 What changed since 0.1.73: THE WEB WRAP'S PUSH IS NO PUNCH
 --------------------------------------------------

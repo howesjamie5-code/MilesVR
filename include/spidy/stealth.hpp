@@ -10,10 +10,10 @@
 // as its spiderman" - "pushing forward toward him to start the takedown").
 //
 // Ground, the web wrap: behind an enemy who has not seen you, squeeze both
-// grips and push both hands forward toward him; hold the grips while the
-// game's own webbing builds up on him (kWebEncase hits), and he is webbed up
-// and out of the fight. Let go early and it stops. The mod puts him out itself:
-// no game animation takes the view.
+// grips and push both hands forward toward him: the game's own takedown (its
+// X) plays out on the body - the hero walked in and turned to his back - while
+// the view stays the headset's (0.1.75; 0.1.73's own webbing hits sprayed webs
+// and stuck him to the ground).
 //
 // Perch, the web hang: from a ledge or lamp post above him, point both hands
 // at him, squeeze both grips and pull up hand over hand: the game's own
@@ -26,7 +26,9 @@ namespace spidy::stealth {
 // The ground's: within `reach` across and `rise` up or down of his feet, and
 // behind him - the player's place from him at least `behindCos` (a cosine)
 // against the way he faces.
-constexpr float reach = 1.5f, rise = 1.f, behindCos = .35f;
+// 0.1.75 (the user: "the radius needs to be increased"): 3 m, the hero walked
+// in the rest of the way as the game's takedown goes in.
+constexpr float reach = 3.f, rise = 1.f, behindCos = .35f;
 // No takedown within `calmSeconds` of a blow of the player's.
 constexpr float calmSeconds = 5;
 inline bool behind(Vec3 enemyFeet, Vec3 enemyForward, Vec3 playerFeet) {
