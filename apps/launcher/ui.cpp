@@ -1546,18 +1546,6 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Menu, or both sticks held in", "Pause. Settings > MILES VR has the VR settings"},
           {"Click both sticks", "Pad layer: the whole gamepad for a moment. Click both again to leave",
            "Pad layer on - your grips are the game's LB and RB, ..."}}},
-        // Stealth (0.1.66-0.1.71): a card of its own, the user, October 20 - and to go whole if SpidyVR
-        // brings its own takedowns.
-        {"STEALTH",
-         {{"In position", "Behind an enemy who hasn't seen you, or above him on a perch: a soft buzz, and your "
-                          "hands glow faint blue"},
-          {"Behind him (3 m): both grips, push both hands at him", "Miles steps in and does the takedown, "
-                                                                   "seen from your own eyes",
-           "Web wrap - the game's takedown (its X)"},
-          {"From a perch: both hands at him, both grips, pull up hand over hand", "The web hang: he's left "
-                                                                                 "hanging in a web (the game's own)",
-           "Web hang - the game's stealth web takedown (its X)"},
-          {"Be quick", "The longer you stand behind him, the likelier he turns. Camouflage helps"}}},
         {"WEBS",
          {{"Web button, hold", "Shoot a web where the hand points and swing; let go to release. The web button is "
                                "the grip unless you set Web button to Trigger"},

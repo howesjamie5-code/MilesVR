@@ -35,7 +35,6 @@
 #include "spidy/hand_pose.hpp"
 #include "spidy/impact_sound.hpp"
 #include "spidy/web_strike.hpp"
-#include "spidy/stealth.hpp"
 #include "spidy/spider_sense.hpp"
 #include "spidy/prompt_buttons.hpp"
 #include "spidy/xr_layers.hpp"
@@ -784,52 +783,6 @@ int main() {
             tail = std::max(tail, sample(i));
         check(loudest > 8000 && loudest < 17000, "loud, but at half the level (0.1.58's was far too loud)");
         check(tail < loudest / 30, "its end faded out, not cut off");
-    });
-    test("stealth, Arkham Shadow's way: push both hands at him to start the web wrap, hold; pull up hand over hand from a perch", [] {
-        using namespace spidy::stealth;
-        check(behind({0,0,0},{0,0,1},{0,0,-1})&&!behind({0,0,0},{0,0,1},{0,0,1})&&!behind({0,0,0},{0,0,1},{1,0,0}),
-              "behind him, not in front or beside");
-        const Vec3 perchHand{0,5,0},him{3,0,-4};
-        check(aimsAt(perchHand,normalized(him-perchHand),him)&&!aimsAt(perchHand,{0,0,-1},him),
-              "pointing at him from above");
-        const float dt=1.f/90;
-        // The wrap: both grips, both hands pushed forward at 1.5 m/s, then held.
-        WebWrap w;
-        Vec3 l{-.2f,-.3f,-.3f},r{.2f,-.3f,-.3f};
-        auto o=w.update(dt,true,0,0,l,r);
-        check(!o.hold&&!o.start,"nothing before the grips");
-        o=w.update(dt,true,1,0,l,r);
-        check(o.hold&&!o.start,"one grip with a takedown on: held back, no web");
-        bool started=false;
-        for(int k=0;k<20&&!started;++k){
-            l=l*(1+1.5f*dt/length(l));r=r*(1+1.5f*dt/length(r));
-            o=w.update(dt,true,1,1,l,r);started=o.start;
-        }
-        check(started&&w.wrapping(),"the push of both hands did not start it");
-        int hits=0;bool done=false;
-        for(int k=0;k<200&&!done;++k){o=w.update(dt,true,1,1,l,r);hits+=o.hit;done=o.done;}
-        check(done&&hits>=5&&hits<=7,"held 1.5 s: webbing hits every quarter second, then done");
-        check(w.update(dt,true,1,1,l,r).hold,"after it the grips stay held back until let go");
-        // Let go early: lost.
-        WebWrap early;Vec3 a{-.2f,-.3f,-.3f},b{.2f,-.3f,-.3f};
-        early.update(dt,true,1,1,a,b);
-        for(int k=0;k<10;++k){a=a*(1+1.5f*dt/length(a));b=b*(1+1.5f*dt/length(b));early.update(dt,true,1,1,a,b);}
-        for(int k=0;k<30;++k)early.update(dt,true,1,1,a,b);
-        check(early.update(dt,true,1,0,a,b).lost,"a grip let go during the wrap did not lose it");
-        // No push, just both grips held: no wrap.
-        WebWrap still;Vec3 c{-.2f,-.3f,-.3f},d{.2f,-.3f,-.3f};
-        bool any=false;
-        for(int k=0;k<120;++k)any|=still.update(dt,true,1,1,c,d).start;
-        check(!any,"both grips held still started a wrap");
-        // The hang: both hands at him from a perch, both grips, then each hand pulled in.
-        WebHang h;Vec3 hl{-.2f,-.3f,-.6f},hr{.2f,-.3f,-.6f};
-        h.update(dt,true,0,0,hl,hr);
-        check(h.update(dt,true,1,1,hl,hr).hold,"both grips at him: held back from the web");
-        bool fired=false;
-        for(int k=0;k<20;++k){hl=hl*(1-1.5f*dt/length(hl));fired|=h.update(dt,true,1,1,hl,hr).fire;}
-        check(!fired,"one hand's pull fired the hang");
-        for(int k=0;k<20;++k){hr=hr*(1-1.5f*dt/length(hr));fired|=h.update(dt,true,1,1,hl,hr).fire;}
-        check(fired,"hand over hand did not fire the hang");
     });
     test("venom jump: a punch up throws them up, and him with them", [] {
         using namespace spidy::venom_punch;

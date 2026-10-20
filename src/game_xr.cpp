@@ -43,7 +43,6 @@
 #include "spidy/game_venom.hpp"
 #include "spidy/game_venom_events.hpp"
 #include "spidy/venom_punch.hpp"
-#include "spidy/stealth.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -801,23 +800,6 @@ DWORD WINAPI run(void*) {
         venom_punch::VenomButtons venomButtons;
         // The Mega Venom Blast: both grips together with three full bars.
         venom_punch::BothGrips bothGrips;
-        // Stealth takedowns, Arkham Shadow's way (stealth.hpp, 0.1.73): the punch module's enemy and the
-        // hands pointing at him from a perch (the venom exchange, a frame behind); the ground's web wrap -
-        // its hits and its end counted out to the punch module, which webs him - and the perch's web hang,
-        // the game's X for takedownPress seconds.
-        uint64_t takedownTarget{}, takedownMarked{};
-        Vec3 takedownPoint{};
-        uint32_t takedownOnBack{};
-        stealth::WebWrap webWrap;
-        stealth::WebHang webHang;
-        uint64_t wrapTarget{};
-        uint32_t wrapHits{}, wrapDone{};
-        float takedownPress{};
-        // The web wrap's walk in (0.1.75): the stick toward his back for takedownTurn seconds,
-        // harder while he is more than a step away, so the game's takedown reaches him.
-        float takedownTurn{};
-        Vec3 takedownAim{};
-        bool takedownHolding{}; // the web wrap or the web hang has the hands: no punches (0.1.74)
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -1939,54 +1921,6 @@ DWORD WINAPI run(void*) {
                         for (auto& hand : motion.swing.hands)
                             hand.trigger = hand.grip = 0;
                     }
-                    // The stealth takedowns (0.1.73): on the ground both grips and a push of both
-                    // hands toward him: the game's own takedown, its X, played out on the body
-                    // while the view stays the headset's (0.1.75; the user: "i want it to be a
-                    // physical animation" - "while still being in vr view but arkham style";
-                    // 0.1.73's webbing hits only sprayed webs and stuck him to the ground); from a perch both hands at him, both grips and a pull with
-                    // each, hand over hand: the game's stealth web takedown, its X. Their grips shoot
-                    // no web meanwhile.
-                    {
-                        const bool play = immersive && !calibrationInput;
-                        const bool perch = takedownTarget && (takedownOnBack & stealth::perchBit);
-                        const Vec3 rel[2]{frame.hands[0].grip.position - frame.head.position,
-                                          frame.hands[1].grip.position - frame.head.position};
-                        const auto wrap = webWrap.update(frame.seconds, play && takedownTarget && !perch,
-                                                         frame.hands[0].squeeze, frame.hands[1].squeeze, rel[0],
-                                                         rel[1]);
-                        const auto hang = webHang.update(frame.seconds, play && perch && (takedownOnBack & 3u) == 3u,
-                                                         frame.hands[0].squeeze, frame.hands[1].squeeze, rel[0],
-                                                         rel[1]);
-                        if (wrap.start) {
-                            takedownPress = 1.f;
-                            takedownTurn = 1.f;
-                            takedownAim = takedownPoint;
-                            runtime.haptic(0, 1.f, .25f);
-                            runtime.haptic(1, 1.f, .25f);
-                            message(3, 0, "Web wrap - the game's takedown (its X)");
-                        }
-                        // The grips held through it: a soft pulse while the takedown plays.
-                        if (wrap.hit && takedownTurn <= 0) {
-                            runtime.haptic(0, .3f, .05f);
-                            runtime.haptic(1, .3f, .05f);
-                        }
-                        if (hang.fire) {
-                            takedownPress = .6f;
-                            runtime.haptic(0, 1.f, .2f);
-                            runtime.haptic(1, 1.f, .2f);
-                            message(3, 0, "Web hang - the game's stealth web takedown (its X)");
-                        }
-                        // Any grip down with a takedown on is the takedown's: its push lands no punch.
-                        takedownHolding = wrap.hold || hang.hold || webWrap.wrapping() ||
-                                          (takedownTarget && (frame.hands[0].squeeze > .5f || frame.hands[1].squeeze > .5f));
-                        for (unsigned i = 0; i < 2; ++i)
-                            if (wrap.hold || hang.hold)
-                                (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
-                    }
-                    takedownPress = std::max(0.f, takedownPress - static_cast<float>(frame.seconds));
-                    takedownTurn = std::max(0.f, takedownTurn - static_cast<float>(frame.seconds));
-                    if (takedownTarget && takedownTurn > 0 && finite(takedownPoint))
-                        takedownAim = takedownPoint;
                     // The Mega Venom Blast (0.1.56): all three bars full, both grips
                     // squeezed together. A grip alone waits a moment for the other
                     // before the swing sees it, so the blast's squeeze shoots no webs.
@@ -2882,21 +2816,6 @@ DWORD WINAPI run(void*) {
                                 walk.right = stepIn * dot(look, cross(ahead, {0, 1, 0}));
                             }
                         }
-                        // The web wrap: the stick toward his back - a walk while he is more
-                        // than a step off, then a nudge that turns the hero to face him.
-                        if (takedownTurn > 0 && finite(takedownAim) && finite(swingState.position)) {
-                            Vec3 toward{takedownAim.x - swingState.position.x, 0,
-                                        takedownAim.z - swingState.position.z};
-                            Vec3 ahead{camera[8], 0, camera[10]};
-                            const float off = length(toward);
-                            if (off > .1f && length(ahead) > .3f) {
-                                toward = normalized(toward);
-                                ahead = normalized(ahead);
-                                const float stick = off > 1.f ? 1.f : .5f;
-                                walk.forward = stick * dot(toward, ahead);
-                                walk.right = stick * dot(toward, cross(ahead, {0, 1, 0}));
-                            }
-                        }
                         // While a use is under way the game's crawl is where the
                         // offer was checked: the stick does not walk him off it.
                         if (offerUse.busy())
@@ -2967,10 +2886,6 @@ DWORD WINAPI run(void*) {
                             exchange.holderClass = venomMeter.holderClass;
                             exchange.hand = venomSide;
                             exchange.megaRequest = venomMegaRequests;
-                            exchange.wrapTarget = wrapTarget;
-                            exchange.wrapHits = wrapHits;
-                            exchange.wrapDone = wrapDone;
-                            exchange.takedownHold = takedownHolding ? 1u : 0u;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {
@@ -3050,19 +2965,6 @@ DWORD WINAPI run(void*) {
                                     message(3, 0, text);
                                 }
                                 venomJumpsBefore = exchange.jumps;
-                                // A stealth takedown on: its enemy, where he is, the hands pointing at
-                                // him from a perch; a soft buzz as one comes on.
-                                takedownTarget = exchange.takedownTarget;
-                                takedownPoint = exchange.takedownPoint;
-                                takedownOnBack = exchange.takedownHands;
-                                if (takedownTarget && takedownTarget != takedownMarked) {
-                                    runtime.haptic(0, .15f, .05f);
-                                    runtime.haptic(1, .15f, .05f);
-                                    message(3, 0, (takedownOnBack & stealth::perchBit)
-                                                      ? "In position above him - both grips, pull up hand over hand"
-                                                      : "In position behind him - both grips, push both hands at him");
-                                }
-                                takedownMarked = takedownTarget;
                                 venomJumpHits = exchange.jumpHits;
                                 venomMegaHits = exchange.megaHits;
                                 venomSmashHits = exchange.smashHits;
@@ -3087,10 +2989,6 @@ DWORD WINAPI run(void*) {
                         // A venom gesture sending the game's own venom move (above).
                         if (venomPromptLeft > 0)
                             walk.demand = venomPromptDemand;
-                        // The web wrap's and the web hang's: the game's X (its ground takedown;
-                        // from a perch its stealth web takedown, the purple Square).
-                        if (takedownPress > 0)
-                            walk.demand.buttons |= prompt_buttons::padX;
                         if (walk.pull && !pulling_)
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");
@@ -4088,17 +3986,6 @@ DWORD WINAPI run(void*) {
                                               {cue.point, saved->venomGlow,
                                                static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 1000.))},
                                               viewer, pixelAngle);
-                        // A stealth takedown on: a faint blue glow on each hand.
-                        if (!saved->flatScreen && takedownTarget)
-                            for (unsigned i = 0; i < 2; ++i)
-                                if (rendered.swing.hands[i].tracked) {
-                                    auto hand = rendered.hands[i];
-                                    hand.position += travel;
-                                    appendStealthGlow(
-                                        translucent, {hand.position,
-                                                      static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 1000.))},
-                                        viewer, pixelAngle);
-                                }
                         // The called blow's arrow, over its thug.
                         if (!saved->flatScreen && cue.left > 0) {
                             auto view = cue;

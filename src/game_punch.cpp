@@ -8,7 +8,6 @@
 #include "spidy/game_time.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/venom_punch.hpp"
-#include "spidy/stealth.hpp"
 #include "spidy/spider_sense.hpp"
 #include <algorithm>
 #include <atomic>
@@ -98,39 +97,6 @@ Venom venomOut;
 // The venom smash: the drop to the ground, then the blast. And the Mega
 // Venom Blast's double punch.
 venom_punch::SmashDrop smash;
-// Seconds since a blow of the player's landed: no stealth takedown in a fight.
-float sinceBlow = 1e9f;
-// The web wrap's requests (Venom::wrapTarget, wrapHits, wrapDone) and the ones answered.
-std::atomic<uint64_t> wrapTarget{};
-std::atomic<uint32_t> wrapHits{}, wrapDone{};
-// A stealth takedown has the hands (Venom::takedownHold): no punch, no strike.
-std::atomic<uint32_t> takedownHold{};
-uint32_t wrapHitsAnswered{}, wrapDoneAnswered{};
-// A web wrap's blow on `record`: the game's own webbing (kWebImpact carrying
-// kWebEncase, its web balls'), no knockback; the last one puts him out.
-void webWrap(uint64_t record, bool last) {
-    for (const auto& b : bots) {
-        Vec3 feet{};
-        if (b.record != record || !game_targets::position(b, feet))
-            continue;
-        native_bodies::Damage d;
-        d.victim = b.record;
-        d.damager = fighter.record;
-        d.point = feet + Vec3{0, b.size.height(1), 0};
-        d.direction = {0, -1, 0};
-        d.normal = {0, 1, 0};
-        d.type = 20;    // kWebImpact
-        d.knockback = 0; // kNone: webbed where he stands
-        d.knockbackAmount = 0;
-        d.impulse = 0;
-        d.amount = last ? 1000.f : 1.f;
-        d.statusType = 19; // kWebEncase
-        d.statusAmount = last ? 100.f : 12.f;
-        d.statusDuration = last ? 30.f : 4.f;
-        native_bodies::damage(d);
-        return;
-    }
-}
 // The Mega Venom Blast's requests (Venom::megaRequest), and the one answered.
 std::atomic<uint32_t> megaRequest{};
 uint32_t megaAnswered{};
@@ -568,7 +534,6 @@ void blast(Vec3 centre, Blast kind = Blast::Smash) {
 }
 // One blow, a fist's or a strike's, into the flow and to the game.
 void land(PunchEvent e, bool byStrike) {
-    sinceBlow = 0;
     uint64_t machine{};
     for (const auto& n : nearby)
         if (n.record == e.target)
@@ -849,80 +814,6 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // The attacks the game has warned the player of, before any blow of this
     // sample lands: a blow during a warning counters it.
     readSense(chest);
-    // The web wrap's hits and its end (the headset counts them).
-    if (const uint32_t hits = wrapHits.load(); hits != wrapHitsAnswered) {
-        wrapHitsAnswered = hits;
-        webWrap(wrapTarget.load(), false);
-    }
-    if (const uint32_t done = wrapDone.load(); done != wrapDoneAnswered) {
-        wrapDoneAnswered = done;
-        webWrap(wrapTarget.load(), true);
-    }
-    // Stealth takedowns (stealth.hpp): the nearest enemy the player stands
-    // behind, within reach, out of a fight; else from a perch the one both
-    // hands point at below.
-    sinceBlow = std::min(sinceBlow + seconds, 1e9f);
-    {
-        uint64_t target{};
-        Vec3 point{};
-        uint32_t onBack{};
-        float best = 1e9f;
-        if (sinceBlow >= stealth::calmSeconds && strike.phase() == WebStrike::Phase::Idle)
-            for (const auto& b : bots) {
-                Vec3 feet{}, facing{};
-                if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
-                    game_targets::held(base, b) || !game_targets::position(b, feet) ||
-                    !game_targets::forward(b, facing))
-                    continue;
-                const Vec3 d = feet - player.feet;
-                const float across = std::hypot(d.x, d.z);
-                if (across > stealth::reach || std::fabs(d.y) > stealth::rise || across >= best ||
-                    !stealth::behind(feet, facing, player.feet) || !game_targets::live(base, b))
-                    continue;
-                best = across;
-                target = b.record;
-                point = feet + Vec3{0, b.size.height(botHeight) + .35f, 0};
-                onBack = 0;
-            }
-        // No one on the ground: a perch takedown - an enemy below, a hand pointing at him.
-        if (!target && sinceBlow >= stealth::calmSeconds && strike.phase() == WebStrike::Phase::Idle &&
-            player.grounded && !player.swinging) {
-            float bestAim = stealth::perchAim;
-            for (const auto& b : bots) {
-                Vec3 feet{};
-                if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
-                    game_targets::held(base, b) || !game_targets::position(b, feet))
-                    continue;
-                const Vec3 d = feet - player.feet;
-                if (d.y > -stealth::perchBelow || std::hypot(d.x, d.z) > stealth::perchReach)
-                    continue;
-                const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
-                uint32_t aiming{};
-                float aimed = -1;
-                for (int i = 0; i < 2; ++i) {
-                    const auto& h = in.hands[i];
-                    if (!hands[i].tracked)
-                        continue;
-                    const Vec3 way = h.aim.orientation.rotate({0, 0, -1});
-                    if (stealth::aimsAt(h.aim.position, way, middle)) {
-                        aiming |= 1u << i;
-                        aimed = std::max(aimed, dot(way, normalized(middle - h.aim.position)));
-                    }
-                }
-                if (!aiming || aimed < bestAim || !game_targets::live(base, b))
-                    continue;
-                bestAim = aimed;
-                target = b.record;
-                point = feet + Vec3{0, b.size.height(botHeight) + .35f, 0};
-                onBack = aiming | stealth::perchBit;
-            }
-        }
-        AcquireSRWLockExclusive(&output);
-        venomOut.takedownTarget = target;
-        venomOut.takedownPoint = point;
-        venomOut.takedownHands = onBack;
-        ReleaseSRWLockExclusive(&output);
-    }
     // The enemy the next punch goes to: the one a blow locked the player
     // onto, else the one he looks at. A web that holds an enemy makes him
     // the one. And of those his blows landed on, the ones knocked out.
@@ -933,13 +824,6 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     knockouts(seconds);
     events.clear();
     punches.update(seconds, hands, inReach, events);
-    // A stealth takedown has the hands: its push is no punch.
-    const bool sneaking = takedownHold.load() != 0;
-    if (sneaking) {
-        for (const auto& e : events)
-            punches.spend(e.hand);
-        events.clear();
-    }
     flow.update(seconds);
     if (!flow.count())
         cues.clear();
@@ -1071,8 +955,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     const bool looking = finite(in.look) && length(in.look) > .5f;
     const std::span<const FightTarget> strikeable =
         looking && !wish.target ? std::span<const FightTarget>{} : std::span<const FightTarget>{enemies};
-    if (const auto strikeOpened = sneaking ? std::optional<WebStrike::Opening>{}
-                                           : strike.open(seconds, fists, head, player.feet, strikeable, world, wish)) {
+    if (const auto strikeOpened = strike.open(seconds, fists, head, player.feet, strikeable, world, wish)) {
         // The blow lands as the player arrives: not on the way, off a fist
         // the flight carries through him.
         punches.spend(strikeOpened->hand);
@@ -1220,10 +1103,6 @@ Venom game_punch::venom(const Venom& in) {
     venomHolderClass = in.holderClass;
     venomHand = in.hand ? 1u : 0u;
     megaRequest = in.megaRequest;
-    wrapTarget = in.wrapTarget;
-    wrapHits = in.wrapHits;
-    wrapDone = in.wrapDone;
-    takedownHold = in.takedownHold;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

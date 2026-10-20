@@ -61,6 +61,9 @@ Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stag
 Copy-Item -LiteralPath (Join-Path $root 'THIRD_PARTY_NOTICES.md') -Destination $stage
 Copy-Item -Path (Join-Path $root 'docs\licenses\*') -Destination (Join-Path $stage 'docs\licenses')
 Copy-Item -LiteralPath (Join-Path $root 'third_party\imgui\LICENSE.txt') -Destination (Join-Path $stage 'docs\licenses\DearImGui-LICENSE.txt')
+# An empty Music folder for the phone's songs. Keep it EMPTY: no songs, and no file in it at all - the updater
+# retires files the package lacks from every folder the package has files in, which would take the player's songs.
+New-Item -ItemType Directory -Force (Join-Path $stage 'Music') | Out-Null
 
 # The packaged Python must find every module a session imports.
 $check = & (Join-Path $stage 'python\python.exe') -B -X utf8 -c 'import run_game_vr, xr_runtime, probe_game_grab; print(7*6)'
@@ -70,7 +73,9 @@ if ($LASTEXITCODE -or "$check" -ne '42') { throw 'The packaged Python cannot loa
 New-Item -ItemType Directory -Force $dist | Out-Null
 $zip = Join-Path $dist "$name-win64.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -LiteralPath $stage -DestinationPath $zip -CompressionLevel Optimal
+# Compress-Archive leaves empty folders (Music) out; ZipFile keeps them.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
 if (-not $KeepFolder) { Remove-Item -LiteralPath $stage -Recurse -Force }
 $size = (Get-Item -LiteralPath $zip).Length / 1MB
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash

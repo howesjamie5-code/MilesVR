@@ -1,5 +1,15 @@
-MilesVR 0.1.75 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.76 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.75: STEALTH TAKEDOWNS REMOVED
+--------------------------------------------------
+All of MilesVR's own stealth is gone (web wrap, web hang, the blue hand
+glow, the "In position" buzz, the STEALTH card in the launcher), so it
+won't clash if SpidyVR adds its own stealth system later. The game's own
+stealth still works as normal.
+What to try: sneak up behind an enemy and grip / push both hands - you
+should get normal webs and punches, no takedown. Venom powers, swinging,
+fighting and Camouflage should work as before.
 
 What changed since 0.1.74: THE WEB WRAP IS A REAL TAKEDOWN
 --------------------------------------------------

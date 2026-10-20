@@ -1228,20 +1228,4 @@ void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, 
                   venomOrangeCore);
     }
 }
-void appendStealthGlow(std::vector<Vertex>& out, const StealthGlowView& glow, Vec3 viewer, float pixelAngle) {
-    const Vec3 c = glow.point;
-    const float distance = length(viewer - c);
-    if (!finite(c) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
-        !(distance >= .05f && distance <= 5))
-        return;
-    constexpr Vec3 blue{.35f, .78f, 1.f};
-    const Vec3 view = (viewer - c) / distance;
-    Vec3 right = cross(Vec3{0, 1, 0}, view);
-    right = length(right) > .1f ? normalized(right) : perpendicular(view);
-    const Vec3 up = cross(view, right);
-    const float t = std::isfinite(glow.seconds) ? glow.seconds : 0.f;
-    const float a = .7f + .3f * std::sin(t * 3);
-    softArc(out, c, right, up, 0, .09f, 0, 2 * pi, blue, .2f * a, .06f, 32);
-    softArc(out, c, right, up, 0, .035f, 0, 2 * pi, blue, .18f * a, .03f, 24);
-}
 } // namespace spidy
