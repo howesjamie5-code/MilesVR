@@ -61,6 +61,18 @@ with an **Update now** button: your settings, reports and songs stay.
 For the phone's music, put mp3, wav, wma, m4a or aac files in the `Music` folder next to
 `MilesVR Launcher.exe`.
 
+## Community
+
+MilesVR lives on the Ilya's Stuff Discord, next to Spidy: https://discord.gg/x27ZXDpdNt
+When you join, pick **MilesVR** under "What brings you here?".
+
+- News and releases: **#milesvr-updates**
+- Bugs: **#milesvr-bugs**. Press **Report a MilesVR bug** in its pinned post, or type `/bug` in a
+  MilesVR channel.
+- Questions and clips: **#milesvr-chat**
+
+MilesVR is its own project: please report its bugs in #milesvr-bugs, not in Spidy's #spidy-bugs.
+
 ## Controls
 
 The launcher's **Controls** tab lists every control. The basics:
@@ -101,18 +113,6 @@ With a web attached, the venom button reels in. Hold the venom button until the 
 | Venom Smash | Punch straight **down**, standing or in the air: everyone within 5 m is hit and thrown | 1 bar |
 | Mega Venom Blast | With all three bars full, squeeze **both grips together**: a boom and a moment of slow motion | 3 bars |
 | Let the venom go | Click the venom hand's stick: the meter empties and your webs are back | all |
-
-## Community
-
-MilesVR lives on the Ilya's Stuff Discord, next to Spidy: https://discord.gg/x27ZXDpdNt
-When you join, pick **MilesVR** under "What brings you here?".
-
-- News and releases: **#milesvr-updates**
-- Bugs: **#milesvr-bugs**. Press **Report a MilesVR bug** in its pinned post, or type `/bug` in a
-  MilesVR channel.
-- Questions and clips: **#milesvr-chat**
-
-MilesVR is its own project: please report its bugs in #milesvr-bugs, not in Spidy's #spidy-bugs.
 
 ## Reports
 
