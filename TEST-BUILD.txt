@@ -1,5 +1,14 @@
-MilesVR 0.1.76 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.77 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.76: DODGES GIVE VENOM
+--------------------------------------------------
+Dodging an attack (B while the game warns you of it) now fills the venom
+meter a little: 5 (a plain hit gives 10). A perfect dodge - the one where
+the game slows time - gives 15 in all, like a hard blow.
+What to try: in a fight, dodge when the warning shows and watch the venom
+bar go up a bit; time a perfect dodge and it should go up more. B pressed
+with no attack coming gives nothing.
 
 What changed since 0.1.75: STEALTH TAKEDOWNS REMOVED
 --------------------------------------------------

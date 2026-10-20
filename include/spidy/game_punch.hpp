@@ -104,7 +104,7 @@ static_assert(sizeof(Strikes) == 328);
 // to the game as a venom blow - DamageType kVenom with the venom status, the
 // blow of a finisher and his flight - and the meter is emptied.
 struct Venom {
-    uint32_t magic = 0x5350564e, version = 6, bytes = sizeof(Venom);
+    uint32_t magic = 0x5350564e, version = 7, bytes = sizeof(Venom);
     // In: the charge (a new number each time the fist is charged; 0: none).
     // A charge lands one blow.
     uint32_t charge{};
@@ -145,8 +145,13 @@ struct Venom {
     uint32_t jumpHits{}, dashesMissed{};
     Vec3 jumpPoint{};
     uint32_t jumpSpare{};
+    // In (version 7): the player's dodges of an attack so far, and of them the
+    // game's perfect dodges (it slowed time, and each is counted in dodges
+    // too): each dodge fills the meter a little (venom_punch::dodgeGain), a
+    // perfect one more on top (perfectDodgeExtra).
+    uint32_t dodges{}, perfectDodges{};
 };
-static_assert(sizeof(Venom) == 176);
+static_assert(sizeof(Venom) == 184);
 // Starts the bot watch and the main-thread damage requests.
 uint32_t start(uintptr_t base);
 uint32_t stop();

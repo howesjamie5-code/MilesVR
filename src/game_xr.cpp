@@ -953,6 +953,10 @@ DWORD WINAPI run(void*) {
         // A dodge the game itself slows time for is its perfect dodge: for a
         // moment after B went down with the game's time at full speed.
         float dodgeWatch{};
+        // Dodges of an attack and perfect dodges, for the venom meter
+        // (game_punch::Venom::dodges); and whether the latest B was one.
+        uint32_t venomDodges{}, venomPerfectDodges{};
+        bool dodgeCounted{};
         // The VR settings: the launch options, then the MILES VR tab in the
         // game's Settings during play.
         vr_settings::Values values;
@@ -2886,6 +2890,8 @@ DWORD WINAPI run(void*) {
                             exchange.holderClass = venomMeter.holderClass;
                             exchange.hand = venomSide;
                             exchange.megaRequest = venomMegaRequests;
+                            exchange.dodges = venomDodges;
+                            exchange.perfectDodges = venomPerfectDodges;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {
@@ -3058,15 +3064,22 @@ DWORD WINAPI run(void*) {
                         if (walk.dodge && !dodging)
                             dodgeWatch = game_time::telemetry().own > .95f ? .7f : 0.f;
                         // A dodge while a warning stands: the answer a red mark asks for.
-                        if (walk.dodge && !dodging &&
-                            std::any_of(senseMarks.begin(), senseMarks.end(),
-                                        [](const SenseMark& m) { return m.live && !m.brokenAt; }))
-                            ++senseDodges;
+                        // It gives a little venom.
+                        if (walk.dodge && !dodging) {
+                            dodgeCounted = std::any_of(senseMarks.begin(), senseMarks.end(),
+                                                       [](const SenseMark& m) { return m.live && !m.brokenAt; });
+                            senseDodges += dodgeCounted;
+                            venomDodges += dodgeCounted;
+                        }
                         if (dodgeWatch > 0) {
                             dodgeWatch -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                             if (const auto time = game_time::telemetry(); time.installed && time.own < .9f) {
                                 dodgeWatch = 0;
                                 moments.start(Moment::dodge);
+                                // A perfect dodge gives more venom (and counts as a dodge).
+                                ++venomPerfectDodges;
+                                venomDodges += !dodgeCounted;
+                                dodgeCounted = true;
                                 runtime.haptic(0, .5f);
                                 runtime.haptic(1, .5f);
                             }

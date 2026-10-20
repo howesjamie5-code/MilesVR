@@ -100,6 +100,9 @@ venom_punch::SmashDrop smash;
 // The Mega Venom Blast's requests (Venom::megaRequest), and the one answered.
 std::atomic<uint32_t> megaRequest{};
 uint32_t megaAnswered{};
+// The headset's dodges and perfect dodges (Venom::dodges), and those answered.
+std::atomic<uint32_t> dodgeRequest{}, perfectRequest{};
+uint32_t dodgesAnswered{}, perfectAnswered{};
 // Seconds since an enemy was in the fight (the headset's calm, the same way):
 // the Venom Jump goes off only in a fight.
 float sinceFight = 1e9f;
@@ -837,6 +840,17 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // (the headset asks: venom_punch::BothGrips). It goes off where he is and
     // takes all three bars, and a charge if there is one.
     const int side = venomHand.load() ? 1 : 0;
+    // Dodges fill the meter: a little each, a perfect one more. A count that
+    // went back (a new VR session) only catches up.
+    {
+        const uint32_t dodged = dodgeRequest.load(), perfect = perfectRequest.load();
+        const uint32_t plain = dodged > dodgesAnswered ? std::min(dodged - dodgesAnswered, 2u) : 0,
+                       perfects = perfect > perfectAnswered ? std::min(perfect - perfectAnswered, 2u) : 0;
+        dodgesAnswered = dodged;
+        perfectAnswered = perfect;
+        if (plain || perfects)
+            chargeMeter(venomMeter.load(), plain * venom_punch::dodgeGain + perfects * venom_punch::perfectDodgeExtra);
+    }
     if (const uint32_t asked = megaRequest.load(); asked != megaAnswered) {
         megaAnswered = asked;
         venom_punch::Bars bars;
@@ -1103,6 +1117,8 @@ Venom game_punch::venom(const Venom& in) {
     venomHolderClass = in.holderClass;
     venomHand = in.hand ? 1u : 0u;
     megaRequest = in.megaRequest;
+    dodgeRequest = in.dodges;
+    perfectRequest = in.perfectDodges;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

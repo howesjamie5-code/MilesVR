@@ -1614,7 +1614,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         const char* log = nullptr;
     };
     const Power powers[] = {
-        {"Venom Meter", "Land blows to fill it. Up to 3 bars", fullLine.c_str()},
+        {"Venom Meter", "Blows fill it. Dodges a little, perfect dodges more. Up to 3 bars", fullLine.c_str()},
         {"Your Buttons", buttonsText.c_str(), buttonLine.c_str()},
         {"Venom Charge", "Venom full: hold the venom button until it glows and buzzes. An orange lightning icon marks "
                          "the enemy you will hit", chargedLine.c_str()},

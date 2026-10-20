@@ -31,7 +31,7 @@ From SpidyVR:
 
 New for Miles:
 
-- **Venom meter** with up to three bars, filled by your blows.
+- **Venom meter** with up to three bars, filled by your blows and dodges (a perfect dodge gives more).
 - **Venom Punch**, **Venom Jump**, **Venom Smash** and the **Mega Venom Blast**, all done with
   gestures.
 - **Camouflage** from your left hand at your temple.

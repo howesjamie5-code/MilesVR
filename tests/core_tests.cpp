@@ -595,6 +595,8 @@ int main() {
         check(filled(95, gain(false, true)) == fullMeter, "never past full");
         check(gain(true, false) > gain(false, false) && gain(false, true) > gain(true, false),
               "a hard blow gives more, a finisher most");
+        check(dodgeGain > 0 && dodgeGain < gain(false, false) && dodgeGain + perfectDodgeExtra > gain(false, false),
+              "a dodge gives a little venom, a perfect dodge more than a hit");
         check(filled(-1, 10) == 10, "an unread meter counts from empty");
         check(filled(250, 10) == 250, "a meter of more bars than one is not cut back");
         check(spent(100) == 0 && spent(60) == 0 && spent(300) == 200 && spent(250) == 150,

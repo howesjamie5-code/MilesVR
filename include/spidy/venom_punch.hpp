@@ -34,6 +34,10 @@ inline bool full(float meter) {
 // a hard blow (heavy, launch, juggle, slam) gives half again, the flow's
 // finisher twice. The venom punch itself gives nothing.
 constexpr float hitGain = 10, hardGain = 15, finisherGain = 20;
+// A dodge of an attack (B while the game warns of it) gives a little; the
+// game's perfect dodge (it slows time) gives more: the dodge's and this on
+// top, 15 in all, as a hard blow (the user, October 20).
+constexpr float dodgeGain = 5, perfectDodgeExtra = 10;
 inline float gain(bool hard, bool finisher) {
     return finisher ? finisherGain : hard ? hardGain : hitGain;
 }
