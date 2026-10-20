@@ -103,6 +103,8 @@ float sinceBlow = 1e9f;
 // The web wrap's requests (Venom::wrapTarget, wrapHits, wrapDone) and the ones answered.
 std::atomic<uint64_t> wrapTarget{};
 std::atomic<uint32_t> wrapHits{}, wrapDone{};
+// A stealth takedown has the hands (Venom::takedownHold): no punch, no strike.
+std::atomic<uint32_t> takedownHold{};
 uint32_t wrapHitsAnswered{}, wrapDoneAnswered{};
 // A web wrap's blow on `record`: the game's own webbing (kWebImpact carrying
 // kWebEncase, its web balls'), no knockback; the last one puts him out.
@@ -931,6 +933,13 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     knockouts(seconds);
     events.clear();
     punches.update(seconds, hands, inReach, events);
+    // A stealth takedown has the hands: its push is no punch.
+    const bool sneaking = takedownHold.load() != 0;
+    if (sneaking) {
+        for (const auto& e : events)
+            punches.spend(e.hand);
+        events.clear();
+    }
     flow.update(seconds);
     if (!flow.count())
         cues.clear();
@@ -1062,7 +1071,8 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     const bool looking = finite(in.look) && length(in.look) > .5f;
     const std::span<const FightTarget> strikeable =
         looking && !wish.target ? std::span<const FightTarget>{} : std::span<const FightTarget>{enemies};
-    if (const auto strikeOpened = strike.open(seconds, fists, head, player.feet, strikeable, world, wish)) {
+    if (const auto strikeOpened = sneaking ? std::optional<WebStrike::Opening>{}
+                                           : strike.open(seconds, fists, head, player.feet, strikeable, world, wish)) {
         // The blow lands as the player arrives: not on the way, off a fist
         // the flight carries through him.
         punches.spend(strikeOpened->hand);
@@ -1213,6 +1223,7 @@ Venom game_punch::venom(const Venom& in) {
     wrapTarget = in.wrapTarget;
     wrapHits = in.wrapHits;
     wrapDone = in.wrapDone;
+    takedownHold = in.takedownHold;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

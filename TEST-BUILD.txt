@@ -1,5 +1,14 @@
-MilesVR 0.1.73 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.74 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.73: THE WEB WRAP'S PUSH IS NO PUNCH
+--------------------------------------------------
+In 0.1.73 the push toward him landed as a normal punch, and a punch puts
+you in a fight, which turns stealth off - so the wrap never started.
+Now, with a takedown on and a grip down, your hands land no punches and
+open no web strikes: the push only starts the web wrap.
+The panel and the log also say when you are in position: "In position
+behind him - both grips, push both hands at him" (or above him).
 
 What changed since 0.1.72: STEALTH, ARKHAM SHADOW STYLE
 --------------------------------------------------

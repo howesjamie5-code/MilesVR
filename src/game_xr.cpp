@@ -813,6 +813,7 @@ DWORD WINAPI run(void*) {
         uint64_t wrapTarget{};
         uint32_t wrapHits{}, wrapDone{};
         float takedownPress{};
+        bool takedownHolding{}; // the web wrap or the web hang has the hands: no punches (0.1.74)
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -1971,6 +1972,9 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(1, 1.f, .2f);
                             message(3, 0, "Web hang - the game's stealth web takedown (its X)");
                         }
+                        // Any grip down with a takedown on is the takedown's: its push lands no punch.
+                        takedownHolding = wrap.hold || hang.hold || webWrap.wrapping() ||
+                                          (takedownTarget && (frame.hands[0].squeeze > .5f || frame.hands[1].squeeze > .5f));
                         for (unsigned i = 0; i < 2; ++i)
                             if (wrap.hold || hang.hold)
                                 (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
@@ -2944,6 +2948,7 @@ DWORD WINAPI run(void*) {
                             exchange.wrapTarget = wrapTarget;
                             exchange.wrapHits = wrapHits;
                             exchange.wrapDone = wrapDone;
+                            exchange.takedownHold = takedownHolding ? 1u : 0u;
                             if (!venomCall(&exchange)) {
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {
@@ -3031,6 +3036,9 @@ DWORD WINAPI run(void*) {
                                 if (takedownTarget && takedownTarget != takedownMarked) {
                                     runtime.haptic(0, .15f, .05f);
                                     runtime.haptic(1, .15f, .05f);
+                                    message(3, 0, (takedownOnBack & stealth::perchBit)
+                                                      ? "In position above him - both grips, pull up hand over hand"
+                                                      : "In position behind him - both grips, push both hands at him");
                                 }
                                 takedownMarked = takedownTarget;
                                 venomJumpHits = exchange.jumpHits;
