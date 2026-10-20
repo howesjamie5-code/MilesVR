@@ -1549,16 +1549,16 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         // Stealth (0.1.66-0.1.71): a card of its own, the user, October 20 - and to go whole if SpidyVR
         // brings its own takedowns.
         {"STEALTH",
-         {{"Blue mark over an enemy", "You can take him down: behind him and close enough, or pointing at him "
-                                      "from a perch above. Your controllers buzz lightly as it shows"},
-          {"Behind him: grip + yank, or Y", "Stealth takedown (the game's own)",
-           "Takedown - the game's X, 1.2 m from him"},
-          {"From a perch: point at him, grip + yank", "Stealth web takedown (the game's own, purple icon)",
-           "Stealth web takedown - the game's X, 6.0 m from him"},
-          {"From a perch: point at him, grip + push, or Y", "Web strike takedown (the game's own, green icon)",
-           "Web strike takedown - the game's Y, 6.0 m from him"},
-          {"Be quick", "The longer you stand behind him, the likelier he turns. Camouflage (left hand to your "
-                       "temple, trigger) helps"}}},
+         {{"In position", "Behind an enemy who hasn't seen you, or above him on a perch: a soft buzz, and your "
+                          "hands glow faint blue"},
+          {"Behind him: both grips, push both hands at him", "Starts the web wrap. Keep both grips held 1.5 s while "
+                                                             "webbing builds up on him: he's webbed up and out",
+           "Webbed up - the web wrap took him down"},
+          {"Let go during the wrap", "It stops; he isn't taken down", "Web wrap let go too soon"},
+          {"From a perch: both hands at him, both grips, pull up hand over hand", "The web hang: he's left "
+                                                                                 "hanging in a web (the game's own)",
+           "Web hang - the game's stealth web takedown (its X)"},
+          {"Be quick", "The longer you stand behind him, the likelier he turns. Camouflage helps"}}},
         {"WEBS",
          {{"Web button, hold", "Shoot a web where the hand points and swing; let go to release. The web button is "
                                "the grip unless you set Web button to Trigger"},

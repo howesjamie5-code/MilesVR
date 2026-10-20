@@ -1228,27 +1228,20 @@ void appendVenomTarget(std::vector<Vertex>& out, const VenomTargetView& target, 
                   venomOrangeCore);
     }
 }
-void appendTakedownMark(std::vector<Vertex>& out, const TakedownView& mark, Vec3 viewer, float pixelAngle) {
-    const Vec3 c = mark.point;
+void appendStealthGlow(std::vector<Vertex>& out, const StealthGlowView& glow, Vec3 viewer, float pixelAngle) {
+    const Vec3 c = glow.point;
     const float distance = length(viewer - c);
     if (!finite(c) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
-        !(distance >= .3f && distance <= 40))
+        !(distance >= .05f && distance <= 5))
         return;
-    constexpr Vec3 blue{.35f, .78f, 1.f}, white{.9f, .97f, 1.f};
+    constexpr Vec3 blue{.35f, .78f, 1.f};
     const Vec3 view = (viewer - c) / distance;
     Vec3 right = cross(Vec3{0, 1, 0}, view);
     right = length(right) > .1f ? normalized(right) : perpendicular(view);
     const Vec3 up = cross(view, right);
-    const float px = pixelAngle * distance;
-    const float r = std::max(.07f, 13 * px);
-    const float t = std::isfinite(mark.seconds) ? mark.seconds : 0.f;
-    const float a = .8f + .2f * std::sin(t * 4);
-    softArc(out, c, right, up, 0, r * 1.5f, 0, 2 * pi, blue, .18f * a, r * .5f, 32);
-    softArc(out, c, right, up, r * .78f, r, 0, 2 * pi, blue, .85f * a, 1.5f * px, 40);
-    softArc(out, c, right, up, r * .84f, r * .92f, 0, 2 * pi, white, .9f * a, px, 40);
-    // The chevron under the ring, pointing down at him.
-    const Vec3 tip = c - up * (r * 1.9f), left = c - up * (r * 1.25f) - right * (r * .5f),
-               rightCorner = c - up * (r * 1.25f) + right * (r * .5f);
-    softTriangle(out, {left, rightCorner, tip}, view, white, .9f * a, 0, px);
+    const float t = std::isfinite(glow.seconds) ? glow.seconds : 0.f;
+    const float a = .7f + .3f * std::sin(t * 3);
+    softArc(out, c, right, up, 0, .09f, 0, 2 * pi, blue, .2f * a, .06f, 32);
+    softArc(out, c, right, up, 0, .035f, 0, 2 * pi, blue, .18f * a, .03f, 24);
 }
 } // namespace spidy

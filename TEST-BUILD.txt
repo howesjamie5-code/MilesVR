@@ -1,5 +1,26 @@
-MilesVR 0.1.72 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.73 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.72: STEALTH, ARKHAM SHADOW STYLE
+--------------------------------------------------
+The old stealth system (blue mark, grip + yank, Y) is gone. Now:
+- In position (behind an enemy who hasn't seen you, within 1.5 m; or on
+  a perch above him with both hands pointing at him): a soft buzz, and
+  your hands glow faint blue. No icons.
+- Web wrap (ground): squeeze both grips and push both hands toward him,
+  then keep both grips held 1.5 s. The game's own webbing builds up on
+  him (your hands pulse like a heartbeat) and he's webbed up and out -
+  no punches, no animation taking your view. Let go early and it stops.
+- Web hang (perch): both hands pointing at him, squeeze both grips and
+  pull up hand over hand (each hand pulls in): the game's own stealth web
+  takedown leaves him hanging.
+No webs are shot from your grips while you do either.
+
+What to try:
+1. Behind an unaware thug: the buzz and glow? Push both hands at him with
+   both grips, hold: does webbing cover him and does he go down?
+2. From a perch: point both hands, both grips, pull hand over hand: the
+   web hang?
 
 What changed since 0.1.71: A STEALTH CARD IN THE LAUNCHER
 --------------------------------------------------

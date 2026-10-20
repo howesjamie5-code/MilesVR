@@ -189,17 +189,17 @@ int main(int argc, char** argv) {
                      {"VENOM BURST 0.2 S", venomBurst(.2f)},
                      {"VENOM BURST 0.35 S", venomBurst(.35f)},
                      {"VENOM BURST 0.45 S", venomBurst(.45f)}});
-        // The stealth takedown's mark over his head.
+        // The stealth takedown's glow round a hand at arm's length.
         {
-            const Vec3 head = p + Vec3{0, .95f, 0};
-            const auto mark = [&](float seconds) {
+            const Vec3 hand = normalized(p) * .5f;
+            const auto glow = [&](float seconds) {
                 std::vector<Vertex> v;
-                appendTakedownMark(v, {head, seconds}, viewer, pixelAngle);
+                appendStealthGlow(v, {hand, seconds}, viewer, pixelAngle);
                 return v;
             };
-            const float mu = camera.cx + camera.f * head.x / -head.z, mv = camera.cy - camera.f * head.y / -head.z;
-            ok &= sheet(name + "takedown.bmp", scene.backdrop, camera, mu, mv, static_cast<int>((i ? 200 : 120) * scale),
-                        3, {{"TAKEDOWN", mark(1)}, {"TAKEDOWN BREATHING", mark(1.4f)}, {"TAKEDOWN LATER", mark(1.8f)}});
+            const float gu = camera.cx + camera.f * hand.x / -hand.z, gv = camera.cy - camera.f * hand.y / -hand.z;
+            ok &= sheet(name + "stealthglow.bmp", scene.backdrop, camera, gu, gv, static_cast<int>(200 * scale), 3,
+                        {{"GLOW", glow(1)}, {"GLOW BREATHING", glow(1.5f)}, {"GLOW LATER", glow(2)}});
         }
         // The smash's and the Mega's, on the ground at his feet as the player sees them from 4 m.
         {

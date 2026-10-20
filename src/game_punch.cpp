@@ -100,6 +100,35 @@ Venom venomOut;
 venom_punch::SmashDrop smash;
 // Seconds since a blow of the player's landed: no stealth takedown in a fight.
 float sinceBlow = 1e9f;
+// The web wrap's requests (Venom::wrapTarget, wrapHits, wrapDone) and the ones answered.
+std::atomic<uint64_t> wrapTarget{};
+std::atomic<uint32_t> wrapHits{}, wrapDone{};
+uint32_t wrapHitsAnswered{}, wrapDoneAnswered{};
+// A web wrap's blow on `record`: the game's own webbing (kWebImpact carrying
+// kWebEncase, its web balls'), no knockback; the last one puts him out.
+void webWrap(uint64_t record, bool last) {
+    for (const auto& b : bots) {
+        Vec3 feet{};
+        if (b.record != record || !game_targets::position(b, feet))
+            continue;
+        native_bodies::Damage d;
+        d.victim = b.record;
+        d.damager = fighter.record;
+        d.point = feet + Vec3{0, b.size.height(1), 0};
+        d.direction = {0, -1, 0};
+        d.normal = {0, 1, 0};
+        d.type = 20;    // kWebImpact
+        d.knockback = 0; // kNone: webbed where he stands
+        d.knockbackAmount = 0;
+        d.impulse = 0;
+        d.amount = last ? 1000.f : 1.f;
+        d.statusType = 19; // kWebEncase
+        d.statusAmount = last ? 100.f : 12.f;
+        d.statusDuration = last ? 30.f : 4.f;
+        native_bodies::damage(d);
+        return;
+    }
+}
 // The Mega Venom Blast's requests (Venom::megaRequest), and the one answered.
 std::atomic<uint32_t> megaRequest{};
 uint32_t megaAnswered{};
@@ -818,8 +847,18 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // The attacks the game has warned the player of, before any blow of this
     // sample lands: a blow during a warning counters it.
     readSense(chest);
+    // The web wrap's hits and its end (the headset counts them).
+    if (const uint32_t hits = wrapHits.load(); hits != wrapHitsAnswered) {
+        wrapHitsAnswered = hits;
+        webWrap(wrapTarget.load(), false);
+    }
+    if (const uint32_t done = wrapDone.load(); done != wrapDoneAnswered) {
+        wrapDoneAnswered = done;
+        webWrap(wrapTarget.load(), true);
+    }
     // Stealth takedowns (stealth.hpp): the nearest enemy the player stands
-    // behind, within reach, out of a fight, and the hands on his back.
+    // behind, within reach, out of a fight; else from a perch the one both
+    // hands point at below.
     sinceBlow = std::min(sinceBlow + seconds, 1e9f);
     {
         uint64_t target{};
@@ -841,11 +880,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
                 best = across;
                 target = b.record;
                 point = feet + Vec3{0, b.size.height(botHeight) + .35f, 0};
-                const Vec3 middle = feet + Vec3{0, b.size.height(1), 0};
                 onBack = 0;
-                for (int i = 0; i < 2; ++i)
-                    if (hands[i].tracked && length(hands[i].fist - middle) < stealth::onBack)
-                        onBack |= 1u << i;
             }
         // No one on the ground: a perch takedown - an enemy below, a hand pointing at him.
         if (!target && sinceBlow >= stealth::calmSeconds && strike.phase() == WebStrike::Phase::Idle &&
@@ -1175,6 +1210,9 @@ Venom game_punch::venom(const Venom& in) {
     venomHolderClass = in.holderClass;
     venomHand = in.hand ? 1u : 0u;
     megaRequest = in.megaRequest;
+    wrapTarget = in.wrapTarget;
+    wrapHits = in.wrapHits;
+    wrapDone = in.wrapDone;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);
