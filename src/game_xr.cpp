@@ -809,7 +809,8 @@ DWORD WINAPI run(void*) {
         uint32_t takedownOnBack{}, takedownsDone{};
         float takedownPress{};
         bool takedownY{}; // Y down at the last frame
-        bool takedownPerch{}; // the takedown going in is a perch's: the game's Y, not its X
+        bool takedownPerch{}; // a perch's web strike takedown (a push, or Y): the game's Y, the green Triangle
+        bool takedownDrop{};  // a perch's stealth webbing takedown (a yank): the game's X, the purple Square
         // 0.1.68: the takedown turns the hero to his back first, as the interact step turns him to a door
         // (the game takes its Y only from a hero who faces the thing): the stick toward him for
         // takedownTurn seconds, at takedownAim (his place as it fired).
@@ -1949,9 +1950,14 @@ DWORD WINAPI run(void*) {
                         if (grab.hold)
                             (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
                         if (grab.fire) {
-                            takedownPerch = (takedownOnBack & stealth::perchBit) != 0;
+                            // From a perch the yank is its stealth webbing takedown (the purple
+                            // Square, X: webbed up to him) and the push its web strike takedown
+                            // (the green Triangle, Y: down at him) - the user, 0.1.71; on the
+                            // ground either is the takedown (X).
+                            takedownPerch = (takedownOnBack & stealth::perchBit) != 0 && grab.push;
+                            takedownDrop = (takedownOnBack & stealth::perchBit) != 0 && !grab.push;
                             takedownPress = .6f;
-                            takedownTurn = takedownPerch ? 0.f : .2f;
+                            takedownTurn = takedownPerch || takedownDrop ? 0.f : .2f;
                             takedownAim = takedownPoint;
                             ++takedownsDone;
                             runtime.haptic(static_cast<int>(i), 1.f, .2f);
@@ -1959,8 +1965,9 @@ DWORD WINAPI run(void*) {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, takedownPerch ? "Perch takedown - the game's Y, %.1f m from him"
-                                                        : "Takedown - the game's X, %.1f m from him",
+                                sprintf_s(text, takedownPerch  ? "Web strike takedown - the game's Y, %.1f m from him"
+                                          : takedownDrop ? "Stealth web takedown - the game's X, %.1f m from him"
+                                                         : "Takedown - the game's X, %.1f m from him",
                                           metres);
                                 message(3, 0, text);
                             }
@@ -2818,6 +2825,7 @@ DWORD WINAPI run(void*) {
                             const bool y = (origins.play() & buttonY) != 0;
                             if (takedownTarget && y && !takedownY) {
                                 takedownPerch = (takedownOnBack & stealth::perchBit) != 0;
+                                takedownDrop = false;
                                 takedownPress = .6f;
                                 takedownTurn = takedownPerch ? 0.f : .2f;
                                 takedownAim = takedownPoint;
@@ -2826,8 +2834,9 @@ DWORD WINAPI run(void*) {
                                 char text[96];
                                 const float metres = std::hypot(takedownPoint.x - swingState.position.x,
                                                              takedownPoint.z - swingState.position.z);
-                                sprintf_s(text, takedownPerch ? "Perch takedown - the game's Y, %.1f m from him"
-                                                        : "Takedown - the game's X, %.1f m from him",
+                                sprintf_s(text, takedownPerch  ? "Web strike takedown - the game's Y, %.1f m from him"
+                                          : takedownDrop ? "Stealth web takedown - the game's X, %.1f m from him"
+                                                         : "Takedown - the game's X, %.1f m from him",
                                           metres);
                                 message(3, 0, text);
                             }

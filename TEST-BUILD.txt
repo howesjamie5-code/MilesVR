@@ -1,5 +1,14 @@
-MilesVR 0.1.70 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.71 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.70: BOTH PERCH TAKEDOWNS
+--------------------------------------------------
+From a perch the game offers two takedowns: the stealth web takedown
+(purple icon, Square - its X) and the web strike takedown (green icon,
+Triangle - its Y). MilesVR cannot read which icon shows, so each has its
+own motion. Point at him, squeeze the grip, then:
+- YANK toward you: the stealth web takedown (X, purple);
+- PUSH toward him: the web strike takedown (Y, green). Y does it too.
 
 What changed since 0.1.69: PERCH TAKEDOWNS
 --------------------------------------------------

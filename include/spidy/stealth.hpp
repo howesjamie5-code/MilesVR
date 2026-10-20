@@ -58,6 +58,11 @@ class Takedown {
     struct Out {
         bool hold{}; // the hand's grip is the takedown's
         bool fire{}; // the yank: press the game's takedown now
+        // The hand went away from the head instead, a push toward him
+        // (MilesVR 0.1.71: from a perch the web strike takedown, the game's
+        // green Triangle, where the yank is its stealth webbing takedown, the
+        // purple Square).
+        bool push{};
     };
     // seconds: since the previous update. onBack: a takedown is marked (the
     // name from 0.1.66, when the hand had to be on his back). grip: its grip,
@@ -87,9 +92,10 @@ class Takedown {
         out.hold = true;
         since_ += dt;
         const float toward = length(hand) > .05f ? dot(speed_, hand * (-1.f / length(hand))) : 0.f;
-        if (!fired_ && since_ <= window && toward >= yankSpeed) {
+        if (!fired_ && since_ <= window && (toward >= yankSpeed || -toward >= yankSpeed)) {
             fired_ = true;
             out.fire = true;
+            out.push = toward < 0;
             ++fires_;
         }
         return out;

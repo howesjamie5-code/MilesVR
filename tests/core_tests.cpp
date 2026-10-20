@@ -808,6 +808,12 @@ int main() {
         check(fired&&t.fires()==1,"the yank fired once");
         o=t.update(dt,true,0,hand);
         check(!o.hold,"let go: the hand is the swing's again");
+        // A push toward him (away from the head) fires too, as a push: a perch's drop takedown.
+        Takedown push;Vec3 q{0,-.3f,-.4f};
+        push.update(dt,true,0,q);push.update(dt,true,1,q);
+        bool pushed=false,asPush=false;
+        for(int k=0;k<20;++k){q=q*(1+1.5f*dt/length(q));const auto e=push.update(dt,true,1,q);pushed|=e.fire;asPush|=e.fire&&e.push;}
+        check(pushed&&asPush,"a push toward him fired nothing, or not as a push");
         // No takedown marked: the grip is the swing's.
         Takedown away;
         away.update(dt,false,0,{0,0,-.5f});
