@@ -1,5 +1,11 @@
-MilesVR 0.1.71 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.72 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.71: A STEALTH CARD IN THE LAUNCHER
+--------------------------------------------------
+The launcher's Controls tab has a STEALTH card of its own near the top
+(it was at the end of FIGHTING): the blue mark, the ground takedown, both
+perch takedowns and a tip. Nothing in the game changed.
 
 What changed since 0.1.70: BOTH PERCH TAKEDOWNS
 --------------------------------------------------

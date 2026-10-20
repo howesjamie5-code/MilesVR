@@ -1546,6 +1546,19 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Menu, or both sticks held in", "Pause. Settings > MILES VR has the VR settings"},
           {"Click both sticks", "Pad layer: the whole gamepad for a moment. Click both again to leave",
            "Pad layer on - your grips are the game's LB and RB, ..."}}},
+        // Stealth (0.1.66-0.1.71): a card of its own, the user, October 20 - and to go whole if SpidyVR
+        // brings its own takedowns.
+        {"STEALTH",
+         {{"Blue mark over an enemy", "You can take him down: behind him and close enough, or pointing at him "
+                                      "from a perch above. Your controllers buzz lightly as it shows"},
+          {"Behind him: grip + yank, or Y", "Stealth takedown (the game's own)",
+           "Takedown - the game's X, 1.2 m from him"},
+          {"From a perch: point at him, grip + yank", "Stealth web takedown (the game's own, purple icon)",
+           "Stealth web takedown - the game's X, 6.0 m from him"},
+          {"From a perch: point at him, grip + push, or Y", "Web strike takedown (the game's own, green icon)",
+           "Web strike takedown - the game's Y, 6.0 m from him"},
+          {"Be quick", "The longer you stand behind him, the likelier he turns. Camouflage (left hand to your "
+                       "temple, trigger) helps"}}},
         {"WEBS",
          {{"Web button, hold", "Shoot a web where the hand points and swing; let go to release. The web button is "
                                "the grip unless you set Web button to Trigger"},
@@ -1569,15 +1582,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"An arrow into the ring", "A called blow: swing from the side the arrow comes from. It hits harder"},
           {"Blue Spider-Sense lines", "Throw a fist at him: the counter breaks his attack"},
           {"Red / yellow lines", "Dodge (B) / jump (A)"},
-          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"},
-          {"Blue mark over an enemy: grip + yank, or Y", "Stealth takedown (the game's own). The mark shows when "
-                                                         "you are behind him, close enough",
-           "Takedown - the game's X, 1.2 m from him"},
-          {"From a perch: point at him, grip + yank", "Stealth web takedown (the game's own, purple icon). The "
-                                                      "blue mark shows over the one you point at below",
-           "Stealth web takedown - the game's X, 6.0 m from him"},
-          {"From a perch: point at him, grip + push, or Y", "Web strike takedown (the game's own, green icon)",
-           "Web strike takedown - the game's Y, 6.0 m from him"}}},
+          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"}}},
         {"PHONE",
          {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
                                                     "keep squeezing and bring it up in front of you",
