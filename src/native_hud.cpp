@@ -67,6 +67,7 @@ std::atomic<int> hudSize{2};
 struct Followed {
     uint64_t serial{};
     Quat relative{};
+    native_hud::Pinned pinned{};
 };
 std::array<Followed, 64> followRing{};
 Quat probeRelative{0, 0, 0, 0};
@@ -360,18 +361,22 @@ void native_hud::setSize(int size) {
 int native_hud::size() {
     return hudSize.load();
 }
-void native_hud::follow(uint64_t serial, const Quat& relative) {
+void native_hud::follow(uint64_t serial, const Quat& relative, const Pinned& pinned) {
     AcquireSRWLockExclusive(&followLock);
-    followRing[serial % followRing.size()] = {serial, relative};
+    followRing[serial % followRing.size()] = {serial, relative, pinned};
     ReleaseSRWLockExclusive(&followLock);
 }
-bool native_hud::followed(uint64_t serial, Quat& relative) {
+bool native_hud::followed(uint64_t serial, Quat& relative, Pinned* pinned) {
+    if (pinned)
+        *pinned = {};
     AcquireSRWLockShared(&followLock);
     const auto entry = followRing[serial % followRing.size()];
     const auto probe = probeRelative;
     ReleaseSRWLockShared(&followLock);
     if (serial && entry.serial == serial) {
         relative = entry.relative;
+        if (pinned)
+            *pinned = entry.pinned;
         return true;
     }
     relative = probe.w != 0 ? probe : Quat{};

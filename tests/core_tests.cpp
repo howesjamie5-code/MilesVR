@@ -4485,6 +4485,50 @@ int main() {
         at(true,buttonA,0,true);
         check(!f.jump&&!(f.buttons&buttonA)&&mine.jump&&(mine.buttons&buttonA),"A was not the phone's, jump and all");
     });
+    test("phone FNSM app: the HUD pinned so its app's part lies exactly on the phone's glass", [] {
+        const Pose head{{.1f, 1.62f, .05f}, Quat::around({0, 1, 0}, .4f) * Quat::around({1, 0, 0}, -.3f)};
+        const WheelFrame phone = phoneFrameAt(head, {.15f, 1.25f, -.3f});
+        const float aspect = 16.f / 9;
+        const auto corners = phoneAppCorners(phone, aspect);
+        Quat relative{};
+        native_hud::Pinned pinned;
+        check(native_hud::pinTo(head, corners, phoneAppPart, aspect, relative, pinned) && pinned.on,
+              "a phone's glass takes a pin");
+        // Seen as the hook places the panel: from the pinned head, along the panel's own axes.
+        const Vec3 standing = head.position + head.orientation.rotate(pinned.offset);
+        const Quat q = head.orientation * relative;
+        const Vec3 right = q.rotate({1, 0, 0}), down = q.rotate({0, -1, 0}), forward = q.rotate({0, 0, -1});
+        const auto onTexture = [&](Vec3 p, float& x, float& y) {
+            const Vec3 d = p - standing;
+            const float depth = dot(d, forward);
+            x = (dot(d, right) / depth / pinned.shape.halfWidth + 1) / 2;
+            y = (dot(d, down) / depth / (pinned.shape.halfWidth / aspect) + 1) / 2;
+        };
+        const float want[4][2] = {{phoneAppPart[0], phoneAppPart[1]},
+                                  {phoneAppPart[2], phoneAppPart[1]},
+                                  {phoneAppPart[2], phoneAppPart[3]},
+                                  {phoneAppPart[0], phoneAppPart[3]}};
+        for (int i = 0; i < 4; ++i) {
+            float x{}, y{};
+            onTexture(corners[static_cast<size_t>(i)], x, y);
+            check(std::abs(x - want[i][0]) < 1e-3f && std::abs(y - want[i][1]) < 1e-3f,
+                  "a corner of the app's part off the phone's glass");
+        }
+        check(std::abs(pinned.shape.distance - .5f) < 1e-6f && dot(forward, phone.out) < -.999f,
+              "the panel faces out of the glass, half a metre from its head");
+        std::vector<Vertex> open, shut;
+        appendPhoneBody(open, phone, true, aspect);
+        appendPhoneBody(shut, phone, false, aspect);
+        const Vec3 appMiddle = (corners[0] + corners[2]) * .5f;
+        bool covered{};
+        for (size_t i = 0; i + 2 < open.size(); i += 3) {
+            const Vec3 a = open[i].position, b = open[i + 1].position, c = open[i + 2].position;
+            const auto side = [&](Vec3 p, Vec3 e0, Vec3 e1) { return dot(cross(e1 - e0, p - e0), phone.out); };
+            const float s0 = side(appMiddle, a, b), s1 = side(appMiddle, b, c), s2 = side(appMiddle, c, a);
+            covered |= (s0 > 0 && s1 > 0 && s2 > 0) || (s0 < 0 && s1 < 0 && s2 < 0);
+        }
+        check(!open.empty() && !covered && !shut.empty(), "the open phone leaves its glass's app place empty");
+    });
     test("phone FNSM app: the image fits the glass, a fingertip presses, drags and lets go", [] {
         // The phone upright 40 cm ahead, facing back at the eyes (+z).
         const WheelFrame phone{{0, 1.4f, -.4f}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};

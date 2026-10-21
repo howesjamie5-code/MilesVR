@@ -992,6 +992,9 @@ DWORD WINAPI run(void*) {
         PhoneTouch phoneTouch;
         struct PhoneAppDraw {
             bool on{};
+            // VR play goes on meanwhile: the game's own HUD, which carries its app, is pinned to the phone
+            // (native_hud::pinTo) instead of the textured picture in a dark room.
+            bool pinned{};
             WheelFrame phone{};
             PhoneTouch::Out touch{};
             Vec3 tip{};
@@ -1000,6 +1003,8 @@ DWORD WINAPI run(void*) {
         uint32_t phoneAppTaps{};
         static constexpr uint64_t phoneAppLeastMs = 3000, phoneAppMostMs = 600000;
         static constexpr float phoneAppPlayEnd = 2;
+        // Seconds the game's own camera has been back (its app closes into play).
+        float phoneAppCommittedSeconds{};
         // MilesVR 0.1.78: a blow on a boss taps the game's X this long (game_punch::Venom::bossBlows).
         float bossTap{}, bossVenomTap{}, bossStrikeTap{};
         bool throwingUp{};
@@ -1670,7 +1675,7 @@ DWORD WINAPI run(void*) {
                             fnsmSceneDone = true;
                             phoneAppAt = GetTickCount64();
                             phoneAppHand = phone.hand() == 0 ? 0 : 1;
-                            phoneAppPlaySeconds = 0;
+                            phoneAppPlaySeconds = phoneAppCommittedSeconds = 0;
                             if (phoneTouch.reset())
                                 mouseEvent(MOUSEEVENTF_LEFTUP);
                             runtime.haptic(1, .3f);
@@ -1731,7 +1736,23 @@ DWORD WINAPI run(void*) {
                         if (fnsmCommittedSeconds >= fnsmSceneEndSeconds || GetTickCount64() - fnsmAskSeen > fnsmSceneMostMs)
                             fnsmSceneDone = true;
                     }
-                    const bool fnsmScene = !fnsmSceneDone && player.hero && bridgeRunning && followsPlayer;
+                    // And while the game's app is on the phone, the world goes on round it (0.1.80, the user:
+                    // "the whole game screen acts as a monitor only showing the game on the phone").
+                    if (phoneAppAt) {
+                        phoneAppCommittedSeconds =
+                            committed ? phoneAppCommittedSeconds + (std::isfinite(frame.seconds)
+                                                                        ? std::clamp(frame.seconds, 0.f, .1f)
+                                                                        : 0.f)
+                                      : 0;
+                        const uint64_t since = GetTickCount64() - phoneAppAt;
+                        if (since > phoneAppMostMs ||
+                            (since > phoneAppLeastMs && phoneAppCommittedSeconds >= phoneAppPlayEnd)) {
+                            phoneAppAt = 0;
+                            game_prompts::note("phone: the game's FNSM app closed - the phone goes away");
+                        }
+                    }
+                    const bool fnsmScene =
+                        (!fnsmSceneDone || phoneAppAt) && player.hero && bridgeRunning && followsPlayer;
                     const bool gameplay = player.hero && bridgeRunning && (committed || fnsmScene) && followsPlayer;
                     uint64_t moverTable{};
                     read(game.mover, &moverTable, sizeof(moverTable));
@@ -2224,20 +2245,7 @@ DWORD WINAPI run(void*) {
                     using CalibrationPhase = body_calibration::Phase;
                     const bool immersive = viewing && motion.active && !flatScreen && controlsVisible;
                     const uint64_t nowMs = GetTickCount64();
-                    bool phoneAppOn = false;
-                    if (phoneAppAt) {
-                        phoneAppPlaySeconds = immersive ? phoneAppPlaySeconds + (std::isfinite(frame.seconds)
-                                                                                     ? std::clamp(frame.seconds, 0.f, .1f)
-                                                                                     : 0.f)
-                                                        : 0;
-                        const uint64_t since = nowMs - phoneAppAt;
-                        if (since > phoneAppMostMs || (since > phoneAppLeastMs && phoneAppPlaySeconds >= phoneAppPlayEnd)) {
-                            phoneAppAt = 0;
-                            game_prompts::note("phone: the game's FNSM app closed - the phone goes away");
-                        } else {
-                            phoneAppOn = viewing && !immersive;
-                        }
-                    }
+                    const bool phoneAppOn = phoneAppAt && viewing;
                     if (!phoneAppOn) {
                         if (phoneTouch.reset())
                             mouseEvent(MOUSEEVENTF_LEFTUP);
@@ -2253,7 +2261,9 @@ DWORD WINAPI run(void*) {
                         const auto& tapping = frame.hands[tapHand];
                         const bool tipTracked = tapping.valid && validTrackedPose(tapping.aim);
                         const Vec3 tip = tipTracked ? tapping.aim.position : lost;
-                        const auto touch = phoneTouch.update(held, shownAspect, tip, tipTracked);
+                        // In play the picture is the HUD's, the window's shape; in the dark room the one drawn.
+                        const auto touch = phoneTouch.update(held, immersive ? SpidyFlatAspect() : shownAspect, tip,
+                                                             tipTracked);
                         menu_pointer::Output mouse;
                         mouse.pointing = touch.hover;
                         mouse.hand = tapHand;
@@ -2266,7 +2276,7 @@ DWORD WINAPI run(void*) {
                             if (++phoneAppTaps <= 10)
                                 game_prompts::note("phone: a finger tap on the FNSM app");
                         }
-                        phoneAppDraw = {true, held, touch, tip, frame.head};
+                        phoneAppDraw = {true, immersive, held, touch, tip, frame.head};
                     }
                     if (!immersive)
                         immersiveSince = 0;
@@ -4413,7 +4423,21 @@ DWORD WINAPI run(void*) {
                     // fixed in the room, so a reused image the headset turns to a
                     // newer head shows it where it was.
                     const Quat hudFacing = hudFollow.update(frame.head.orientation, frame.seconds);
-                    native_hud::follow(eyes.serial, frame.head.orientation.conjugate() * hudFacing);
+                    {
+                        Quat relative = frame.head.orientation.conjugate() * hudFacing;
+                        native_hud::Pinned pinned;
+                        if (phoneAppDraw.on && phoneAppDraw.pinned) {
+                            const float aspect = SpidyFlatAspect();
+                            Quat pinnedRelative{};
+                            native_hud::Pinned pin;
+                            if (native_hud::pinTo(frame.head, phoneAppCorners(phoneAppDraw.phone, aspect), phoneAppPart,
+                                                  aspect, pinnedRelative, pin)) {
+                                relative = pinnedRelative;
+                                pinned = pin;
+                            }
+                        }
+                        native_hud::follow(eyes.serial, relative, pinned);
+                    }
                     NativeEyeFrame saved;
                     saved.serial = eyes.serial;
                     saved.motion = motion;
@@ -4438,6 +4462,8 @@ DWORD WINAPI run(void*) {
                                       toWorld.orientation.rotate(f.up), toWorld.orientation.rotate(f.out)};
                         wheelPlaces(view);
                     }
+                    if (phoneAppDraw.on && phoneAppDraw.pinned)
+                        saved.phone = {true, compose(motion.headPose, inverse(frame.head))};
                     if (phone.live()) {
                         // The phone: this image's way from tracking space into its
                         // world, and the screen as it is now, which every image
@@ -4507,7 +4533,8 @@ DWORD WINAPI run(void*) {
                     // MilesVR 0.1.80: the game's FNSM app on the phone in the hand, the room around it dark
                     // (phoneAppDraw): the phone's body, the game's image on its glass, then the fingertip and
                     // where it lands, each eye from where it is now.
-                    if (native_gpu::Screen app; phoneAppDraw.on && native_gpu::latestScreen(app, imageHoldMs)) {
+                    if (native_gpu::Screen app;
+                        phoneAppDraw.on && !phoneAppDraw.pinned && native_gpu::latestScreen(app, imageHoldMs)) {
                         const float aspect = static_cast<float>(app.width) / static_cast<float>(app.height);
                         shownAspect = aspect;
                         std::array<D3D12Renderer::ViewTarget, 2> views;
@@ -4928,7 +4955,20 @@ DWORD WINAPI run(void*) {
                         // The phone where it is now - in the hand, where the hand is
                         // now - through this image's own way into its world, and
                         // moved with the player to this image as the wheel is.
-                        if (!saved->flatScreen && saved->phone.open) {
+                        if (!saved->flatScreen && saved->phone.open && phoneAppDraw.on && phoneAppDraw.pinned) {
+                            // The game's app on the phone: its body round the HUD pinned there, the
+                            // fingertip and where it lands, into this image's world.
+                            const Pose& toWorld = saved->phone.toWorld;
+                            const Quat turn = toWorld.orientation;
+                            const auto place = [&](Vec3 p) { return compose(toWorld, Pose{p, {}}).position + travel; };
+                            const auto& f = phoneAppDraw.phone;
+                            const WheelFrame held{place(f.centre), turn.rotate(f.right), turn.rotate(f.up),
+                                                  turn.rotate(f.out)};
+                            appendPhoneBody(vertices, held, true, saved->screenAspect);
+                            auto touch = phoneAppDraw.touch;
+                            touch.point = place(touch.point);
+                            appendPhoneTouch(vertices, held, touch, place(phoneAppDraw.tip), Pose{viewer, {}});
+                        } else if (!saved->flatScreen && saved->phone.open) {
                             auto view = phoneShown;
                             const Pose& toWorld = saved->phone.toWorld;
                             const auto& f = phone.place();

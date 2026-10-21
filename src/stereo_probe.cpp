@@ -328,6 +328,8 @@ struct FrameHead {
     // the XR worker with the command), and whether the worker sent one.
     Mat4 panel{};
     bool followed{};
+    // MilesVR 0.1.80: the panel pinned elsewhere (native_hud::Pinned), its size then its own.
+    native_hud::Pinned pinned{};
 };
 FrameHead frameHead, earlyFrameHead;
 // The HUD panel's render instance while the HUD is off and the eyes are shown:
@@ -667,8 +669,19 @@ FrameHead commandHead() {
         native_eyes::headView(head.command, head.pose, head.lens)) {
         head.viewed = true;
         Quat relative{};
-        head.followed = native_hud::followed(head.command.serial, relative);
+        head.followed = native_hud::followed(head.command.serial, relative, &head.pinned);
         head.panel = native_hud::turned(head.pose, relative);
+        if (head.pinned.on) {
+            // Stand the panel's head where the pin puts it: its offset in the head's axes (rows right,
+            // down, forward; offset x right, y up, z back).
+            const Vec3 right{head.pose[0], head.pose[1], head.pose[2]},
+                down{head.pose[4], head.pose[5], head.pose[6]}, forward{head.pose[8], head.pose[9], head.pose[10]};
+            const Vec3 o = head.pinned.offset;
+            const Vec3 moved = right * o.x - down * o.y - forward * o.z;
+            head.panel[12] += moved.x;
+            head.panel[13] += moved.y;
+            head.panel[14] += moved.z;
+        }
     }
     return head;
 }
@@ -731,6 +744,8 @@ const FrameHead& earlyHead() {
 void placeHud(const HudPlacement& placed, const FrameHead& head) {
     native_hud::Shape shape;
     shape.halfWidth = native_hud::halfWidth(native_hud::size());
+    if (head.pinned.on)
+        shape = head.pinned.shape;
     Mat4 transform{};
     uint32_t handle{};
     const bool done = shape.halfWidth > 0 && registered(placed.instance, handle) &&
@@ -842,7 +857,8 @@ void hudPlace(void* follower) {
     // game's own view does on the flat one.
     const bool screen = head.controlled && head.command.enabled == 3 && !retiring();
     // The HUD off: the eyes (immersive or the flat screen) leave the panel out.
-    const bool hide = !native_hud::size() && head.controlled && !screen && !retiring();
+    // A panel pinned to the phone shows whatever the HUD's size (0.1.80).
+    const bool hide = !native_hud::size() && !head.pinned.on && head.controlled && !screen && !retiring();
     hiddenHud = hide ? placed.instance : 0;
     if (hide)
         native_hud::publish([](native_hud::Data& d) { ++d.hiddenFrames; });

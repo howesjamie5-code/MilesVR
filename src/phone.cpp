@@ -621,12 +621,42 @@ std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect) {
             c - phone.right * w - phone.up * h};
 }
 
-void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone) {
+void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone, bool open, float aspect) {
     if (!finite(phone.centre))
         return;
     const Plane p{phone};
-    p.rounded(out, 0, 0, width, height, corner, 0, body);
-    p.rounded(out, 0, 0, width - 2 * bezel, height - 2 * bezel, corner - bezel / 2, .001f, screen);
+    if (!open) {
+        p.rounded(out, 0, 0, width, height, corner, 0, body);
+        p.rounded(out, 0, 0, width - 2 * bezel, height - 2 * bezel, corner - bezel / 2, .001f, screen);
+    } else {
+        // The body round the app's place: above it and below it, each with its own round corners, and
+        // a strip down each side of it; the glass the same, a bezel in.
+        const auto size = phoneAppSize(aspect);
+        const float top = phoneAppMiddle + size.height / 2, bottom = phoneAppMiddle - size.height / 2;
+        const float half = width / 2, halfApp = size.width / 2;
+        const auto band = [&](float y0, float y1, float z, Vec3 c, float inset) {
+            const float w = width - 2 * inset;
+            const float above = height / 2 - inset, r = corner - inset / 2;
+            if (y1 > y0 + 1e-4f) {
+                // The rounded part reaches past the band's open edge by its radius, which the plain
+                // rectangle along that edge then covers.
+                const bool upper = y0 >= phoneAppMiddle;
+                const float edge = upper ? y0 : y1, far = upper ? above : -above;
+                const float h = std::abs(far - edge) + r;
+                p.rounded(out, 0, upper ? far - h / 2 : far + h / 2, w, h, r, z, c);
+                p.rect(out, 0, upper ? edge + r / 2 : edge - r / 2, w, r, z + .0001f, c);
+            }
+        };
+        band(top, height / 2, 0, body, 0);
+        band(-height / 2, bottom, 0, body, 0);
+        band(top, height / 2, .001f, screen, bezel);
+        band(-height / 2, bottom, .001f, screen, bezel);
+        for (const float side : {-1.f, 1.f}) {
+            const float x = side * (halfApp + half) / 2, w = half - halfApp;
+            if (w > 1e-4f)
+                p.rect(out, x, phoneAppMiddle, w, size.height + .002f, 0, body);
+        }
+    }
     // The red bar along the top as the phone's own screens have it, FNSM in it.
     p.rounded(out, 0, .0695f, width - 2 * bezel, .019f, corner - bezel / 2, .0015f, red);
     p.text(out, "FNSM", -.031f, .0655f, .0065f, .05f, white, 0);

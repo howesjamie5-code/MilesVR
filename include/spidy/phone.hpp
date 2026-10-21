@@ -286,8 +286,9 @@ std::string phoneSongName(const std::string& fileName, int track);
 //
 // The game shows its app as an upright phone screen on the right of its picture, the scene playing on
 // beside it (the user's October 22 capture), so the phone shows that part alone: phoneAppPart, left,
-// top, right, bottom of the picture, 0 to 1 (measured from a headset capture, with room to spare).
-constexpr std::array<float, 4> phoneAppPart{.665f, .07f, .945f, .80f};
+// top, right, bottom of the picture, 0 to 1 (measured on the game's own picture the session report kept,
+// October 22, 00:16).
+constexpr std::array<float, 4> phoneAppPart{.758f, .192f, .988f, .874f};
 // The most of the glass it takes: its width, and its height under the red bar; and its middle's height
 // on the phone.
 constexpr float phoneAppWidth = .075f, phoneAppTallest = .125f, phoneAppMiddle = -.006f;
@@ -299,8 +300,10 @@ PhoneAppSize phoneAppSize(float aspect);
 // Its corners on the phone at `phone`: top left, top right, bottom right, bottom left, just above the
 // glass.
 std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect);
-// The phone's body and its dark glass, with nothing on the glass: what holds the game's app.
-void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone);
+// The phone's body and its dark glass, with nothing on the glass: what holds the game's app. `open`: the
+// app's place on the glass left empty, for the game's own drawing of it there to show through (the HUD
+// pinned to the phone in VR play).
+void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone, bool open = false, float aspect = 16.f / 9);
 // A fingertip on the app. Within `touch` of the glass over the image it presses (the game's mouse
 // button down where it is), and it lets go once `untouch` off or off the image; within `hover` it only
 // shows where it would land. Between a press and its release it drags.

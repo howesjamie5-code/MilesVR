@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <array>
 #include <initializer_list>
 
 namespace spidy::native_hud {
@@ -169,6 +170,59 @@ inline bool project(const Mat4& head, float halfWidth, float aspect, Vec3 world,
     front = depth > nearZ;
     return std::isfinite(x) && std::isfinite(y);
 }
+// A panel pinned elsewhere than in front of the head (follow, below).
+struct Pinned {
+    bool on{};
+    Vec3 offset{};
+    Shape shape{};
+};
+// The orientation whose x, y and z axes are `right`, `up` and `back` (unit and square to each other).
+inline Quat fromAxes(Vec3 right, Vec3 up, Vec3 back) {
+    const float m00 = right.x, m11 = up.y, m22 = back.z, trace = m00 + m11 + m22;
+    Quat q;
+    if (trace > 0) {
+        const float s = std::sqrt(trace + 1) * 2;
+        q = {(up.z - back.y) / s, (back.x - right.z) / s, (right.y - up.x) / s, s / 4};
+    } else if (m00 > m11 && m00 > m22) {
+        const float s = std::sqrt(1 + m00 - m11 - m22) * 2;
+        q = {s / 4, (up.x + right.y) / s, (back.x + right.z) / s, (up.z - back.y) / s};
+    } else if (m11 > m22) {
+        const float s = std::sqrt(1 + m11 - m00 - m22) * 2;
+        q = {(up.x + right.y) / s, s / 4, (back.y + up.z) / s, (back.x - right.z) / s};
+    } else {
+        const float s = std::sqrt(1 + m22 - m00 - m11) * 2;
+        q = {(back.x + right.z) / s, (back.y + up.z) / s, s / 4, (right.y - up.x) / s};
+    }
+    const float n = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    return n > 0 ? Quat{q.x / n, q.y / n, q.z / n, q.w / n} : Quat{};
+}
+// MilesVR 0.1.80: the panel that lays its texture's `part` (left, top, right, bottom, 0 to 1 across and down)
+// exactly on the rectangle `corners` (top left, top right, bottom right, bottom left), for the head at
+// `head`; all in one space (the tracking space). aspect: the texture's width over its height. The panel
+// faces the way the rectangle does (its front toward the corners' right x up). False for a rectangle or
+// part of no size.
+inline bool pinTo(const Pose& head, const std::array<Vec3, 4>& corners, const std::array<float, 4>& part, float aspect,
+                  Quat& relative, Pinned& pinned) {
+    constexpr float distance = .5f;
+    const Vec3 across = corners[1] - corners[0], downward = corners[3] - corners[0];
+    const float wide = length(across), high = length(downward), partWide = part[2] - part[0],
+                partHigh = part[3] - part[1];
+    if (!(wide > 1e-4f && high > 1e-4f && partWide > .01f && partHigh > .01f && aspect > .1f && aspect < 10) ||
+        !finite(head.position))
+        return false;
+    const Vec3 right = across * (1 / wide), down = downward * (1 / high), back = cross(right, down * -1.f);
+    const float textureWide = wide / partWide, textureHigh = textureWide / aspect;
+    const Vec3 middle =
+        corners[0] + right * (textureWide * (.5f - part[0])) + down * (textureHigh * (.5f - part[1]));
+    const Vec3 standing = middle + back * distance;
+    const Quat back2head = head.orientation.conjugate();
+    relative = back2head * fromAxes(right, down * -1.f, back);
+    pinned.on = true;
+    pinned.offset = back2head.rotate(standing - head.position);
+    pinned.shape.distance = distance;
+    pinned.shape.halfWidth = textureWide / 2 / distance;
+    return std::isfinite(pinned.shape.halfWidth) && finite(pinned.offset);
+}
 // The panel texture's base width that the game's stream turns into `width`
 // pixels: it makes the texture int(base * factor) wide (factor: the window's
 // aspect over 16:9, at least 1).
@@ -253,8 +307,12 @@ int size();
 // in the head's axes) for the eye command `serial`, as the XR worker sends the
 // command; and the one for the command a frame latched (main thread). Without
 // one the panel faces the way the head does.
-void follow(uint64_t serial, const Quat& relative);
-bool followed(uint64_t serial, Quat& relative);
+// MilesVR 0.1.80: a panel pinned somewhere else than in front of the head (the game's FNSM app on the
+// phone's glass, pinTo): `offset`, from the head in its own axes (x right, y up, z back), is where the
+// head would stand to see the panel as it is placed (the panel `shape.distance` ahead of there, `relative`
+// turned), and `shape` its size.
+void follow(uint64_t serial, const Quat& relative, const Pinned& pinned = {});
+bool followed(uint64_t serial, Quat& relative, Pinned* pinned = nullptr);
 // An eye's draw of the panel left out while the HUD is off (stereo_probe).
 void hiddenDraw();
 // Installs the texture, second-movie and marker hooks; 0 or an error (95xx).
