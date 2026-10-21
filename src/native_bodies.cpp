@@ -250,6 +250,10 @@ bool damageNow(const Damage& d, bool& unnamed) {
         set(0x190, &d.impulse, 23);
     if (d.hash)
         set(0x19c, &d.hash, 26);
+    if (d.category)
+        set(0x140, &d.category, 10);
+    if (d.hitFlags)
+        set(0x168, &d.hitFlags, 20);
     *reinterpret_cast<uint64_t*>(request + 8) |= fields;
     *reinterpret_cast<uint64_t*>(request + 0x18) |= fields;
     if (d.statusType >= 0 && d.statusAmount > 0 && std::isfinite(d.statusAmount) && std::isfinite(d.statusDuration)) {

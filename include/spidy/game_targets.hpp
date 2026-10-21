@@ -48,7 +48,16 @@ enum Trait : uint32_t {
     breakable = 8,
     ally = 16,
     hover = 32,
-    neutral = 64
+    neutral = 64,
+    // MilesVR 0.1.78 (the user: Rhino "dont react to the punches and get flung sometimes", "rhinos hitbox
+    // was very small ... this shoukd apply to all bosses"): a boss (a BossHealth of his own), and Rhino
+    // (RhinoBot) among them. A boss's hit capsule is grown to his model (bossSize) and his blows never
+    // fling him (game_punch's boss hits).
+    boss = 128,
+    rhino = 256,
+    // A state class: the bot is stunned (BotStateStunned, BotStateElectricStun) - for a boss, the moment the
+    // game offers its web strike finisher (game_targets::stunned).
+    stunned = 512
 };
 // A bot's size: the capsule his mover collides with, above his actor's
 // transform, as the game builds it (1fbba90) from his mover manager's body
@@ -125,6 +134,8 @@ bool up(uintptr_t base, const Candidate&);
 // the car drove on by itself; on October 15 one pulled hurt police officers
 // sitting in a burning car around the street.
 bool held(uintptr_t base, const Candidate&);
+// In a stunned state now (Trait stunned on his state machine's current state).
+bool isStunned(uintptr_t base, const Candidate&);
 // An enemy in the fight: an enemy who is up and free to fight - his own AI
 // moves him (not held). What a punch across the room, a web, a web ball and
 // the blow of a thrown thug take. The user, October 12, with webs still

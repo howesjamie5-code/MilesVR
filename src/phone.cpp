@@ -158,10 +158,10 @@ const char* musicState(const PhoneView& view) {
 }
 // The home screen: a card for each app, the picked one red; under them what plays.
 void homeScreen(std::vector<Vertex>& v, const Plane& p, const PhoneView& view) {
-    const char* const names[phoneApps] = {"MUSIC", "MAP", "GEAR"};
-    const char* const notes[phoneApps] = {"YOUR SONGS", "HIDEOUTS", "GADGETS AND XP"};
+    const char* const names[phoneApps] = {"MUSIC", "MAP", "GEAR", "FNSM APP"};
+    const char* const notes[phoneApps] = {"YOUR SONGS", "HIDEOUTS", "GADGETS AND XP", "CRIMES AND REQUESTS"};
     for (int i = 0; i < phoneApps; ++i) {
-        const float y = .04f - i * .026f;
+        const float y = .045f - i * .0235f;
         const bool lit = view.app == i;
         p.rounded(v, 0, y, .068f, .021f, .004f, .002f, lit ? red : dim);
         const Vec3 ink = white, back = lit ? red : dim;
@@ -170,8 +170,10 @@ void homeScreen(std::vector<Vertex>& v, const Plane& p, const PhoneView& view) {
             noteIcon(v, p, -.0235f, y, .012f, ink);
         else if (i == 1)
             pinIcon(v, p, -.0235f, y, .012f, ink, back);
-        else
+        else if (i == 2)
             gearIcon(v, p, -.0235f, y, .012f, ink, back);
+        else
+            spider(v, p, -.0235f, y + .0006f, .0085f, ink);
         p.text(v, names[i], -.012f, y, .0045f, .04f, white, 0);
         p.text(v, notes[i], -.012f, y - .0058f, .0025f, .04f, lit ? white : soft, 0);
     }
@@ -387,6 +389,8 @@ PhoneAction PhoneUi::update(const PhoneControls::Event& e, int gearRows) {
         // The apps stand in a column: up and down, or left and right, go through them.
         if (const int step = e.y ? -e.y : e.x)
             app_ = (app_ + step + phoneApps) % phoneApps;
+        if (e.pressed && app_ == phoneFnsmApp)
+            return PhoneAction::fnsm;
         if (e.pressed)
             screen_ = static_cast<PhoneScreen>(app_ + 1);
         return PhoneAction::none;
@@ -476,7 +480,7 @@ Phone::Use Phone::take(XrFrame& frame, int gearRows) {
     const auto& stick = h[use.stick];
     use.controls = controls_.update(stick.stickX, stick.stickY, a, b, h[0].trigger, h[1].trigger);
     use.action = ui_.update(use.controls, gearRows);
-    if (use.action == PhoneAction::close)
+    if (use.action == PhoneAction::close || use.action == PhoneAction::fnsm)
         open_ = live_ = false;
     return use;
 }

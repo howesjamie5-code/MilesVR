@@ -1,6 +1,7 @@
 #pragma once
 #include "system.hpp"
 #include "update.hpp"
+#include "video.hpp"
 #include "imgui.h"
 #include <functional>
 
@@ -21,7 +22,7 @@ void theme(ImGuiStyle& style);
 class App {
 public:
     // `updatedFrom`: the version an update just replaced (the launcher started again), else empty.
-    App(HWND window, Fonts fonts, std::string updatedFrom = {});
+    App(HWND window, ID3D11Device* device, Fonts fonts, std::string updatedFrom = {});
     ~App();
     // Reads the scan, checks and session; runs every loop, even while minimized.
     void poll();
@@ -58,6 +59,9 @@ private:
     // Why the update cannot start now; empty when it can.
     std::string updateBlocker();
     void modals();
+    // The venom tutorial video player (Controls tab: a power's WATCH button).
+    void openTutorial(const char* name, const char* description, const char* file);
+    void tutorialPlayer();
 
     // `venom`: the card of Miles's venom powers, edged in venom orange.
     bool beginCard(const char* id, ImVec2 size, int childFlags = 0, bool venom = false);
@@ -121,6 +125,10 @@ private:
     UpdateStatus update_;
     std::string updatedFrom_;
     bool updateLater_{};
+    // The venom tutorial playing in the player window, and why it cannot play.
+    VideoPlayer video_;
+    bool wantTutorial_{};
+    std::string tutorialName_, tutorialText_, tutorialError_;
 };
 
 } // namespace launcher

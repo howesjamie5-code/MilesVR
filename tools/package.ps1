@@ -61,6 +61,9 @@ Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stag
 Copy-Item -LiteralPath (Join-Path $root 'THIRD_PARTY_NOTICES.md') -Destination $stage
 Copy-Item -Path (Join-Path $root 'docs\licenses\*') -Destination (Join-Path $stage 'docs\licenses')
 Copy-Item -LiteralPath (Join-Path $root 'third_party\imgui\LICENSE.txt') -Destination (Join-Path $stage 'docs\licenses\DearImGui-LICENSE.txt')
+# The venom tutorial videos the launcher's Controls tab plays (WATCH).
+New-Item -ItemType Directory -Force (Join-Path $stage 'Tutorials') | Out-Null
+Copy-Item -Path (Join-Path $root 'Tutorials\*.mp4') -Destination (Join-Path $stage 'Tutorials')
 # An empty Music folder for the phone's songs. Keep it EMPTY: no songs, and no file in it at all - the updater
 # retires files the package lacks from every folder the package has files in, which would take the player's songs.
 New-Item -ItemType Directory -Force (Join-Path $stage 'Music') | Out-Null

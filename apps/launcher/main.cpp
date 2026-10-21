@@ -236,7 +236,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
 
     std::wstring restartFolder;
     {
-        launcher::App application(window, fonts, updatedFrom);
+        launcher::App application(window, device, fonts, updatedFrom);
         app = &application;
         bool done = false, occluded = false;
         while (!done) {

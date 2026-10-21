@@ -29,6 +29,29 @@ constexpr float botHeight = 1.8f, botRadius = .3f, reach = 3;
 // The kinetic blow the game answers with its flight, as the web grab deals
 // it (game_grab.cpp's knock): KnockbackAmount and ImpactImpulse.
 constexpr float flingAmount = 10, flingImpulse = 30;
+// MilesVR 0.1.78: a boss (game_targets::boss) takes the damage of a blow but is never flung by it - no
+// push and no flying knockback (Rhino "get flung sometimes"); at most it staggers him.
+bool bossRecord(uint64_t record);
+// And it carries what the game's own punch on a boss carries (recorded on Rhino, October 20: hash a621eb5c
+// for a punch, f3b5304e for a bigger blow, category 1, hit flags 0x80d02000, knockback 3 at 1), so he
+// plays his own reaction to it ("they just dont act like they react to it").
+constexpr uint32_t bossPunchHash = 0xa621eb5c, bossHeavyHash = 0xf3b5304e, bossCategory = 1,
+                   bossHitFlags = 0x80d02000;
+native_bodies::Damage tamedForBoss(native_bodies::Damage request) {
+    if (!bossRecord(request.victim))
+        return request;
+    const bool heavy = request.type == 7 || request.knockback >= static_cast<int32_t>(Knockback::Knockdown);
+    request.impulse = -1;
+    if (request.type == 7) // kKinetic
+        request.type = 1;  // kMelee
+    request.knockback = static_cast<int32_t>(Knockback::Knockback);
+    request.knockbackAmount = 1;
+    if (!request.hash)
+        request.hash = heavy ? bossHeavyHash : bossPunchHash;
+    request.category = bossCategory;
+    request.hitFlags = bossHitFlags;
+    return request;
+}
 // A blow's velocity goes to his flight in this many samples once the game
 // has him on it: the blow is issued at the next physics step and the flight
 // starts with the game's own velocity, away from the hero, a frame or two
@@ -91,6 +114,9 @@ Strikes tally;
 // holds out and the meter's address, the charge a blow spent last, and what
 // has landed.
 std::atomic<uint32_t> venomCharge{}, venomHand{1};
+// MilesVR 0.1.78: the story has not given Miles his venom yet (Venom::locked): no blow or dodge fills the meter.
+std::atomic<bool> venomLocked{};
+std::atomic<uint32_t> venomLocks{};
 std::atomic<uint64_t> venomMeter{}, venomHolder{}, venomHolderClass{};
 uint32_t venomUsed{};
 Venom venomOut;
@@ -198,6 +224,8 @@ bool spendBar(uint64_t meter) {
 }
 // A blow of the player's charges the bars in order (venom_punch::gain).
 void chargeMeter(uint64_t meter, float amount) {
+    if (venomLocked.load())
+        return;
     venom_punch::Bars b;
     if (readBars(meter, b))
         writeBars(meter, venom_punch::gained(b, amount));
@@ -350,6 +378,18 @@ void readSense(const Vec3& chest) {
         }
     }
 }
+bool bossRecord(uint64_t record) {
+    for (const auto& b : bots)
+        if (b.record == record)
+            return (b.traits & game_targets::boss) != 0;
+    return false;
+}
+bool bossStunned(uint64_t record) {
+    for (const auto& b : bots)
+        if (b.record == record)
+            return game_targets::isStunned(base, b);
+    return false;
+}
 // A counter's break: the game's flinch for the attacker the moment the fist
 // goes out at him, so his blow never comes; the blow that lands on him next
 // is the counter's (land()).
@@ -411,6 +451,11 @@ void publishSense(uint32_t status, Vec3 chest) {
 // The thugs' flights that wait for a blow's velocity.
 void steerFlights(float seconds) {
     for (auto it = launches.begin(); it != launches.end();) {
+        // A boss is never sent flying (0.1.78: Rhino still "gets flung sometimes" - the flight, not the blow).
+        if (bossRecord(it->record)) {
+            it = launches.erase(it);
+            continue;
+        }
         it->age += seconds;
         bool done{};
         if (native_bodies::flung(it->machine)) {
@@ -460,7 +505,8 @@ void blast(Vec3 centre, Blast kind = Blast::Smash) {
     uint32_t hits{};
     for (const auto& b : bots) {
         Vec3 feet{};
-        if ((b.traits & game_targets::neutral) || !game_targets::enemy(b) || !game_targets::up(base, b) ||
+        if ((b.traits & (game_targets::neutral | game_targets::boss)) || !game_targets::enemy(b) ||
+            !game_targets::up(base, b) ||
             !game_targets::position(b, feet) ||
             !(mega ? venom_punch::inMega(centre, feet) : venom_punch::inBlast(centre, feet)) ||
             !game_targets::live(base, b))
@@ -492,7 +538,7 @@ void blast(Vec3 centre, Blast kind = Blast::Smash) {
         request.statusType = venomStatus;
         request.statusAmount = venomStatusAmount;
         request.statusDuration = venomStatusSeconds;
-        native_bodies::damage(request);
+        native_bodies::damage(tamedForBoss(request));
         if (b.machine) {
             const auto waiting = std::find_if(launches.begin(), launches.end(),
                                               [&](const Launch& l) { return l.record == b.record; });
@@ -643,7 +689,16 @@ void land(PunchEvent e, bool byStrike) {
         request.knockback = static_cast<int32_t>(d.knockback);
         request.knockbackAmount = 2 + 6 * e.strength;
     }
-    native_bodies::damage(request);
+    // A plain blow on a boss is the game's own attack (Venom::bossBlows). His venom punch stays the
+    // module's own, at once (the user, October 20: the game's Venom Punch "delays the attack").
+    const bool onBoss = bossRecord(e.target) && !venom;
+    if (onBoss) {
+        AcquireSRWLockExclusive(&output);
+        venomOut.bossBlows += bossStunned(e.target) ? 1ull << 32 : 1ull;
+        ReleaseSRWLockExclusive(&output);
+    } else {
+        native_bodies::damage(tamedForBoss(request));
+    }
     if (!venom)
         chargeMeter(venomMeter.load(), venom_punch::gain(d.kind != BlowKind::Hit && d.kind != BlowKind::Finisher,
                                                          d.kind == BlowKind::Finisher));
@@ -869,8 +924,9 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // The venom smash: the venom fist, charged, punched down - standing, or
     // in the air on no web (venom_punch.hpp). It takes the charge, and the
     // punch opens no strike nor venom punch.
-    if (venomArmed() && !smash.active() && hands[side].tracked && !hands[side].busy && !player.swinging &&
-        strike.phase() != WebStrike::Phase::Flying && venom_punch::smashing(punches.velocity(side))) {
+    if (venomArmed() && !(venomLocks.load() & Venom::lockedSmash) && !smash.active() && hands[side].tracked &&
+        !hands[side].busy && !player.swinging && strike.phase() != WebStrike::Phase::Flying &&
+        venom_punch::smashing(punches.velocity(side))) {
         // Held up in the air after a blow: the drop has him from here.
         if (strike.phase() == WebStrike::Phase::Hanging)
             strike.cancel();
@@ -888,7 +944,8 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     // jump only work in a fight" - out of one the punch is the game's own
     // venom punch). The enemies around go up, and he with them: the
     // strike's rise (the game's own jump first), then a hang up there.
-    if (venomArmed() && !smash.active() && player.grounded && sinceFight < venom_punch::fightCalmSeconds && hands[side].tracked && !hands[side].busy &&
+    if (venomArmed() && !(venomLocks.load() & Venom::lockedJump) && !smash.active() && player.grounded &&
+        sinceFight < venom_punch::fightCalmSeconds && hands[side].tracked && !hands[side].busy &&
         !player.swinging && strike.phase() != WebStrike::Phase::Flying &&
         venom_punch::jumping(punches.velocity(side))) {
         venomUsed = venomCharge.load();
@@ -1119,6 +1176,8 @@ Venom game_punch::venom(const Venom& in) {
     megaRequest = in.megaRequest;
     dodgeRequest = in.dodges;
     perfectRequest = in.perfectDodges;
+    venomLocked = (in.locked & Venom::lockedVenom) != 0;
+    venomLocks = in.locked;
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

@@ -20,7 +20,10 @@ constexpr int phoneButtons = 4;
 // player, October 17: "a home screen with apps on it ... look more like the
 // fnsm app from the 2nd game").
 enum class PhoneScreen : int { home, music, map, gear };
-constexpr int phoneApps = 3; // music, map, gear, in that order on the home screen
+// MilesVR 0.1.78: and FNSM APP, the game's own Friendly Neighborhood Spider-Man app (the user: "Add friendly
+// neighbourhood to it"): A on it puts the phone away and opens the game's (PhoneAction::fnsm).
+constexpr int phoneApps = 4; // music, map, gear, fnsm, in that order on the home screen
+constexpr int phoneFnsmApp = 3;
 // The controllers while the phone is out, as steps: the stick pushed one way
 // (x: -1 left, 1 right; y: -1 down, 1 up), A, B, and the volume from the
 // triggers, a pull of the left one a step down and of the right one a step up
@@ -49,7 +52,8 @@ class PhoneControls {
 // picks an app and A opens it, B puts the phone away; in an app B goes home.
 // In MUSIC left and right pick a button and A presses it; in GEAR up and down
 // scroll the list.
-enum class PhoneAction : int { none, close, previous, play, next, autoplay };
+// fnsm: FNSM APP opened - the phone goes away and the game's own app opens (game_xr holds its View).
+enum class PhoneAction : int { none, close, previous, play, next, autoplay, fnsm };
 class PhoneUi {
   public:
     // Rows GEAR shows at once.

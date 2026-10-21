@@ -452,6 +452,10 @@ bool __fastcall invokeHook(void* ui, const char* name, GfxValue* args, uint32_t 
     // MinHook takes this target once, so the prompts are read from here
     // rather than from a second hook of their own (game_prompts.hpp).
     game_prompts::observeCall(imageBase, name, args, count);
+    // A prompt naming the game's buttons, worded as the VR controls (game_prompts::rewriteArgs).
+    GfxValue worded[16];
+    if (game_prompts::rewriteArgs(name, args, count, worded, 16))
+        return originalInvoke(ui, name, worded, count, a, b, c, d);
     return originalInvoke(ui, name, args, count, a, b, c, d);
 }
 void __fastcall callbackHook(void* ui, uint32_t hash, GfxValue* args, uint32_t count) {

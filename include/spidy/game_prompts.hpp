@@ -109,11 +109,41 @@ void setReading(bool);
 // the game screen and in the menus the game's own button names are the right
 // ones, and its KEY MAPPING tab lists them.
 void setRewriting(bool);
+// MilesVR 0.1.78: the player's web and venom buttons, for the rewritten texts (prompt_actions.hpp).
+void setControls(bool triggerWebs, bool venomTrigger);
+// Whether VR play has the controllers now (not the game screen): only then are the game's button names
+// in its UI calls (rewriteArgs) worded as VR controls - a cutscene's QTE is pressed on the Xbox mapping.
+void setPlaying(bool);
+// MilesVR 0.1.78: a call of the game's into Flash with a text naming its buttons or actions ("[BTN_Y]
+// Enter", the throw's "[BTN_LB] + [BTN_RB]") worded as VR controls: `out` (room for `room` values, the
+// same layout as `args`) gets the arguments with such texts replaced, and true. False: pass them as they are.
+bool rewriteArgs(const char* name, const void* args, uint32_t count, void* out, uint32_t room);
+// MilesVR 0.1.78: whether a world marker offers an interaction now (POIInteractAvailable on, its marker not
+// cleared) - a throwable's LB + RB, which its marker draws by itself whatever text it is given (October 21).
+bool interactOffered();
+// Texts rewritten so far, and actions met that the table does not know (prompt_actions::rewrite).
+uint64_t textsRewritten();
 // A call of the game's into Flash, from game_menu's hook on the wrapper.
 // `name` is the pointer the game passed; `imageBase` the module's base;
 // `args` its Scaleform values (game_menu's GfxValue, the same layout) and
 // `count` how many.
 void observeCall(uintptr_t imageBase, const char* name, const void* args, uint32_t count);
+// MilesVR 0.1.78: the game's FNSM reminder (its UI's ShowFNSMReminder and HideFNSMReminder, the names'
+// literals at image offsets 3df0480 and 3df0498), which asks the player to open the FNSM app - on an Xbox
+// controller by holding View. Told apart by the name's pointer alone, so it needs no observing: how many
+// reminders have shown, and whether one is up now (shown and not hidden, for at most fnsmReminderMs).
+constexpr uintptr_t showFnsmReminderName = 0x3df0480, hideFnsmReminderName = 0x3df0498;
+constexpr uint32_t fnsmReminderMs = 12000;
+uint64_t fnsmReminders();
+bool fnsmReminderUp();
+// MilesVR 0.1.78 (the user: "Venom punch in the beginning of the story isnt activated but in vr I can do all
+// the venom moves"): whether the story has given Miles his venom, as the game tells its HUD. The HUD's
+// update (8c25e0) asks the progression (b6b520 on the hero's venom unlock) and, only when the answer
+// changes, calls SetVenomUnlocked(bool) (its name's literal at 3dee2c0). A HUD starts out locked, so a save
+// without venom never calls it: -1 not heard this session (taken as locked), 0 locked, 1 unlocked.
+constexpr uintptr_t setVenomUnlockedName = 0x3dee2c0;
+int venomUnlocked();
+uint64_t venomUnlockCalls();
 // The eight names of the prompt and QTE interface, and the room kept for the
 // newest of their calls and for the census of every name the game uses.
 constexpr unsigned callNames = 10, callLines = 32, callChars = 128;

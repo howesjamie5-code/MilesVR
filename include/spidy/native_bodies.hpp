@@ -115,6 +115,10 @@ struct Damage {
     int32_t knockback = -1;
     float knockbackAmount = -1, impulse = -1;
     uint32_t hash{}; // DamageHash; 0 leaves it unset
+    // MilesVR 0.1.78, as the game's own punch on Rhino fills them (recorded October 20): the request's
+    // +0x140 (a category, 1 for his punches; its bit 10) and +0x168 (hit flags, 0x80d02000; bit 20). 0
+    // leaves each unset. A boss reacts to a blow that carries these and its attack's hash.
+    uint32_t category{}, hitFlags{};
     // A status the blow carries (the request's StatusData, added by 1ed20e0:
     // type, amount, duration), -1 for none. Webbing is type 19 kWebEncase on
     // a kWebImpact (20) blow: a bot's StatusEffectTrackerWebbed adds it up

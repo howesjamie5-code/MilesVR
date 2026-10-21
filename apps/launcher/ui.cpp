@@ -17,6 +17,8 @@ constexpr const char* kRefresh = "";
 constexpr const char* kCopy = "";
 constexpr const char* kOpen = "";
 constexpr const char* kDownload = "";
+constexpr const char* kPause = "";
+constexpr const char* kClose = "";
 
 struct Rgb {
     int r, g, b;
@@ -136,9 +138,9 @@ void theme(ImGuiStyle& style) {
     c[ImGuiCol_NavCursor] = vec(kRed);
 }
 
-App::App(HWND window, Fonts fonts, std::string updatedFrom)
+App::App(HWND window, ID3D11Device* device, Fonts fonts, std::string updatedFrom)
     : window_(window), fonts_(fonts), settings_(loadSettings()), installFolder_(installFolder()),
-      updatedFrom_(std::move(updatedFrom)) {
+      updatedFrom_(std::move(updatedFrom)), video_(device) {
     scanner_.start(settings_);
     // A player's copy asks GitHub for a newer MilesVR as it starts (update.cpp's kLatestUrl: MilesVR's own
     // releases, never Spidy's), unless the player turned that off.
@@ -199,7 +201,7 @@ void App::poll() {
 
 bool App::busy() {
     return session_.running() || scanner_.busy() || headset_.state() == Outcome::running ||
-           vcInstall_.state() == Outcome::running || updater_.busy();
+           vcInstall_.state() == Outcome::running || updater_.busy() || (video_.isOpen() && video_.playing());
 }
 
 bool App::allowClose() {
@@ -1538,7 +1540,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                 "(not the web button) fires it"},
           {"Right stick left / right", "Turn"},
           {"Right stick down (hold)", "Heal: the game's D-pad down"},
-          {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT"},
+          {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT. At something to throw "
+                                     "(the game marks it LB + RB): throw it - the game's LB + RB"},
           {"Click the right stick", "Pull a door or a grate: the game's LB + RB. With a venom bar full it lets the "
                                     "venom go instead (see VENOM POWERS)"},
           {"Right hand to your temple, trigger", "Scan: the game's R3"},
@@ -1577,11 +1580,13 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Stick  /  A", "Pick an app or button  /  press it"},
           {"B", "Put the phone away", "Phone away - each control is the game's again once let go of"},
           {"Triggers", "Music volume: left down, right up"},
-          {"Apps", "Music (the songs in the Music folder beside the launcher), map, GEAR (your gadgets)"}}},
+          {"Apps", "Music (the songs in the Music folder beside the launcher), map, GEAR (your gadgets), FNSM APP "
+                   "(opens the game's Friendly Neighborhood app; use it when the game asks for that app)",
+           "FNSM - pull out your phone (back pocket) and open FNSM APP"}}},
         {"MENUS, CUTSCENES, BODY",
-         {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset: point a hand at it for "
-                          "the mouse (its trigger clicks); the other controls work as an Xbox controller",
-           "Game screen (menus, loading, cutscenes): point a hand at it for the mouse - ..."},
+         {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset. Controllers = Xbox controller. "
+                          "Mouse: point at it + pull the trigger. Any button = controller again",
+           "Game screen (menus, loading, cutscenes): the controllers work as an Xbox controller; ..."},
           {"Left stick  /  A  /  B", "Move  /  select  /  back"},
           {"Grips", "Switch menu tabs"},
           {"T-pose, hold both triggers", "Body calibration when VR starts (B skips it)",
@@ -1612,17 +1617,20 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         const char* name;
         const char* description;
         const char* log = nullptr;
+        // Its tutorial video in the Tutorials folder, if it has one.
+        const char* video = nullptr;
     };
     const Power powers[] = {
         {"Venom Meter", "Blows fill it. Dodges a little, perfect dodges more. Up to 3 bars", fullLine.c_str()},
         {"Your Buttons", buttonsText.c_str(), buttonLine.c_str()},
         {"Venom Charge", "Venom full: hold the venom button until it glows and buzzes. An orange lightning icon marks "
                          "the enemy you will hit", chargedLine.c_str()},
-        {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!"},
-        {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up"},
-        {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit"},
+        {"Venom Punch", "Charged: punch the marked enemy. 1 bar", "Venom punch!", "venom-punch.mp4"},
+        {"Venom Jump", "Charged, standing, in a fight: punch straight up. 1 bar", "Venom jump! 3 enemies up",
+         "venom-jump.mp4"},
+        {"Venom Smash", "Charged: punch straight down. 1 bar", "Venom smash! 3 enemies hit", "venom-smash.mp4"},
         {"Mega Venom Blast", "3 bars full: squeeze both grips together. A boom and a slow-motion moment. 3 bars",
-         "MEGA VENOM BLAST! 5 enemies hit"},
+         "MEGA VENOM BLAST! 5 enemies hit", "mega-venom-blast.mp4"},
         {"Story Venom", "Out of a fight: hold the venom button and punch",
          "Venom - the game's own venom punch (its LB + X), for as long as you hold the venom button"},
         {"Venom Release", "Venom full: click the venom hand's stick to empty the meter", releaseLine.c_str()},
@@ -1659,7 +1667,25 @@ void App::controls(ImVec2 origin, ImVec2 size) {
         const ImVec2 bars(titleAt.x + cardWidth - 3 * barWidth - 2 * S(4), titleAt.y + S(7));
         venomBars(draw, bars, barWidth, S(8));
         bolt(draw, ImVec2(bars.x - S(150), bars.y + S(8)), ImVec2(bars.x - S(14), bars.y + S(2)), S(1.3f), 11u, 0.7f);
-        ImGui::Dummy(ImVec2(0, S(6)));
+        ImGui::Dummy(ImVec2(0, S(4)));
+        {
+            // Tells players the WATCH TUTORIAL buttons are videos of the powers.
+            const ImVec2 strip = ImGui::GetCursorScreenPos();
+            const ImVec2 stripEnd(strip.x + cardWidth, strip.y + S(34));
+            draw->AddRectFilled(strip, stripEnd, col(kVenom, 0.14f), S(8));
+            draw->AddRect(strip, stripEnd, col(kVenom, 0.5f), S(8), 0, S(1));
+            const ImVec2 c(strip.x + S(18), strip.y + S(17));
+            draw->AddCircleFilled(c, S(9), col(kVenom), 20);
+            draw->AddTriangleFilled(ImVec2(c.x - S(3), c.y - S(4.5f)), ImVec2(c.x - S(3), c.y + S(4.5f)),
+                                    ImVec2(c.x + S(5), c.y), col({20, 10, 4}));
+            draw->AddText(fonts_.bold, S(14), ImVec2(strip.x + S(36), strip.y + S(8)), col(kVenomBright),
+                          "TUTORIAL VIDEOS");
+            draw->AddText(fonts_.body, S(14),
+                          ImVec2(strip.x + S(36) + measure(fonts_.bold, S(14), "TUTORIAL VIDEOS").x + S(10),
+                                 strip.y + S(8)),
+                          col({232, 220, 210}), "Press WATCH TUTORIAL to see a power done in the game.");
+            ImGui::Dummy(ImVec2(cardWidth, S(34 + 12)));
+        }
         const float half = (cardWidth - S(24)) * 0.5f;
         const int rows = static_cast<int>((std::size(powers) + 1) / 2);
         for (int row = 0; row < rows; ++row) {
@@ -1677,6 +1703,15 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                 draw->AddCircleFilled(spark, S(3), col(kVenomBright), 12);
                 const ImVec2 nameSize = measure(fonts_.bold, S(15.5f), power.name);
                 draw->AddText(fonts_.bold, S(15.5f), ImVec2(x + S(16), at.y), col(kVenom), power.name);
+                // WATCH TUTORIAL: its tutorial video, after the name.
+                if (power.video) {
+                    ImGui::SetCursorScreenPos(ImVec2(x + S(16) + nameSize.x + S(12), at.y - S(3)));
+                    ImGui::PushID(static_cast<int>(index));
+                    if (pillButton("##watch", kPlay, "WATCH TUTORIAL", col(kVenom), col(kVenomBright), col({20, 10, 4}),
+                                   ImVec2(S(150), S(22)), fonts_.bold, 12))
+                        openTutorial(power.name, power.description, power.video);
+                    ImGui::PopID();
+                }
                 const float textWidth = half - S(16);
                 const ImVec2 textSize = measure(fonts_.body, S(14), power.description, textWidth);
                 draw->AddText(fonts_.body, S(14), ImVec2(x + S(16), at.y + nameSize.y + S(2)), col({232, 220, 210}),
@@ -1932,7 +1967,140 @@ void App::updatesCard(float width) {
     endCard();
 }
 
+void App::openTutorial(const char* name, const char* description, const char* file) {
+    tutorialName_ = name;
+    tutorialText_ = description;
+    tutorialError_.clear();
+    const std::wstring folder = tutorialFolder();
+    if (folder.empty())
+        tutorialError_ = "The Tutorials folder is missing. It comes with MilesVR: extract the whole zip again.";
+    else if (!video_.open(folder + L"\\" + widen(file), tutorialError_) && tutorialError_.empty())
+        tutorialError_ = "The video could not be played.";
+    wantTutorial_ = true;
+}
+
+void App::tutorialPlayer() {
+    if (wantTutorial_) {
+        ImGui::OpenPopup("##tutorial");
+        wantTutorial_ = false;
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    // As wide as the window allows: the picture 16:9, leaving room in the window's height for the controls.
+    float width = std::min(viewport->Size.x - S(80), S(1000));
+    const float room = viewport->Size.y - S(80) - S(150);
+    width = std::max(S(320), std::min(width, room * 16 / 9));
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(width + S(40), 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(20), S(16)));
+    ImGui::PushStyleColor(ImGuiCol_Border, vec(kVenom, 0.6f));
+    const bool open = ImGui::BeginPopupModal("##tutorial", nullptr,
+                                             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleColor();
+    if (!open) {
+        ImGui::PopStyleVar();
+        if (video_.isOpen())
+            video_.close();
+        return;
+    }
+    video_.update();
+    auto* draw = ImGui::GetWindowDrawList();
+    bool close = ImGui::IsKeyPressed(ImGuiKey_Escape);
+    // The power's name and what it does, a close button on the right.
+    {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        draw->AddText(fonts_.bold, S(12), at, col(kMuted), "TUTORIAL VIDEO");
+        draw->AddText(fonts_.bold, S(20), ImVec2(at.x, at.y + S(16)), col(kVenom), tutorialName_.c_str());
+        draw->AddText(fonts_.body, S(14), ImVec2(at.x, at.y + S(43)), col({232, 220, 210}), tutorialText_.c_str(),
+                      nullptr, width - S(110));
+        ImGui::SetCursorScreenPos(ImVec2(at.x + width - S(92), at.y));
+        if (pillButton("##close", kClose, "CLOSE", col(kPanelHigh), col({52, 46, 54}), col(kText), ImVec2(S(92), S(28)),
+                       fonts_.bold, 12))
+            close = true;
+        const float textHeight = measure(fonts_.body, S(14), tutorialText_.c_str(), width - S(110)).y;
+        ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + S(43) + textHeight + S(12)));
+        ImGui::Dummy(ImVec2(width, 0));
+    }
+    // The picture; a click on it (or Space) plays or pauses.
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float aspect = video_.width() > 0 ? static_cast<float>(video_.height()) / video_.width() : 9.f / 16;
+    const ImVec2 picture(width, width * aspect), end = add(at, picture);
+    const bool clicked = ImGui::InvisibleButton("##picture", picture);
+    const bool ready = tutorialError_.empty() && video_.isOpen();
+    draw->AddRectFilled(at, end, col({0, 0, 0}), S(8));
+    if (ready && video_.texture())
+        draw->AddImageRounded(ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<intptr_t>(video_.texture()))), at,
+                              end, ImVec2(0, 0), ImVec2(1, 1), col(kWhite), S(8));
+    if (!tutorialError_.empty()) {
+        const ImVec2 size = measure(fonts_.semibold, S(15), tutorialError_.c_str(), width - S(60));
+        draw->AddText(fonts_.semibold, S(15), ImVec2(at.x + S(30), at.y + (picture.y - size.y) * 0.5f), col(kError),
+                      tutorialError_.c_str(), nullptr, width - S(60));
+    }
+    draw->AddRect(at, end, col(kVenom, 0.35f), S(8), 0, S(1));
+    if (ready) {
+        if (ImGui::IsItemHovered())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (clicked || ImGui::IsKeyPressed(ImGuiKey_Space))
+            video_.setPlaying(!video_.playing());
+        // Paused: a big play mark over the picture.
+        if (!video_.playing()) {
+            const ImVec2 c((at.x + end.x) * 0.5f, (at.y + end.y) * 0.5f);
+            const float r = S(34);
+            draw->AddCircleFilled(c, r, col({0, 0, 0}, 0.55f), 32);
+            draw->AddTriangleFilled(ImVec2(c.x - r * 0.32f, c.y - r * 0.45f), ImVec2(c.x - r * 0.32f, c.y + r * 0.45f),
+                                    ImVec2(c.x + r * 0.5f, c.y), col(kVenomBright));
+        }
+    }
+    ImGui::Dummy(ImVec2(0, S(10)));
+    // Play/pause, restart, and the bar to jump about the video.
+    ImGui::BeginDisabled(!ready);
+    const ImVec2 row = ImGui::GetCursorScreenPos();
+    const bool playing = ready && video_.playing();
+    if (pillButton("##play", playing ? kPause : kPlay, playing ? "PAUSE" : "PLAY", col(kVenom), col(kVenomBright),
+                   col({20, 10, 4}), ImVec2(S(100), S(30)), fonts_.bold, 12.5f))
+        video_.setPlaying(!playing);
+    ImGui::SameLine(0, S(8));
+    if (pillButton("##restart", kRefresh, "RESTART", col(kVenomDeep), col({70, 38, 14}), col(kVenomBright),
+                   ImVec2(S(112), S(30)), fonts_.bold, 12.5f)) {
+        video_.seek(0);
+        video_.setPlaying(true);
+    }
+    const double duration = video_.duration();
+    const auto clock = [](double seconds) {
+        const int whole = static_cast<int>(seconds);
+        return format("%d:%02d", whole / 60, whole % 60);
+    };
+    const std::string time = clock(video_.position()) + " / " + clock(duration);
+    const float timeWidth = measure(fonts_.semibold, S(13), "00:00 / 00:00").x;
+    const float barX = row.x + S(100 + 8 + 112 + 18);
+    const float barWidth = std::max(width - (barX - row.x) - timeWidth - S(14), S(40));
+    ImGui::SetCursorScreenPos(ImVec2(barX, row.y));
+    ImGui::InvisibleButton("##seek", ImVec2(barWidth, S(30)));
+    if (ready && ImGui::IsItemHovered())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (ready && ImGui::IsItemActive() && duration > 0) {
+        const float fraction = std::clamp((ImGui::GetIO().MousePos.x - barX) / barWidth, 0.f, 1.f);
+        video_.seek(fraction * duration);
+    }
+    const float done = duration > 0 ? static_cast<float>(std::clamp(video_.position() / duration, 0.0, 1.0)) : 0.f;
+    const float mid = row.y + S(15);
+    draw->AddRectFilled(ImVec2(barX, mid - S(3)), ImVec2(barX + barWidth, mid + S(3)), col(kPanelHigh), S(3));
+    draw->AddRectFilled(ImVec2(barX, mid - S(3)), ImVec2(barX + barWidth * done, mid + S(3)), col(kVenom), S(3));
+    draw->AddCircleFilled(ImVec2(barX + barWidth * done, mid), S(7), col(kVenomBright), 16);
+    draw->AddText(fonts_.semibold, S(13), ImVec2(barX + barWidth + S(14), mid - S(8)), col(kMuted), time.c_str());
+    ImGui::EndDisabled();
+    ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + S(30)));
+    ImGui::Dummy(ImVec2(width, S(2)));
+    if (close) {
+        video_.close();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+    ImGui::PopStyleVar();
+}
+
 void App::modals() {
+    tutorialPlayer();
     if (wantClose_) {
         ImGui::OpenPopup("VR is running");
         wantClose_ = false;

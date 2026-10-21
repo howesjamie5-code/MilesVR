@@ -57,6 +57,10 @@ constexpr Rule rules[] = {
     {".?AVStatusEffectTrackerWebbed@@", trait(webbable)},
     {".?AVBreakableSystemComponent@@", trait(breakable)},
     {".?AVBirdBot@@", trait(neutral)},
+    {".?AVBossHealth@@", trait(boss)},
+    {".?AVRhinoBot@@", trait(boss) | trait(rhino)},
+    {".?AVBotStateStunned@@", trait(stunned)},
+    {".?AVBotStateElectricStun@@", trait(stunned)},
     {".?AVHelicopter@@", trait(neutral)},
     {".?AVSilverSableCraftBot@@", trait(neutral)},
     {".?AVHealth@@", healthClass},
@@ -228,6 +232,18 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
             c.traits = t->second;
         if (const auto h = healths.find(c.record); h != healths.end())
             c.health = h->second;
+        // A boss's movement capsule is much smaller than his model (Rhino's above all): his punches are
+        // judged against one grown to fit him.
+        if (c.kind == Kind::bot && (c.traits & boss)) {
+            if (c.traits & rhino) {
+                c.size.low = (std::min)(c.size.low, 0.f);
+                c.size.high = (std::max)(c.size.high, 2.9f);
+                c.size.radius = (std::max)(c.size.radius * 1.6f, 1.f);
+            } else {
+                c.size.high = c.size.low + (c.size.high - c.size.low) * 1.1f;
+                c.size.radius *= 1.4f;
+            }
+        }
     }
     return true;
 }
@@ -244,6 +260,10 @@ bool game_targets::up(uintptr_t base, const Candidate& c) {
 bool game_targets::held(uintptr_t base, const Candidate& c) {
     return c.kind == Kind::bot && c.machine && inPlay(c) &&
            (classOf(base, pointer(pointer(c.machine + 0x70))) & heldState);
+}
+bool game_targets::isStunned(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & trait(game_targets::stunned));
 }
 bool game_targets::standing(const Candidate& c) {
     float points{};

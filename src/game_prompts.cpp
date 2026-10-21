@@ -1,6 +1,11 @@
 // The game's prompt texts on their way to its markup resolver (game_prompts.hpp).
 #include "spidy/game_prompts.hpp"
+#include "spidy/prompt_actions.hpp"
 #include <MinHook.h>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -307,11 +312,79 @@ void game_prompts::setRewriting(bool on) {
     rewriting.store(on, std::memory_order_relaxed);
 }
 
+namespace {
+constexpr uint32_t poiSlots = 256;
+std::atomic<bool> poiOffered[poiSlots]{};
+std::atomic<uint64_t> fnsmShown{}, fnsmShownAt{}, venomCalls{};
+std::atomic<bool> fnsmUp{};
+std::atomic<int> venomState{-1};
+} // namespace
+
+int game_prompts::venomUnlocked() {
+    return venomState.load(std::memory_order_relaxed);
+}
+
+uint64_t game_prompts::venomUnlockCalls() {
+    return venomCalls.load(std::memory_order_relaxed);
+}
+
+uint64_t game_prompts::fnsmReminders() {
+    return fnsmShown.load(std::memory_order_relaxed);
+}
+
+bool game_prompts::fnsmReminderUp() {
+    return fnsmUp.load(std::memory_order_relaxed) &&
+           GetTickCount64() - fnsmShownAt.load(std::memory_order_relaxed) < fnsmReminderMs;
+}
+
+bool game_prompts::interactOffered() {
+    for (const auto& offered : poiOffered)
+        if (offered.load(std::memory_order_relaxed))
+            return true;
+    return false;
+}
+
 void game_prompts::observeCall(uintptr_t imageBase, const char* name, const void* args, uint32_t count) {
     invokes.fetch_add(1, std::memory_order_relaxed);
     const auto at = reinterpret_cast<uintptr_t>(name);
     if (!imageBase || at <= imageBase)
         return;
+    if (at == imageBase + showFnsmReminderName) {
+        fnsmShown.fetch_add(1, std::memory_order_relaxed);
+        fnsmShownAt.store(GetTickCount64(), std::memory_order_relaxed);
+        fnsmUp.store(true, std::memory_order_relaxed);
+    } else if (at == imageBase + hideFnsmReminderName) {
+        fnsmUp.store(false, std::memory_order_relaxed);
+    } else if (at == imageBase + setVenomUnlockedName && args && count >= 1) {
+        // Its one value a bool (type 2), the answer in the data's low byte.
+        GfxValue v;
+        if (readValue(static_cast<const GfxValue*>(args), v) && (v.type & 0x8f) == 2) {
+            venomState.store((v.data & 0xff) ? 1 : 0, std::memory_order_relaxed);
+            venomCalls.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    // Which of the game's world markers offer an interaction now: POIInteractAvailable(id, on, ...) (the
+    // throwable's LB + RB, October 21), until it is turned off or ClearPOI(id, ...) removes the marker.
+    if (args && count >= 1 && reinterpret_cast<uintptr_t>(name) >= 0x10000) {
+        char called[24];
+        const size_t n = copyText(name, called, sizeof(called));
+        const bool offer = n == 20 && !std::strcmp(called, "POIInteractAvailable") && count >= 2;
+        const bool gone = n == 8 && !std::strcmp(called, "ClearPOI");
+        if (offer || gone) {
+            const auto* values = static_cast<const GfxValue*>(args);
+            const auto number = [](const GfxValue& v) {
+                return (v.type & 0x8f) == 5 ? static_cast<uint32_t>(*reinterpret_cast<const double*>(&v.data))
+                                            : static_cast<uint32_t>(v.data);
+            };
+            GfxValue id, on;
+            if (readValue(values, id)) {
+                const uint32_t poi = number(id);
+                const bool now = offer && readValue(values + 1, on) && (on.data & 0xff) != 0;
+                if (poi < poiSlots)
+                    poiOffered[poi].store(now, std::memory_order_relaxed);
+            }
+        }
+    }
     if (!observing.load(std::memory_order_relaxed))
         return;
     // The census first: every name, whether this knows it or not. One example
@@ -381,8 +454,150 @@ void game_prompts::observeCall(uintptr_t imageBase, const char* name, const void
 // What went with it: the rewriting of a prompt's wording for VR
 // (setRewriting), which never ran in a headset, and the texts counted from
 // this route. The call route still carries the demand and the keyboard count.
+// MilesVR 0.1.78: it rewrites again, but only what it must and only safely. A text is copied out through
+// copyText (SEH, bounded by its region) and looked at only if it holds "[ACTION_" - the game's action
+// names, which its prompts, tips and tutorials use instead of buttons - and each rewritten text is kept
+// for good, keyed by the game's pointer and its words, so the pointer handed back stays good however long
+// the game keeps it (prompt_actions.hpp).
+namespace {
+std::atomic<bool> controlTriggerWebs{}, controlVenomTrigger{true};
+std::atomic<uint64_t> textRewrites{};
+SRWLOCK rewriteLock = SRWLOCK_INIT;
+struct Rewritten {
+    std::string from, to;
+};
+std::unordered_map<uintptr_t, std::unique_ptr<Rewritten>> rewrittenTexts;
+std::unordered_set<std::string> unknownActions;
+} // namespace
+
+void game_prompts::setControls(bool triggerWebs, bool venomTrigger) {
+    controlTriggerWebs.store(triggerWebs, std::memory_order_relaxed);
+    controlVenomTrigger.store(venomTrigger, std::memory_order_relaxed);
+}
+
+uint64_t game_prompts::textsRewritten() {
+    return textRewrites.load(std::memory_order_relaxed);
+}
+
 const char* game_prompts::observeText(const char* text) {
-    return text;
+    if (!rewriting.load(std::memory_order_relaxed) || reinterpret_cast<uintptr_t>(text) < 0x10000)
+        return text;
+    char seen[lineChars];
+    const size_t length = copyText(text, seen, sizeof(seen));
+    if (!length || length + 1 >= sizeof(seen) ||
+        (!std::strstr(seen, "[ACTION_") && !std::strstr(seen, "[BTN_") && !std::strstr(seen, "[DPAD_")))
+        return text;
+    const prompt_actions::Controls controls{controlTriggerWebs.load(std::memory_order_relaxed),
+                                            controlVenomTrigger.load(std::memory_order_relaxed)};
+    std::vector<std::string> unknown;
+    std::string changed = prompt_actions::rewrite(seen, controls, &unknown);
+    const auto key = reinterpret_cast<uintptr_t>(text);
+    AcquireSRWLockExclusive(&rewriteLock);
+    for (const auto& u : unknown)
+        if (unknownActions.insert(u).second) {
+            char line[callChars];
+            sprintf_s(line, ">> prompt action not in the VR table: %.80s", u.c_str());
+            AcquireSRWLockExclusive(&callLock);
+            keepLine(line);
+            ReleaseSRWLockExclusive(&callLock);
+        }
+    if (changed == seen) {
+        ReleaseSRWLockExclusive(&rewriteLock);
+        return text;
+    }
+    auto& slot = rewrittenTexts[key];
+    // The same pointer with other words (a table the game reloaded): a new entry; the old one stays
+    // alive in `retired` in case the game still holds it.
+    static std::vector<std::unique_ptr<Rewritten>> retired;
+    if (slot && slot->from != seen) {
+        retired.push_back(std::move(slot));
+        slot.reset();
+    }
+    if (!slot) {
+        slot = std::make_unique<Rewritten>(Rewritten{seen, std::move(changed)});
+        textRewrites.fetch_add(1, std::memory_order_relaxed);
+    }
+    const char* out = slot->to.c_str();
+    ReleaseSRWLockExclusive(&rewriteLock);
+    return out;
+}
+
+namespace {
+std::atomic<bool> playing{};
+// The in-world prompts' texts, rewritten, kept for good by their words (the game's own string goes
+// on being its own: the call gets a copy of its arguments).
+std::unordered_map<std::string, std::unique_ptr<std::string>> rewrittenArgs;
+unsigned argTextsNoted{};
+} // namespace
+
+void game_prompts::setPlaying(bool on) {
+    playing.store(on, std::memory_order_relaxed);
+}
+
+bool game_prompts::rewriteArgs(const char*, const void* args, uint32_t count, void* out, uint32_t room) {
+    if (!rewriting.load(std::memory_order_relaxed) || !playing.load(std::memory_order_relaxed) || !args ||
+        !out || !count || count > room)
+        return false;
+    const auto* in = static_cast<const GfxValue*>(args);
+    auto* copy = static_cast<GfxValue*>(out);
+    bool changedAny = false;
+    for (uint32_t i = 0; i < count; ++i) {
+        GfxValue v;
+        if (!readValue(in + i, v))
+            return false;
+        copy[i] = v;
+        if ((v.type & 0x8f) != 6)
+            continue;
+        uintptr_t p = v.data;
+        if ((v.type & 0x40) && !read(p, &p, sizeof(p)))
+            continue;
+        if (p < 0x10000)
+            continue;
+        char seen[lineChars];
+        const size_t length = copyText(reinterpret_cast<const char*>(p), seen, sizeof(seen));
+        if (!length || length + 1 >= sizeof(seen) ||
+            (!std::strstr(seen, "[BTN_") && !std::strstr(seen, "[ACTION_") && !std::strstr(seen, "[DPAD_")))
+            continue;
+        const prompt_actions::Controls controls{controlTriggerWebs.load(std::memory_order_relaxed),
+                                                controlVenomTrigger.load(std::memory_order_relaxed)};
+        std::vector<std::string> unknown;
+        std::string changed = prompt_actions::rewrite(seen, controls, &unknown);
+        AcquireSRWLockExclusive(&rewriteLock);
+        // Each prompt text met, the first 60, for the session report: what the game's in-world prompts say.
+        const bool fresh = !rewrittenArgs.contains(seen);
+        if (fresh && argTextsNoted < 60) {
+            ++argTextsNoted;
+            char line[callChars];
+            sprintf_s(line, ">> prompt text: %.70s -> %.70s", seen, changed.c_str());
+            AcquireSRWLockExclusive(&callLock);
+            keepLine(line);
+            ReleaseSRWLockExclusive(&callLock);
+        }
+        for (const auto& u : unknown)
+            if (unknownActions.insert(u).second) {
+                char line[callChars];
+                sprintf_s(line, ">> prompt action not in the VR table: %.80s", u.c_str());
+                AcquireSRWLockExclusive(&callLock);
+                keepLine(line);
+                ReleaseSRWLockExclusive(&callLock);
+            }
+        auto& slot = rewrittenArgs[seen];
+        if (!slot)
+            slot = std::make_unique<std::string>(std::move(changed));
+        const bool same = *slot == seen;
+        const char* text = slot->c_str();
+        ReleaseSRWLockExclusive(&rewriteLock);
+        if (same)
+            continue;
+        // A plain (unmanaged) string of ours in the copy: the game's managed one stays the caller's.
+        copy[i].type = v.type & ~0x40u;
+        copy[i].objects = nullptr;
+        copy[i].data = reinterpret_cast<uintptr_t>(text);
+        copy[i].extra = 0;
+        textRewrites.fetch_add(1, std::memory_order_relaxed);
+        changedAny = true;
+    }
+    return changedAny;
 }
 
 void game_prompts::note(const char* text) {

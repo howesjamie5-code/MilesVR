@@ -305,11 +305,14 @@ struct KnockoutView {
 };
 // pixelAngle as for appendWeb.
 void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle);
-// Miles's venom round the right fist (venom_punch.hpp): gold bioelectric
-// bolts crackling out of it in a soft glow, fewer and fainter while it
-// charges, all of them once charged. `glow` 0..1; `hand` the right hand's
-// pose as the glove's (fingers along -z); `seconds` any running clock, for
-// the crackle. pixelAngle as for appendWeb.
+// Miles's venom round the venom fist (venom_punch.hpp): orange bioelectric
+// bolts crackling out of the front of the fist in a soft orange glow, with hot
+// sparks flicking round it, fewer and fainter while it charges, all of them
+// once charged. `glow` 0..1; `hand` that hand's pose as the glove's (fingers
+// along -z, the back of the hand +y); `seconds` any running clock, for the
+// crackle and the sparks. pixelAngle as for appendWeb.
+// Where on the glove it sits: the front of the closed fist (MilesVR 0.1.78).
+constexpr Vec3 venomFistOffset{0, -.02f, -.095f};
 void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewer, float pixelAngle, float seconds);
 // A venom punch landed: a flash, and bolts thrown out from where it hit.
 struct VenomBurstView {

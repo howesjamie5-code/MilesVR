@@ -1047,8 +1047,10 @@ void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewe
     glow = std::isfinite(glow) ? std::clamp(glow, 0.f, 1.f) : 0.f;
     if (glow <= 0 || !finite(hand.position) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0)
         return;
-    // The fist: a little ahead of the glove's middle, toward the knuckles.
-    const Vec3 c = hand.position + hand.orientation.rotate({0, -.01f, -.06f});
+    // MilesVR 0.1.78 (the user: "more orange and sparkly, like the endgame one, and so that it appears on your
+    // fist, not on top of your hand"): on the front of the closed fist - out past the knuckles and toward the
+    // palm, where the curled fingers are - not 6 cm along the back of the hand, as until now.
+    const Vec3 c = hand.position + hand.orientation.rotate(venomFistOffset);
     const float distance = length(viewer - c);
     if (!finite(c) || !(distance > .08f && distance < 5))
         return;
@@ -1060,16 +1062,32 @@ void appendVenomFist(std::vector<Vertex>& out, float glow, Pose hand, Vec3 viewe
     const float t = std::isfinite(seconds) ? seconds : 0.f;
     // Charged, it breathes.
     const float breath = glow >= 1 ? .85f + .15f * std::sin(t * 9.f) : glow;
-    softArc(out, c, right, up, 0, .055f * (.6f + .4f * glow), 0, 2 * pi, venomGold, .22f * breath, .05f, 32);
-    softArc(out, c, right, up, 0, .028f, 0, 2 * pi, venomCore, .28f * breath, .02f, 24);
-    // The crackle: new bolts every 1/30 s, more of them as it charges.
+    // A deep orange glow round the fist, a hotter orange heart in it, a small white-hot core.
+    softArc(out, c, right, up, 0, .065f * (.6f + .4f * glow), 0, 2 * pi, venomOrange, .42f * breath, .055f, 32);
+    softArc(out, c, right, up, 0, .035f, 0, 2 * pi, Vec3{1.f, .42f, .04f}, .3f * breath, .028f, 28);
+    softArc(out, c, right, up, 0, .014f, 0, 2 * pi, venomOrangeCore, .35f * breath, .012f, 20);
+    // The crackle: new orange bolts every 1/30 s, more of them as it charges.
     const int frame = static_cast<int>(std::floor(t * 30));
-    const int bolts = 2 + static_cast<int>(5 * glow);
+    const int bolts = 3 + static_cast<int>(6 * glow);
     for (int i = 0; i < bolts; ++i) {
         const float seed = static_cast<float>(frame * 7 + i) * .618f;
         const Vec3 way = sphere(hash(seed, 1), hash(seed, 2));
-        const float reach = (.04f + .07f * hash(seed, 3)) * (.5f + .5f * glow);
-        venomBolt(out, c + way * .03f, way, reach, view, px, breath * (.6f + .4f * hash(seed, 4)), seed, 3);
+        const float reach = (.035f + .065f * hash(seed, 3)) * (.5f + .5f * glow);
+        venomBolt(out, c + way * .025f, way, reach, view, px, breath * (.6f + .4f * hash(seed, 4)), seed, 3,
+                  venomOrange, venomOrangeCore);
+    }
+    // The sparkle: hot sparks flicking round the fist, each a pinprick with a soft halo, gone in a frame or two.
+    const int sparks = 8 + static_cast<int>(18 * glow);
+    for (int i = 0; i < sparks; ++i) {
+        const float seed = static_cast<float>(frame * 13 + i) * .4142f + 91.f;
+        const float flicker = hash(seed, 5);
+        if (flicker < .25f)
+            continue;
+        const Vec3 at = c + sphere(hash(seed, 6), hash(seed, 7)) * ((.025f + .07f * hash(seed, 8)) * (.6f + .4f * glow));
+        const float r = std::max(1.2f * px, .0018f + .0025f * hash(seed, 9));
+        softArc(out, at, right, up, 0, r * 2.2f, 0, 2 * pi, venomOrange, .5f * breath * flicker, r * 1.6f, 10);
+        softArc(out, at, right, up, 0, r, 0, 2 * pi, flicker > .7f ? Vec3{1, .95f, .8f} : venomOrangeCore,
+                breath * flicker, r * .35f, 8);
     }
 }
 float venomBurstSeconds(const VenomBurstView& burst) {

@@ -139,12 +139,28 @@ struct Venom {
     // Venom Blast (both grips with three full bars; venom_punch::BothGrips).
     uint32_t megaRequest{};
     // Out (version 5): Venom Jumps gone off, the enemies the latest threw up,
-    // and where. dashes and dashesMissed: the Venom Dash's, scrapped in
-    // 0.1.36 (the user: "it didnt really work well"); always 0.
-    uint64_t jumps{}, dashes{};
-    uint32_t jumpHits{}, dashesMissed{};
+    // and where. dashesMissed: the Venom Dash's, scrapped in 0.1.36 (the user:
+    // "it didnt really work well"); always 0. bossBlows (MilesVR 0.1.78, in
+    // what was the dashes count): plain blows that landed on a boss and were NOT
+    // dealt by the punch module - the headset taps the game's own attack (X) for
+    // each, so the game hits him with its real attack and he plays his reaction
+    // (the user: Rhino takes the damage "but when i hit him it seems to have no
+    // effect animation wise"). Its upper 32 bits count those that landed while the
+    // boss was stunned: the headset taps the game's Y then instead - its web
+    // strike finisher, the short scene of webbing him up and kicking him (the
+    // user: "once I hit him in VR it triggers that short scene").
+    uint64_t jumps{}, bossBlows{};
+    // bossVenom (0.1.78, in what was dashesMissed): venom blows on a boss sent as the game's own Venom
+    // Punch - tried, and taken back the same day (the user: it "delays the attack"): a venom blow on a
+    // boss is the module's own again, always 0 here. Smash, Jump and Mega blasts pass bosses by (the user:
+    // "make sure damage cant be done to bosses while they would normally block").
+    uint32_t jumpHits{}, bossVenom{};
     Vec3 jumpPoint{};
-    uint32_t jumpSpare{};
+    // In (MilesVR 0.1.78, in what was a spare word): what the game does not allow yet (game_venom::unlocks,
+    // game_prompts::venomUnlocked) - lockedVenom: no venom at all, blows and dodges fill the meter not at
+    // all; lockedJump: no Venom Jump (a charged fist punched up does nothing); lockedSmash: no Venom Smash.
+    static constexpr uint32_t lockedVenom = 1, lockedJump = 2, lockedSmash = 4;
+    uint32_t locked{};
     // In (version 7): the player's dodges of an attack so far, and of them the
     // game's perfect dodges (it slowed time, and each is counted in dodges
     // too): each dodge fills the meter a little (venom_punch::dodgeGain), a

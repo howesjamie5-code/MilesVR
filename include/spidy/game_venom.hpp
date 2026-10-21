@@ -49,4 +49,26 @@ Meter sample(uintptr_t base, uintptr_t record);
 // writes check it): the venom let go. False when nothing was written.
 bool empty(const Meter&);
 void reset();
+
+// MilesVR 0.1.78: which venom moves the game itself would allow now (the user: "all the venom moves get
+// enabled at their specific story moments"), read as its own checks do, after sample() this frame:
+// - the hero's venom object (a component of his, class 3e15b48) points (+0x68) at his abilities object,
+//   whose "disabled" query (slot 0x70, 2398000) is a bit's mask against +0xe8, 16 timed masks at
+//   +0x48 + 8k while their float at +0x4c + 8k is above zero, and 32 signed counts at +0xc8 - how a
+//   mission shuts venom off for a while (bits: venomPowersBit, venomJumpBit, venomSmashBit);
+// - Venom Jump's own story unlock (CanVenomJump b67a10): the game flag 0x46e2a4c5 (ed2db0 on the global
+//   at 7a5c3c0: a hash table at +0x1180), off on an early save and on once Miles learns it.
+// - Venom Smash's Skills-tab unlock (the user: only "when it requires you to go into the skills tab and
+//   manually unlock Venom Smash" at the end of Mission 1): the game flag 0x961f104a, the one flag that
+//   flipped as he unlocked it there (October 20). The game's own CanVenomSmash (b67bb0) does not ask it.
+// The Mega Venom Blast needs three full bars, which the story gives one at a time (one bar on an early save).
+constexpr uint32_t venomPowersBit = 0x08000000, venomJumpBit = 0x10000000, venomSmashBit = 0x20000000;
+struct Unlocks {
+    bool known{};       // the abilities object was found and read
+    uint32_t disabled{}; // its disabled bits now
+    int jump = -1;       // Venom Jump's story flag: -1 not found, 0 off, 1 on
+    int smash = -1;      // Venom Smash's Skills-tab flag, the same way
+    int dash = -1;       // Venom Dash's (CanVenomDash b67ae0: flag 0xaeb527e3), given in "Underground Undercover"
+};
+Unlocks unlocks(uintptr_t base);
 } // namespace spidy::game_venom

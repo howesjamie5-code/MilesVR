@@ -131,6 +131,79 @@ void learn() {
 }
 } // namespace
 
+namespace {
+constexpr uintptr_t venomObjectVtable = 0x3e15b48, flagGlobal = 0x7a5c3c0, flagTable = 0x1180;
+constexpr uint32_t venomJumpFlag = 0x46e2a4c5, venomSmashFlag = 0x961f104a, venomDashFlag = 0xaeb527e3;
+// The component a registry handle names (0: none, or one since remade).
+uintptr_t resolveHandle(uintptr_t base, uint32_t handle) {
+    uintptr_t table{};
+    Entry e{};
+    if (!handle || !read(base + registryTable, &table, 8) || !table ||
+        !read(table + (handle & 0xfffff) * 16ull, &e, sizeof(e)) || e.generation != handle >> 20)
+        return 0;
+    return e.address;
+}
+// A game flag by its hash (ed2db0 -> 20dc290, ed2ab0): -1 not in the table or not a plain flag.
+int gameFlag(uintptr_t base, uint32_t hash) {
+    const uintptr_t t = base + flagGlobal + flagTable;
+    uintptr_t keys{}, values{};
+    uint32_t capacity{}, stride{};
+    if (!read(t, &keys, 8) || !read(t + 8, &values, 8) || !read(t + 0x14, &capacity, 4) ||
+        !read(t + 0x1c, &stride, 4) || !keys || !values || !capacity || capacity > 0x10000 || stride < 16)
+        return -1;
+    const uint64_t x = static_cast<uint64_t>(hash) * 0x9e3779b1ull;
+    uint32_t slot = static_cast<uint32_t>((x >> 32) ^ (x & 0xffffffff)) % capacity;
+    for (uint32_t n = 0; n < capacity; ++n, slot = (slot + 1) % capacity) {
+        uint32_t key{};
+        if (!read(keys + slot * 4ull, &key, 4) || !key)
+            return -1;
+        if (key != hash)
+            continue;
+        uintptr_t definition{}, state{};
+        uint8_t plain{}, on{};
+        const uintptr_t entry = values + static_cast<uintptr_t>(slot) * stride;
+        if (!read(entry, &definition, 8) || !read(entry + 8, &state, 8) || !read(definition + 0x54, &plain, 1) ||
+            !plain || !read(state + 4, &on, 1))
+            return -1;
+        return on ? 1 : 0;
+    }
+    return -1;
+}
+} // namespace
+
+spidy::game_venom::Unlocks spidy::game_venom::unlocks(uintptr_t base) {
+    Unlocks out;
+    out.jump = gameFlag(base, venomJumpFlag);
+    out.smash = gameFlag(base, venomSmashFlag);
+    out.dash = gameFlag(base, venomDashFlag);
+    for (const auto& c : components) {
+        if (c.vtable != venomObjectVtable)
+            continue;
+        uint32_t handle{};
+        unsigned char raw[0xf0];
+        const uintptr_t abilities = read(c.address + 0x68, &handle, 4) ? resolveHandle(base, handle) : 0;
+        if (!abilities || !read(abilities, raw, sizeof(raw)))
+            break;
+        uint32_t mask{};
+        std::memcpy(&mask, raw + 0xe8, 4);
+        for (int k = 0; k < 16; ++k) {
+            uint32_t m{};
+            float left{};
+            std::memcpy(&m, raw + 0x48 + 8 * k, 4);
+            std::memcpy(&left, raw + 0x4c + 8 * k, 4);
+            if (left > 0)
+                mask |= m;
+        }
+        for (int i = 0; i < 32; ++i)
+            if (static_cast<signed char>(raw[0xc8 + i]) > 0)
+                mask |= 1u << i;
+        out.known = true;
+        out.disabled = mask;
+        break;
+    }
+    return out;
+}
+
 spidy::game_venom::Meter spidy::game_venom::sample(uintptr_t base, uintptr_t record) {
     Meter out;
     if (!base || !record) {

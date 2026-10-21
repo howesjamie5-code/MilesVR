@@ -1,5 +1,22 @@
-MilesVR 0.1.77 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.78 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.77: TUTORIAL VIDEOS, NO MORE MENU FLICKER, HAND FIX
+--------------------------------------------------
+Tutorial videos: the launcher's Controls tab has an orange WATCH TUTORIAL
+button on Venom Punch, Venom Jump, Venom Smash and Mega Venom Blast. It
+plays a short video of the power (no sound) right in the launcher.
+Menus: the button prompts no longer flicker between keyboard and
+controller. Pointing a controller at the menu screen does nothing until
+you pull its trigger at it - then it is the mouse (trigger clicks, stick
+scrolls). Any other button gives the menus back to the controller.
+What to try: open WATCH TUTORIAL on each power. In the pause menu, raise
+both controllers to the headset - prompts should stay on the controller
+and B should exit. Point and pull the trigger to click an option.
+Hands: the palm keeps the game's own natural curve under your finger
+poses. Fixes the bulge at the ring finger's base on story-damaged suits
+(Great Responsibility after Roxxon Plaza). Check your hands open, in a
+fist and shooting a web, in that suit and a couple of others.
 
 What changed since 0.1.76: DODGES GIVE VENOM
 --------------------------------------------------

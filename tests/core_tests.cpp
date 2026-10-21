@@ -40,6 +40,7 @@
 #include "spidy/xr_layers.hpp"
 #include "spidy/offer_pointing.hpp"
 #include "spidy/menu_pointer.hpp"
+#include "spidy/prompt_actions.hpp"
 #include "spidy/venom_punch.hpp"
 #include <algorithm>
 #include <cstring>
@@ -513,6 +514,29 @@ int main() {
             std::cerr << "FAIL " << name << ": " << e.what() << '\n';
         }
     };
+    test("prompt actions: the game's action names become the VR controls", [] {
+        using namespace spidy::prompt_actions;
+        const Controls grips{false, true}, triggers{true, false};
+        check(rewrite("[ACTION_WEB_YANK] (Hold) Throw", grips) == "RIGHT STICK UP (Hold) Throw", "throw");
+        check(rewrite("[ACTION_WEB_STRIKE] Open Door", grips) == "Y Open Door", "interact");
+        check(rewrite("Use Venom Dash by pressing [ACTION_VENOM] + [ACTION_WEB_STRIKE].", grips) ==
+                  "Use Venom Dash by pressing VENOM TRIGGER + PUNCH.",
+              "venom dash is one gesture");
+        check(rewrite("[ACTION_VENOM] + [ACTION_ATTACK]", triggers) == "HOLD VENOM GRIP + PUNCH", "venom punch");
+        check(rewrite("[ACTION_VENOM] + [ACTION_MELEE]", grips) == "HOLD VENOM TRIGGER + PUNCH", "venom punch (melee)");
+        check(rewrite("[BTN_LB] + [BTN_RB] (Hold) Throw", grips) == "RIGHT STICK UP (Hold) Throw", "button throw");
+        check(rewrite("[BTN_Y] Enter", grips) == "Y Enter", "button interact");
+        check(rewrite("<span class='x'>hold</span> [BTN_B] [i]", grips) == "<span class='x'>hold</span> B [i]",
+              "other brackets stay");
+        check(rewrite("Press [ACTION_DODGE] and back on the [ACTION_LS]", grips) == "Press B and back on the LEFT STICK",
+              "dodge and stick");
+        std::vector<std::string> unknown;
+        check(rewrite("[ACTION_SOMETHING_NEW] Do it", grips, &unknown) == "[ACTION_SOMETHING_NEW] Do it" &&
+                  unknown.size() == 1 && unknown[0] == "[ACTION_SOMETHING_NEW]",
+              "an unknown action stays and is named");
+        check(rewrite("No actions here", grips) == "No actions here", "plain text unchanged");
+        check(rewrite("Broken [ACTION_", grips, &unknown) == "Broken [ACTION_", "an unclosed name stays");
+    });
     test("menu pointer meets the game screen where the hand points", [] {
         using namespace spidy::menu_pointer;
         const Screen s{screenAhead({{0, 0, 0}, {0, 0, 0, 1}}, 2.5f), 3.2f, 16.f / 9};
@@ -545,10 +569,11 @@ int main() {
         std::array<Hand, 2> hands{};
         hands[1] = {true, {{0, 0, 0}, {0, 0, 0, 1}}, 0, 0};
         auto o = p.update(true, s, hands, .01f);
-        check(o.pointing && o.hand == 1 && !o.press && o.tookTrigger[1] && !o.tookTrigger[0], "right hand points");
+        check(!o.pointing && !o.tookTrigger[1] && !p.awake(), "pointing alone leaves it asleep");
         hands[1].trigger = .7f;
         o = p.update(true, s, hands, .01f);
-        check(o.press && p.held(), "the trigger presses");
+        check(o.pointing && o.hand == 1 && o.press && p.held() && p.awake() && o.tookTrigger[1] && !o.tookTrigger[0],
+              "the trigger wakes it and presses");
         hands[1].trigger = .5f;
         o = p.update(true, s, hands, .01f);
         check(!o.press && !o.release && p.held(), "half way still holds");
@@ -559,8 +584,16 @@ int main() {
         p.update(true, s, hands, .01f);
         hands[1].ray.position = {5, 0, 0};
         o = p.update(true, s, hands, .01f);
-        check(!o.pointing && o.release && !p.held(), "leaving the screen lets go of a held button");
+        check(!o.pointing && o.release && !p.held() && !p.awake(), "leaving the screen lets go and sleeps");
         hands[1] = {true, {{0, 0, 0}, {0, 0, 0, 1}}, 0, .8f};
+        o = p.update(true, s, hands, .05f);
+        check(!o.pointing && !o.tookStick[1] && o.wheel == 0, "asleep, the stick stays the controller's");
+        hands[1].stickY = 0;
+        hands[1].trigger = .9f;
+        p.update(true, s, hands, .01f);
+        hands[1].trigger = 0;
+        p.update(true, s, hands, .01f);
+        hands[1].stickY = .8f;
         o = p.update(true, s, hands, .05f);
         check(o.wheel == 1, "stick up scrolls a notch at once");
         o = p.update(true, s, hands, .05f);
@@ -582,6 +615,40 @@ int main() {
         check(o.hand == 0 && o.press && o.tookTrigger[0] && !o.tookTrigger[1], "the left trigger takes it");
         o = p.update(false, s, hands, .01f);
         check(!o.pointing && o.release, "switched off, it lets go");
+    });
+    test("menu pointer sleeps on the controller's other buttons and ignores a shaking hand", [] {
+        using namespace spidy::menu_pointer;
+        const Screen s{screenAhead({{0, 0, 0}, {0, 0, 0, 1}}, 2.5f), 3.2f, 16.f / 9};
+        Pointer p;
+        std::array<Hand, 2> hands{};
+        hands[1] = {true, {{0, 0, 0}, {0, 0, 0, 1}}, .9f, 0};
+        auto o = p.update(true, s, hands, .01f, true);
+        check(!p.awake() && !o.pointing, "a trigger pulled with another button does not wake it");
+        hands[1].trigger = 0;
+        p.update(true, s, hands, .01f);
+        hands[1].trigger = .9f;
+        o = p.update(true, s, hands, .01f);
+        check(p.awake() && o.press, "woken");
+        hands[1].trigger = 0;
+        o = p.update(true, s, hands, .01f);
+        check(o.release, "let go");
+        const auto first = o.at;
+        // 2 mm of shake at 2.5 m: well under `steady` of a 3.2 m screen.
+        hands[1].ray.position = {.002f, .001f, 0};
+        o = p.update(true, s, hands, .01f);
+        check(o.pointing && o.at == first, "a small shake leaves the cursor where it was");
+        hands[1].ray.position = {.1f, 0, 0};
+        o = p.update(true, s, hands, .01f);
+        check(o.at[0] > first[0] + .02f, "a real move moves it");
+        o = p.update(true, s, hands, .01f, true);
+        check(!o.pointing && !p.awake() && !o.tookTrigger[1], "B (or any other control) puts it to sleep");
+        hands[1].trigger = .9f;
+        p.update(true, s, hands, .01f);
+        hands[1].trigger = 0;
+        p.update(true, s, hands, .01f);
+        hands[0] = {true, {{-.5f, 0, 0}, {0, 0, 0, 1}}, 0, -.9f};
+        o = p.update(true, s, hands, .01f);
+        check(!p.awake() && !o.pointing, "the other hand's stick (menu navigation) puts it to sleep");
     });
     test("venom punch charges from the right grip only on a full meter", [] {
         using namespace spidy::venom_punch;
@@ -3197,7 +3264,11 @@ int main() {
         step(E{0,-1});
         check(ui.app()==1,"down did not pick MAP");
         step(E{0,1});step(E{0,1});
-        check(ui.app()==2,"up from MUSIC did not wrap to GEAR");
+        check(ui.app()==phoneFnsmApp,"up from MUSIC did not wrap to FNSM APP");
+        check(step(E{0,0,true})==PhoneAction::fnsm&&ui.screen()==PhoneScreen::home,
+              "A on FNSM APP did not ask for the game's app");
+        step(E{0,1});
+        check(ui.app()==2,"up from FNSM APP did not pick GEAR");
         step(E{0,0,true});
         check(ui.screen()==PhoneScreen::gear,"A did not open GEAR");
         step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);

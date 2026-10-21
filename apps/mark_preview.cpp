@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
         const auto fist = [&](float glow, float seconds) {
             std::vector<Vertex> v;
             const Vec3 knuckles = normalized(p) * .5f;
-            appendVenomFist(v, glow, {knuckles - Vec3{0, -.01f, -.06f}, {}}, viewer, pixelAngle, seconds);
+            appendVenomFist(v, glow, {knuckles - venomFistOffset, {}}, viewer, pixelAngle, seconds);
             return v;
         };
         const auto venomBurst = [&](float age) {

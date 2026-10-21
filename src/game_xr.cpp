@@ -882,6 +882,33 @@ DWORD WINAPI run(void*) {
         PhoneView phoneShown;
         bool phoneBlows{};
         float menuTap{};
+        // MilesVR 0.1.78: the phone's FNSM APP holds the game's View this long, which on an Xbox controller
+        // opens the game's FNSM app (a press opens the map); and the game's FNSM reminders seen so far, each
+        // of which the headset answers with the phone.
+        float fnsmHold{};
+        // MilesVR 0.1.78: a blow on a boss taps the game's X this long (game_punch::Venom::bossBlows).
+        float bossTap{}, bossVenomTap{}, bossStrikeTap{};
+        bool throwingUp{};
+        // The game's venom punch tutorial (October 21, Mission 1): venom given (a meter) and the game
+        // frozen on its prompt, which VR shows as the game screen.
+        // The venom gesture there is the game's LB + X (screenVenomTap seconds, X for the last .2 s).
+        bool venomTutorial{}, screenVenomSeen{}, screenVenomSpent{}, screenVenomFast{};
+        float venomMeterRaw{};
+        uint32_t screenVenomNotes{};
+        float screenVenomTap{};
+        Vec3 screenVenomBefore{}, screenVenomVelocity{};
+        uint32_t screenVenomPresses{};
+        uint64_t bossBlowsBefore{};
+        uint32_t bossVenomBefore{};
+        bool venomStoryBefore = true;
+        // What the game does not allow of venom now (game_punch::Venom::locked).
+        uint32_t venomLocks{}, venomLocksBefore = ~0u;
+        // The game's Venom Dash flag as last read (-1 none yet), and how long the venom gesture stays its
+        // Venom Dash after the game gave it.
+        static constexpr float venomDashSeconds = 180;
+        int venomDashBefore = -1;
+        float venomDashLeft{};
+        uint64_t fnsmRemindersSeen{};
         // The game played on its screen (VIEW: GAME SCREEN): Back and the
         // D-pad, which the VR controllers lack, besides the Xbox controller's.
         game_pad::ScreenControls screenControls;
@@ -1015,6 +1042,11 @@ DWORD WINAPI run(void*) {
         float shownAspect = 16.f / 9;
         menu_pointer::Pointer menuPointer;
         bool pointerNoted{}, clickNoted{};
+        // The controls the menu pointer does not use, last frame: one newly pressed puts it to sleep.
+        uint32_t pointerButtonsBefore{};
+        std::array<bool, 2> pointerGripBefore{}, pointerSideBefore{}, pointerClickBefore{};
+        bool pointerAwake{};
+        uint32_t pointerWakes{};
         const auto dimensions = runtime.eyeDimensions();
         // Aim markers are drawn so many pixels wide: above the headset's own
         // resolution they keep the size they have at it.
@@ -1435,6 +1467,12 @@ DWORD WINAPI run(void*) {
                         case PhoneAction::autoplay:
                             phoneMusic.setAutoplay(!phoneMusic.status().autoplay);
                             break;
+                        case PhoneAction::fnsm:
+                            fnsmHold = 1.f;
+                            runtime.haptic(1, .3f);
+                            message(3, 0, "FNSM app - the game's own opens (its View held)");
+                            game_prompts::note("phone: FNSM APP -> the game's View held 1 s");
+                            break;
                         case PhoneAction::none:
                         case PhoneAction::close:
                             break;
@@ -1444,6 +1482,14 @@ DWORD WINAPI run(void*) {
                         if (use.action == PhoneAction::close) {
                             runtime.haptic(1, .15f);
                             message(3, 0, "Phone away - each control is the game's again once let go of");
+                        }
+                        // The game asks for its FNSM app: in VR that is the phone's.
+                        if (const uint64_t reminders = game_prompts::fnsmReminders(); reminders != fnsmRemindersSeen) {
+                            fnsmRemindersSeen = reminders;
+                            runtime.haptic(0, .25f);
+                            runtime.haptic(1, .25f);
+                            message(3, 0, "FNSM - pull out your phone (back pocket) and open FNSM APP");
+                            game_prompts::note("the game's FNSM reminder -> the headset asks for the phone");
                         }
                     }
                     uint64_t changes{};
@@ -1741,11 +1787,61 @@ DWORD WINAPI run(void*) {
                     headSeen = headSeen || validTrackedPose(frame.head);
                     // Miles's venom meter, for the venom punch (game_venom.hpp).
                     venomMeter = game_venom::sample(config.base, player.record);
+                    // MilesVR 0.1.78: no venom power before the story gives Miles his venom
+                    // (game_prompts::venomUnlocked, the game's own answer to its HUD): the
+                    // meter reads as empty here, and the punch module fills none.
+                    // And each move as the game's own checks allow it (game_venom::unlocks): a
+                    // mission's shut-off of venom, and Venom Jump's own story unlock.
+                    const auto venomGame = game_venom::unlocks(config.base);
+                    const bool venomStory = game_prompts::venomUnlocked() == 1 &&
+                                            !(venomGame.disabled & game_venom::venomPowersBit);
+                    venomLocks = (venomStory ? 0u : game_punch::Venom::lockedVenom) |
+                                 (venomGame.jump == 0 || (venomGame.disabled & game_venom::venomJumpBit)
+                                      ? game_punch::Venom::lockedJump
+                                      : 0u) |
+                                 (venomGame.smash == 0 || (venomGame.disabled & game_venom::venomSmashBit)
+                                      ? game_punch::Venom::lockedSmash
+                                      : 0u);
+                    // MilesVR 0.1.78 (the user: when "Underground Undercover" asks for Venom Dash, "just
+                    // use the Venom Punch action in VR to override that story moment"): the game's
+                    // Venom Dash flag turning on while VR plays makes the venom gesture the game's
+                    // Venom Dash (its LB + Y, PlayStation's L1 + Triangle) for venomDashSeconds, in a
+                    // fight or out of one.
+                    if (venomGame.dash >= 0) {
+                        if (venomDashBefore == 0 && venomGame.dash == 1) {
+                            venomDashLeft = venomDashSeconds;
+                            runtime.haptic(venomSide, .6f, .15f);
+                            message(3, 0, "Venom Dash - hold the venom button and punch toward him: MilesVR does the "
+                                          "game's Venom Dash");
+                            game_prompts::note("the game gave Venom Dash: the venom gesture is its LB + Y for 3 min");
+                        }
+                        venomDashBefore = venomGame.dash;
+                    }
+                    if (venomDashLeft > 0)
+                        venomDashLeft -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                    if (venomLocks != venomLocksBefore) {
+                        char line[96];
+                        sprintf_s(line, "venom locks now %u (1 venom, 2 jump, 4 smash); jump flag %d, smash flag %d",
+                                  venomLocks, venomGame.jump, venomGame.smash);
+                        game_prompts::note(line);
+                        venomLocksBefore = venomLocks;
+                    }
+                    venomMeterRaw = venomMeter.value;
+                    venomTutorial = venomMeter.value > 0;
+                    if (!venomStory)
+                        venomMeter.value = std::min(venomMeter.value, 0.f);
+                    if (venomStory != venomStoryBefore) {
+                        venomStoryBefore = venomStory;
+                        game_prompts::note(venomStory ? "venom unlocked in the story: MilesVR's venom powers on"
+                                                      : "venom not unlocked in the story yet: MilesVR's venom off");
+                    }
                     game_venom_events::meter(venomMeter.value);
+                    game_prompts::setControls(values.triggerWebs, values.venomTrigger);
                     const auto mapping =
                         game_pad::mappingFor(viewing, headSeen, screen, padLayer.latched());
                     const bool inPlay =
                         mapping == game_pad::Mapping::gameplay || mapping == game_pad::Mapping::pad;
+                    game_prompts::setPlaying(mapping == game_pad::Mapping::gameplay);
                     origins.update(frame.buttons, inPlay);
                     // What the controllers themselves sent, beside what reached the
                     // game: a button missing from both was never pressed. The
@@ -1776,7 +1872,9 @@ DWORD WINAPI run(void*) {
                     // where the rest of this gets found - in a game of mine, not
                     // in a session of theirs.
                     game_prompts::setReading(false);
-                    game_prompts::setRewriting(false);
+                    // MilesVR 0.1.78: the game's texts name VR controls instead of its buttons
+                    // (prompt_actions.hpp; only texts holding the game's [ACTION_...] names).
+                    game_prompts::setRewriting(true);
                     (void)promptHelp;
                     // A change in the MILES VR tab takes effect at once.
                     if (game_menu::take(values)) {
@@ -2018,7 +2116,15 @@ DWORD WINAPI run(void*) {
                                               (venomGameHeld && venomButton > venom_punch::gripOff);
                             const bool calm = calmSeconds >= venom_punch::fightCalmSeconds;
                             prompt_buttons::Demand ask = venomPromptOn ? promptAsked : prompt_buttons::Demand{};
-                            if (!ask.any() && calm && immersive && !calibrationInput && !padLayer.latched()) {
+                            if (!ask.any() && venomDashLeft > 0 && immersive && !calibrationInput &&
+                                !padLayer.latched()) {
+                                ask.buttons = prompt_buttons::padLeftShoulder | prompt_buttons::padY;
+                                ask.hold = true;
+                            } else if (!ask.any() && (calm || !venomStory) && immersive && !calibrationInput &&
+                                       !padLayer.latched()) {
+                                // MilesVR 0.1.78: before the HUD calls venom unlocked, the gesture is the
+                                // game's own venom punch in a fight too - the game's venom punch tutorial
+                                // comes the moment it gives venom, before that call (October 21, Mission 1).
                                 ask.buttons = prompt_buttons::padLeftShoulder | prompt_buttons::padX;
                                 ask.hold = true;
                             }
@@ -2038,8 +2144,10 @@ DWORD WINAPI run(void*) {
                                 ++venomPromptPresses;
                                 runtime.haptic(venomSide, 1.f, .2f);
                                 message(3, 0, venomPromptOn ? "Venom - the game's venom move, as its prompt asks"
-                                                            : "Venom - the game's own venom punch (its LB + X), "
-                                                              "for as long as you hold the venom button");
+                                              : venomDashLeft > 0
+                                                  ? "Venom Dash - the game's own (its LB + Y)"
+                                                  : "Venom - the game's own venom punch (its LB + X), "
+                                                    "for as long as you hold the venom button");
                             }
                             // Sent while the web button is held: at least a tap's worth,
                             // at most venomGameMost; the hand shoots no web meanwhile.
@@ -2892,7 +3000,21 @@ DWORD WINAPI run(void*) {
                             exchange.megaRequest = venomMegaRequests;
                             exchange.dodges = venomDodges;
                             exchange.perfectDodges = venomPerfectDodges;
+                            exchange.locked = venomLocks;
                             if (!venomCall(&exchange)) {
+                                if ((exchange.bossBlows >> 32) > (bossBlowsBefore >> 32)) {
+                                    bossStrikeTap = .15f;
+                                    game_prompts::note("a blow on a stunned boss -> the game's Y (its finisher)");
+                                } else if ((exchange.bossBlows & 0xffffffffull) > (bossBlowsBefore & 0xffffffffull)) {
+                                    bossTap = .12f;
+                                    game_prompts::note("a blow on a boss -> the game's X");
+                                }
+                                bossBlowsBefore = exchange.bossBlows;
+                                if (exchange.bossVenom > bossVenomBefore) {
+                                    bossVenomTap = .3f; // LB alone first, X with it for the last .2 s
+                                    game_prompts::note("a venom blow on a boss -> the game's LB + X");
+                                }
+                                bossVenomBefore = exchange.bossVenom;
                                 venomBlowsBefore = std::min(venomBlowsBefore, exchange.blows);
                                 if (exchange.blows > venomBlowsBefore) {
                                     venomCharge.spent();
@@ -3013,7 +3135,20 @@ DWORD WINAPI run(void*) {
                         walk.heal = push == game_pad::StickPush::Way::down;
                         // Held on into the game's aim mode (its own time slowed), LT stays down alone,
                         // and letting go zips to the point its aim holds (ZipPress).
-                        const bool zipUp = (reaching || inFlight) && push == game_pad::StickPush::Way::up;
+                        // MilesVR 0.1.78 (the user: "when i wanna throw something i push up on right stick"):
+                        // on his feet with a world marker offering its interaction (a throwable's LB + RB), the
+                        // stick held up is the game's LB + RB held - its "(Hold) Throw" - not the zip.
+                        // Begun, it holds while the stick stays up: the game turns the marker off and lifts
+                        // the object as its web catches it, and a let-go there dropped the throw at once.
+                        const bool stickUp = push == game_pad::StickPush::Way::up;
+                        const bool throwUp = stickUp && sticking &&
+                                             (throwingUp || (reaching && !onWall && swingState.grounded &&
+                                                             game_prompts::interactOffered()));
+                        if (throwUp && !throwingUp)
+                            game_prompts::note("right stick up at a marker -> the game's LB + RB (throw)");
+                        throwingUp = throwUp;
+                        walk.pull = walk.pull || throwUp;
+                        const bool zipUp = (reaching || inFlight) && !throwUp && push == game_pad::StickPush::Way::up;
                         const auto gameTime = game_time::telemetry();
                         const bool slow = gameTime.installed && gameTime.own < game_pad::ZipPress::slowBelow;
                         const auto zipKeys = zipPress.update(frame.seconds, zipUp, sticking, slow);
@@ -3135,9 +3270,29 @@ DWORD WINAPI run(void*) {
                                 menuHands[i] = {frame.hands[i].valid && validTrackedPose(frame.hands[i].grip),
                                                webShooter(frame.hands[i].grip, i), frame.hands[i].trigger,
                                                frame.hands[i].stickY};
+                            // A face button, a grip, a stick pushed sideways or clicked: the player is on
+                            // the controller, so the pointer sleeps and the game keeps its pad prompts.
+                            bool otherInput = (frame.buttons & ~pointerButtonsBefore) != 0;
+                            pointerButtonsBefore = frame.buttons;
+                            for (unsigned i = 0; i < 2; ++i) {
+                                const auto& h = frame.hands[i];
+                                const bool grip = h.squeeze > .8f, side = std::abs(h.stickX) > .55f;
+                                otherInput |= (grip && !pointerGripBefore[i]) || (side && !pointerSideBefore[i]) ||
+                                              (h.stickClick && !pointerClickBefore[i]);
+                                pointerGripBefore[i] = grip;
+                                pointerSideBefore[i] = side;
+                                pointerClickBefore[i] = h.stickClick;
+                            }
                             const auto menuMouse = menuPointer.update(
                                 pointerOn, {screenPose, vr_settings::screenWidth(values.screenSize), shownAspect},
-                                menuHands, frame.seconds);
+                                menuHands, frame.seconds, otherInput);
+                            if (menuPointer.awake() != pointerAwake) {
+                                pointerAwake = menuPointer.awake();
+                                if (pointerAwake && ++pointerWakes <= 20)
+                                    game_prompts::note("menu pointer: woken by a trigger at the screen");
+                                else if (!pointerAwake && pointerWakes <= 20)
+                                    game_prompts::note("menu pointer: asleep - the controller has the menus");
+                            }
                             for (unsigned i = 0; i < 2; ++i) {
                                 if (menuMouse.tookTrigger[i])
                                     buttons.hands[i].trigger = 0;
@@ -3157,6 +3312,77 @@ DWORD WINAPI run(void*) {
                         if (menuTap > 0) {
                             pad.buttons |= game_pad::back;
                             menuTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        // A plain blow on a boss: the game's own attack (X), so he reacts to it.
+                        if (bossStrikeTap > 0) {
+                            pad.buttons |= game_pad::y;
+                            bossStrikeTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        if (bossTap > 0) {
+                            pad.buttons |= game_pad::x;
+                            bossTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        // A venom blow on a boss: the game's own Venom Punch (LB held, X), so the game
+                        // decides whether it lands.
+                        if (bossVenomTap > 0) {
+                            pad.buttons |= game_pad::leftShoulder;
+                            if (bossVenomTap < .2f)
+                                pad.buttons |= game_pad::x;
+                            bossVenomTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        // The venom punch tutorial on the game screen: the venom button held and a fast
+                        // punch away from the body is the game's own venom punch (LB, then X with it).
+                        {
+                            const auto& hand = frame.hands[venomSide];
+                            const Vec3 rel = hand.grip.position - frame.head.position;
+                            const bool seen = hand.valid && finite(rel) && frame.seconds > 0;
+                            if (seen && screenVenomSeen)
+                                screenVenomVelocity =
+                                    screenVenomVelocity * .5f + (rel - screenVenomBefore) / frame.seconds * .5f;
+                            else
+                                screenVenomVelocity = {};
+                            screenVenomSeen = seen;
+                            screenVenomBefore = rel;
+                            // Either of the venom hand's buttons: a frozen prompt is no time to recall which.
+                            const float button = std::max(hand.trigger, hand.squeeze);
+                            const bool held = button > venom_punch::gripOn;
+                            if (!held)
+                                screenVenomSpent = false;
+                            const float speed = length(screenVenomVelocity);
+                            const float away = dot(normalized(screenVenomVelocity), normalized(rel));
+                            const bool punch = speed >= venom_punch::smashSpeed && away >= .5f;
+                            // What each fast fist on the game screen met (the first 30).
+                            const bool fast = mapping == game_pad::Mapping::menus && seen && speed >= 1.5f;
+                            if (fast && !screenVenomFast && screenVenomNotes < 30) {
+                                ++screenVenomNotes;
+                                char line[160];
+                                sprintf_s(line, "game screen fist: %.1f m/s, away %.2f, trigger %.2f, grip %.2f, "
+                                                "meter %.0f, venom story %d, tap %.2f",
+                                          speed, away, hand.trigger, hand.squeeze, venomMeterRaw,
+                                          game_prompts::venomUnlocked(), screenVenomTap);
+                                game_prompts::note(line);
+                            }
+                            screenVenomFast = fast;
+                            if (mapping == game_pad::Mapping::menus && venomTutorial && seen && held &&
+                                !screenVenomSpent && punch && screenVenomTap <= 0) {
+                                screenVenomSpent = true;
+                                screenVenomTap = .4f;
+                                ++screenVenomPresses;
+                                runtime.haptic(venomSide, 1.f, .2f);
+                                if (screenVenomPresses <= 20)
+                                    game_prompts::note("venom punch tutorial: the venom gesture -> the game's LB + X");
+                            }
+                            if (screenVenomTap > 0) {
+                                pad.buttons |= game_pad::leftShoulder;
+                                if (screenVenomTap < .2f)
+                                    pad.buttons |= game_pad::x;
+                                screenVenomTap -=
+                                    std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                            }
+                        }
+                        if (fnsmHold > 0) {
+                            pad.buttons |= game_pad::back;
+                            fnsmHold -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                         }
                         screenControls.apply(frame.seconds,
                                              flatScreen && motion.active && mapping == game_pad::Mapping::menus,
@@ -4183,9 +4409,10 @@ DWORD WINAPI run(void*) {
                                   "menu button for its Back (the map), hold the left stick's click and push the "
                                   "right stick for its D-pad - pause, SWITCH TO VR goes back to VR"
                             : drawn == Presentation::gameScreen
-                                ? "Game screen (menus, loading, cutscenes): point a hand at it for the mouse - "
-                                  "its trigger clicks, its stick scrolls - and the other controls work as an "
-                                  "Xbox controller; VR settings are in the launcher - VR resumes with gameplay"
+                                ? "Game screen (menus, loading, cutscenes): the controllers work as an Xbox controller; "
+                                  "for the mouse point a hand at it and pull its trigger (it clicks, its stick "
+                                  "scrolls; any button gives the menus back to the controller) - VR settings are "
+                                  "in the launcher - VR resumes with gameplay"
                             : drawn == Presentation::stereoScreen
                                 ? "Game screen in 3D (a cutscene or another scene the game plays): the "
                                   "controllers work as an Xbox controller - Settings > MILES VR > GAME SCREEN 3D "
@@ -4196,7 +4423,7 @@ DWORD WINAPI run(void*) {
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts, X: game "
                                   "menu (hold: gadget wheel), menu or both sticks held: pause, left stick "
                                   "click: slow time, trigger at temple: scan (left: camo); right stick: LB+RB "
-                                  "(venom full: let go), down: heal, up: zip");
+                                  "(venom full: let go), down: heal, up: zip (at a throwable: throw)");
                 }
             }
             {

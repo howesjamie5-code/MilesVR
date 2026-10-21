@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Spidy VERSION 0.1.77 LANGUAGES C CXX)
+project(Spidy VERSION 0.1.78 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -189,7 +189,7 @@ if(SPIDY_BUILD_LAUNCHER)
     message(FATAL_ERROR "Run tools/bootstrap.ps1 to fetch the pinned Dear ImGui")
   endif()
   add_executable(spidy_launcher WIN32 apps/launcher/main.cpp apps/launcher/ui.cpp apps/launcher/system.cpp
-                 apps/launcher/update.cpp apps/launcher/launcher.rc apps/launcher/launcher.manifest
+                 apps/launcher/update.cpp apps/launcher/video.cpp apps/launcher/launcher.rc apps/launcher/launcher.manifest
                  ${SPIDY_IMGUI}/imgui.cpp ${SPIDY_IMGUI}/imgui_draw.cpp ${SPIDY_IMGUI}/imgui_tables.cpp
                  ${SPIDY_IMGUI}/imgui_widgets.cpp ${SPIDY_IMGUI}/backends/imgui_impl_win32.cpp
                  ${SPIDY_IMGUI}/backends/imgui_impl_dx11.cpp)
@@ -198,9 +198,9 @@ if(SPIDY_BUILD_LAUNCHER)
                              SPIDY_VERSION="${PROJECT_VERSION}"
                              SPIDY_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0)
   set_source_files_properties(apps/launcher/main.cpp apps/launcher/ui.cpp apps/launcher/system.cpp
-                              apps/launcher/update.cpp PROPERTIES COMPILE_OPTIONS "/W4;/permissive-")
+                              apps/launcher/update.cpp apps/launcher/video.cpp PROPERTIES COMPILE_OPTIONS "/W4;/permissive-")
   target_link_libraries(spidy_launcher PRIVATE d3d11 dxgi d3dcompiler dwmapi bcrypt version urlmon wintrust crypt32
-                        shell32 ole32 uuid advapi32 winhttp)
+                        shell32 ole32 uuid advapi32 winhttp mfplat mfreadwrite mfuuid)
   # Static runtime: the launcher starts on a PC that has no Visual C++ runtime yet and offers to install it.
   set_property(TARGET spidy_launcher PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
