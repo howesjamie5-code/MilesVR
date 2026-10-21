@@ -1,5 +1,14 @@
-MilesVR 0.1.78 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.79 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
+
+What changed since 0.1.78: VENOM PUNCH NO LONGER TURNS INTO A DASH
+--------------------------------------------------
+After loading a save, a venom punch could come out as the game's Venom
+Dash for a few minutes, even in fights. Fixed: the venom punch is always
+the venom punch. The Venom Dash story moment (Underground Undercover)
+still does one Venom Dash with the venom gesture, then goes back to punches.
+What to try: load a save, get in a fight and venom punch several times -
+every one should be a punch, no dash.
 
 What changed since 0.1.77: SPIDYVR 0.4.1 + MILES'S GADGET WHEEL
 --------------------------------------------------
