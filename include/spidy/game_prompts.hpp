@@ -140,6 +140,10 @@ constexpr uintptr_t showFnsmReminderName = 0x3df0480, hideFnsmReminderName = 0x3
 constexpr uint32_t fnsmReminderMs = 12000;
 uint64_t fnsmReminders();
 bool fnsmReminderUp();
+// MilesVR 0.1.80: when a text naming the FNSM app's action ([ACTION_OPEN_FNSM_APP]) last passed the
+// game's text lookup (GetTickCount64; 0 never): the story's FNSM moment, which the game plays from a
+// scripted camera while it waits for the app.
+uint64_t fnsmAppAskedAt();
 // MilesVR 0.1.78 (the user: "Venom punch in the beginning of the story isnt activated but in vr I can do all
 // the venom moves"): whether the story has given Miles his venom, as the game tells its HUD. The HUD's
 // update (8c25e0) asks the progression (b6b520 on the hero's venom unlock) and, only when the answer

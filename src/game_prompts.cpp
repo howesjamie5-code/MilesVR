@@ -354,6 +354,7 @@ constexpr uint32_t poiSlots = 256;
 std::atomic<bool> poiOffered[poiSlots]{};
 std::atomic<uint64_t> fnsmShown{}, fnsmShownAt{}, venomCalls{};
 std::atomic<bool> fnsmUp{};
+std::atomic<uint64_t> fnsmAppAsked{};
 std::atomic<int> venomState{-1};
 } // namespace
 
@@ -363,6 +364,10 @@ int game_prompts::venomUnlocked() {
 
 uint64_t game_prompts::venomUnlockCalls() {
     return venomCalls.load(std::memory_order_relaxed);
+}
+
+uint64_t game_prompts::fnsmAppAskedAt() {
+    return fnsmAppAsked.load(std::memory_order_relaxed);
 }
 
 uint64_t game_prompts::fnsmReminders() {
@@ -528,6 +533,8 @@ const char* game_prompts::observeText(const char* text) {
     if (!length || length + 1 >= sizeof(seen) ||
         (!std::strstr(seen, "[ACTION_") && !std::strstr(seen, "[BTN_") && !std::strstr(seen, "[DPAD_")))
         return text;
+    if (std::strstr(seen, "[ACTION_OPEN_FNSM_APP]"))
+        fnsmAppAsked.store(GetTickCount64(), std::memory_order_relaxed);
     const prompt_actions::Controls controls{controlTriggerWebs.load(std::memory_order_relaxed),
                                             controlVenomTrigger.load(std::memory_order_relaxed)};
     std::vector<std::string> unknown;

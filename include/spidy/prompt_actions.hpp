@@ -61,6 +61,9 @@ inline std::string rewrite(std::string_view text, const Controls& c, std::vector
         {"[ACTION_MELEEANDJUMP]", "UPPERCUT"},
         {"[ACTION_AIM]", "HOLD RIGHT STICK UP"},
         {"[ACTION_MAP]", "X"},
+        // The FNSM app: the phone's own app (0.1.80; the tutorial's "Hold [ACTION_OPEN_FNSM_APP] to access
+        // the Friendly Neighborhood Spider-Man app").
+        {"[ACTION_OPEN_FNSM_APP]", "PHONE > FNSM APP"},
         {"[ACTION_PAUSE]", "MENU"},
         // The game's own buttons, which its in-world prompts name instead of actions ("[BTN_Y] Enter",
         // the throw's LB + RB; October 21). Both its PlayStation and Xbox names; pairs first.

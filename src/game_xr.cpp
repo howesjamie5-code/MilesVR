@@ -971,6 +971,17 @@ DWORD WINAPI run(void*) {
         // opens the game's FNSM app (a press opens the map); and the game's FNSM reminders seen so far, each
         // of which the headset answers with the phone.
         float fnsmHold{};
+        // MilesVR 0.1.80: the story's FNSM moment (the user: "be actually in the vr camera view pull the phone
+        // out and acess the app so the story continues"). The game shows it from a scripted camera, so its
+        // own camera commits nothing and VR would fall back to the game screen, where the phone cannot be
+        // drawn. While the game's text asks for the FNSM app ([ACTION_OPEN_FNSM_APP]) VR stays in play
+        // instead, until the phone's FNSM APP is opened, the game's camera is back for fnsmSceneEndSeconds,
+        // or fnsmSceneMostMs pass. fnsmAskSeen: the last ask (a new one counts after fnsmAskGapMs).
+        uint64_t fnsmAskSeen{};
+        bool fnsmSceneDone = true;
+        float fnsmCommittedSeconds{};
+        static constexpr uint64_t fnsmAskGapMs = 60000, fnsmSceneMostMs = 600000;
+        static constexpr float fnsmSceneEndSeconds = 5;
         // MilesVR 0.1.78: a blow on a boss taps the game's X this long (game_punch::Venom::bossBlows).
         float bossTap{}, bossVenomTap{}, bossStrikeTap{};
         bool throwingUp{};
@@ -1637,6 +1648,7 @@ DWORD WINAPI run(void*) {
                             break;
                         case PhoneAction::fnsm:
                             fnsmHold = 1.f;
+                            fnsmSceneDone = true;
                             runtime.haptic(1, .3f);
                             message(3, 0, "FNSM app - the game's own opens (its View held)");
                             game_prompts::note("phone: FNSM APP -> the game's View held 1 s");
@@ -1678,7 +1690,25 @@ DWORD WINAPI run(void*) {
                     const bool committed = game.qpc && now.QuadPart >= static_cast<int64_t>(game.qpc) &&
                                            static_cast<double>(now.QuadPart - game.qpc) / frequency.QuadPart < .1;
                     const bool followsPlayer = native_view::validPose(body) && native_view::validPose(camera);
-                    const bool gameplay = player.hero && bridgeRunning && committed && followsPlayer;
+                    // The FNSM moment (fnsmAskSeen above): play, though the game's camera rests.
+                    if (const uint64_t asked = game_prompts::fnsmAppAskedAt(); asked && asked != fnsmAskSeen) {
+                        if (!fnsmAskSeen || asked - fnsmAskSeen > fnsmAskGapMs) {
+                            fnsmSceneDone = false;
+                            fnsmCommittedSeconds = 0;
+                            runtime.haptic(0, .3f);
+                            runtime.haptic(1, .3f);
+                            message(3, 0, "FNSM - pull out your phone (back pocket) and open FNSM APP");
+                            game_prompts::note("the game asks for its FNSM app: VR stays in play for the phone");
+                        }
+                        fnsmAskSeen = asked;
+                    }
+                    if (!fnsmSceneDone) {
+                        fnsmCommittedSeconds = committed ? fnsmCommittedSeconds + (std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f) : 0;
+                        if (fnsmCommittedSeconds >= fnsmSceneEndSeconds || GetTickCount64() - fnsmAskSeen > fnsmSceneMostMs)
+                            fnsmSceneDone = true;
+                    }
+                    const bool fnsmScene = !fnsmSceneDone && player.hero && bridgeRunning && followsPlayer;
+                    const bool gameplay = player.hero && bridgeRunning && (committed || fnsmScene) && followsPlayer;
                     uint64_t moverTable{};
                     read(game.mover, &moverTable, sizeof(moverTable));
                     // The headset is worn, focused and tracked: an image can be shown.
