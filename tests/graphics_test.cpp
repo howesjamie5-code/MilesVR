@@ -358,7 +358,9 @@ int main(int argc, char** argv) {
         {
             // The gadget wheel 0.45 m ahead of the left eye, facing it: the web
             // shooter at the top and seven gadgets round it, the impact web lit
-            // and the spider-drone equipped. Saved for visual inspection.
+            // and the spider-drone equipped, the concussion blast out of
+            // charges. Printed, as the combat marks are: laid down in order
+            // with the translucent vertices. Saved for visual inspection.
             const Pose camera{{-.032f, 19.7f, 19}, {}};
             const auto vp = multiply(projection(-.8f, .8f, -.65f, .65f), viewMatrix(camera));
             GadgetWheelView wheel;
@@ -374,11 +376,13 @@ int main(int argc, char** argv) {
                 wheel.ammo[static_cast<size_t>(p)] = static_cast<uint8_t>(p == 5 ? 0 : 3);
             }
             wheel.lit = 1;
+            wheel.litAge = 1;
             wheel.equipped = 6;
             std::vector<Vertex> drawnWheel;
-            appendGadgetWheel(drawnWheel, wheel);
+            appendGadgetWheel(drawnWheel, wheel, camera.position, 1.6f / static_cast<float>(width));
             const auto before = overlay.readback(copied[0].Get());
-            overlay.render(copied[0].Get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, width, height, vp, drawnWheel, true);
+            overlay.render(copied[0].Get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, width, height, vp, {}, true,
+                           drawnWheel);
             const auto image = overlay.readback(copied[0].Get());
             size_t drawn{};
             for (size_t i = 0; i < image.size(); i += 4)
@@ -387,7 +391,8 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Gadget wheel missing");
             if (argc >= 2)
                 saveBmp(std::filesystem::path(argv[1]) / "gadget-wheel.bmp", image, width, height);
-            std::cout << "PASS gadget wheel overlay: " << drawn << " pixels.\n";
+            std::cout << "PASS gadget wheel overlay: " << drawn << " pixels, " << drawnWheel.size()
+                      << " vertices.\n";
         }
         {
             // Aim markers over the left eye, translucent and farthest first as

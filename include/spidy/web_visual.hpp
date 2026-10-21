@@ -1,6 +1,7 @@
 #pragma once
 #include "slow_motion.hpp"
 #include "spider_sense.hpp"
+#include "ui_style.hpp"
 #include "vertex.hpp"
 #include "web_strike.hpp"
 #include <cstdint>
@@ -184,8 +185,10 @@ struct AimMarker {
     float spin{};      // radians the target's ring has turned
     float lock = 1;    // 0..1 as the target's ring closes in on it from wider
 };
-// pixelAngle as for appendWeb.
-void appendAimMarker(std::vector<Vertex>& out, const AimMarker& marker, Vec3 viewer, float pixelAngle);
+// pixelAngle as for appendWeb. Each mark below draws its tech_marks.hpp
+// namesake instead in UiStyle::tech.
+void appendAimMarker(std::vector<Vertex>& out, const AimMarker& marker, Vec3 viewer, float pixelAngle,
+                     UiStyle style = UiStyle::comic);
 // Steadies one hand's aim marker from eye image to eye image. Hand tremor and
 // tracking noise swing the aim ray by a few tenths of a degree, which the
 // marker shows as jitter at any distance; the aim previews arrive at the
@@ -244,7 +247,7 @@ Vec3 onAimLine(Vec3 point, Vec3 normal, Vec3 origin, Vec3 direction);
 // along -z, the back of the hand +y); `seconds` any running clock, for the
 // pulse. pixelAngle as for appendWeb.
 void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view, Pose hand, Vec3 viewer,
-                           float pixelAngle, float seconds);
+                           float pixelAngle, float seconds, UiStyle style = UiStyle::comic);
 // The combat marks below are printed, as the graphics of Spidy's videos are
 // (their style system: flat plates of colour, every shape keyed in ink, a
 // hard drop where a shadow would be, lettering out of register as it lands),
@@ -270,7 +273,8 @@ struct ImpactView {
     bool called{};
 };
 // pixelAngle as for appendWeb.
-void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle);
+void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle,
+                  UiStyle style = UiStyle::comic);
 // The mark over the chest of the enemy the player's next punch would go to
 // (game_punch), facing the viewer, with what the flow calls (web_strike.hpp's
 // Cues). Nothing called: a thin paper ring, a target and no more; once a
@@ -294,7 +298,8 @@ struct CueView {
     bool locked{}; // a blow holds the mark on him: it does not follow the look
 };
 // pixelAngle as for appendWeb.
-void appendCue(std::vector<Vertex>& out, const CueView& cue, Vec3 viewer, float pixelAngle);
+void appendCue(std::vector<Vertex>& out, const CueView& cue, Vec3 viewer, float pixelAngle,
+               UiStyle style = UiStyle::comic);
 // A knockout of the player's, lettered where the enemy stood: "KO!" in yellow
 // on a red burst with a paper heart, as a sound word is. It pops in, holds,
 // and is gone in two poses: this one is done, look for the next.
@@ -304,7 +309,8 @@ struct KnockoutView {
     float age = -1; // seconds since he went down; below 0, or past `seconds`: nothing
 };
 // pixelAngle as for appendWeb.
-void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle);
+void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle,
+                    UiStyle style = UiStyle::comic);
 // Miles's venom round the venom fist (venom_punch.hpp): orange bioelectric
 // bolts crackling out of the front of the fist in a soft orange glow, with hot
 // sparks flicking round it, fewer and fainter while it charges, all of them
@@ -363,7 +369,8 @@ struct SenseView {
     float broken = -1; // seconds since a counter broke it; below 0: not
 };
 // pixelAngle as for appendWeb.
-void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle);
+void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle,
+                 UiStyle style = UiStyle::comic);
 // The warning of an attacker out of view, in the player's sightline (Arkham
 // Shadow's icon there): the same mark, small, on the circle
 // SenseSightConfig::angle round the middle of the view on his side, an
@@ -378,5 +385,5 @@ struct SenseSightView {
     float age{}, broken = -1;
 };
 void appendSenseSight(std::vector<Vertex>& out, const SenseSightView& view, Pose head, float pixelAngle,
-                      const SenseSightConfig& config = {});
+                      const SenseSightConfig& config = {}, UiStyle style = UiStyle::comic);
 } // namespace spidy

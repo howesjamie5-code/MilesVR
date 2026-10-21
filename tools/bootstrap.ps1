@@ -20,6 +20,21 @@ if (-not (Test-Path -LiteralPath $imguiDestination)) {
 $imguiActual = git -c "safe.directory=$($imguiDestination.Replace('\','/'))" -C $imguiDestination rev-parse HEAD
 if ($LASTEXITCODE -or $imguiActual -ne $imguiCommit) { throw 'Dear ImGui revision differs from the pinned revision. Existing files were preserved.' }
 Write-Output "Dear ImGui 1.92.9b verified: $imguiActual"
+# Body haptics (src/bhaptics_output.cpp) play through bHaptics' own SDK: its header, and its library, which the
+# release zip ships as it comes (its bytes are pinned too: the SDK's CHANGELOG.md lists them).
+$bhapticsDestination = Join-Path $root 'third_party\tact-cpp2'
+$bhapticsCommit = 'd016a3f22a4c1e5b6b2192e3ed2224512a045a19'
+if (-not (Test-Path -LiteralPath $bhapticsDestination)) {
+    git clone --depth 1 --branch v2.7.1 https://github.com/bhaptics/tact-cpp2.git $bhapticsDestination
+    if ($LASTEXITCODE) { throw 'bHaptics SDK download failed' }
+}
+$bhapticsActual = git -c "safe.directory=$($bhapticsDestination.Replace('\','/'))" -C $bhapticsDestination rev-parse HEAD
+if ($LASTEXITCODE -or $bhapticsActual -ne $bhapticsCommit) { throw 'bHaptics SDK revision differs from the pinned revision. Existing files were preserved.' }
+$bhapticsLibrary = Join-Path $bhapticsDestination 'sdk\lib\x64\bhaptics_library.dll'
+if ((Get-FileHash -LiteralPath $bhapticsLibrary -Algorithm SHA256).Hash -ne '399992988DC899173E921BE23409BED6DC8E7E0CBE78F505452F311FEAD06B26') {
+    throw 'The bHaptics library differs from the one pinned. Existing files were preserved.'
+}
+Write-Output "bHaptics SDK 2.7.1 verified: $bhapticsActual"
 if ($Observer) {
     $hookDestination = Join-Path $root 'third_party\minhook'
     $hookCommit = 'c3fcafdc10146beb5919319d0683e44e3c30d537'

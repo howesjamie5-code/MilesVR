@@ -9,8 +9,8 @@ as the Touch controllers do, opens Settings, goes Up to SPIDY VR (the list wraps
 section (WEBS, SWINGING, COMFORT, DISPLAY, BODY, EXPERIMENTAL), it makes the webs arcade webs (WEB STYLE: ARCADE),
 puts the web button on the trigger (WEB BUTTON: TRIGGER), switches the aim markers off, switches webs in open air off
 and puts them back with X (RESET), steps the swing speed up (from 32 one step is 40), steps the weight up (from 80% one
-step is 100%), steps snap turn up, switches smooth turning on (its first speed, 60 degrees a second), steps the HUD
-down from MEDIUM to SMALL and to OFF, asks for a body calibration (CALIBRATE BODY: ON RESUME; without a headset nothing
+step is 100%), steps snap turn up, switches smooth turning on (its first speed, 60 degrees a second), steps body
+haptics down to 75%, steps the HUD down from MEDIUM to SMALL and to OFF, asks for a body calibration (CALIBRATE BODY: ON RESUME; without a headset nothing
 calibrates), switches the experimental flips on, steps the flip speed up (from 180 degrees a second one step is 240),
 and resets the whole tab with Y (RESET ALL, confirmed with A): Spidy's defaults, realistic webs and the grip webbing
 again, the calibration no longer asked for, the HUD back to MEDIUM, the flip speed back to 180 degrees a second, while
@@ -50,23 +50,24 @@ STICK = dict(up=(0, 32767), down=(0, -32767), left=(-32767, 0), right=(32767, 0)
 
 
 def settings_payload(flags, snap_turn, haptics, screen_size, swing_speed, smooth_turn=0, weight=80, hud=2,
-                     flip_speed=180):
-    return struct.pack('<7If4I', MAGIC, 5, 48, flags, snap_turn, haptics, screen_size, swing_speed, smooth_turn,
-                       weight, hud, flip_speed)
+                     flip_speed=180, body_haptics=100):
+    return struct.pack('<7If6I', MAGIC, 6, 56, flags, snap_turn, haptics, screen_size, swing_speed, smooth_turn,
+                       weight, hud, flip_speed, body_haptics, 0)
 
 
 def sample(game, process, exports):
-    remote = pad.call_with_output(game, process, exports['SpidyMenuSample'], b'', 72)
+    remote = pad.call_with_output(game, process, exports['SpidyMenuSample'], b'', 80)
     code, raw = remote
-    if code or len(raw) != 72:
+    if code or len(raw) != 80:
         raise RuntimeError(f'SpidyMenuSample: {code}')
     magic, version, size, installed, tabs, changes, status, flags, snap, haptics, screen, speed, smooth, weight, \
-        hud, flip_speed = struct.unpack('<4I2Q5If4I', raw)
-    if (magic, version, size) != (MAGIC, 5, 72):
+        hud, flip_speed, body_haptics, _ = struct.unpack('<4I2Q5If6I', raw)
+    if (magic, version, size) != (MAGIC, 6, 80):
         raise RuntimeError('Menu protocol mismatch: rebuild and restart the game')
     values = {name: bool(flags & bit) for name, bit in FLAGS.items()}
     values.update(snap_turn=snap, smooth_turn=smooth, haptics=haptics, screen_size=screen,
-                  swing_speed=round(speed, 1), weight=weight, hud=hud, flip_speed=flip_speed)
+                  swing_speed=round(speed, 1), weight=weight, hud=hud, flip_speed=flip_speed,
+                  body_haptics=body_haptics)
     return dict(installed=bool(installed), tabs=tabs, changes=changes, status=status, values=values)
 
 
@@ -171,35 +172,42 @@ def main():
         press('down')
         press('right', wait=.8)
         step('smooth_turn_60', dict(smooth_turn=60, snap_turn=45), changes=9)
-        # Down past vibration, the DISPLAY heading, the screen size and its depth: the HUD, MEDIUM until stepped
-        # down to SMALL and OFF. (VR VIEW is on the pause menu's first page since October 15, not here.)
+        # Down past the HAPTICS heading and vibration: BODY HAPTICS, 100% until stepped down to 75%.
+        press('down', 'down')
+        press('left', wait=.8)
+        step('body_haptics_75', dict(body_haptics=75, smooth_turn=60), changes=10)
+        # Down past the web, wind, combat and movement switches, the DISPLAY heading, the screen size and its depth:
+        # the HUD, MEDIUM until stepped down to SMALL and OFF. (VR VIEW is on the pause menu's first page since
+        # October 15, not here.)
+        press('down', 'down', 'down', 'down', 'down', 'down', 'down')
+        press('left', wait=.8)
+        step('hud_small', dict(hud=1, body_haptics=75), changes=11)
+        press('left', wait=.8)
+        step('hud_off', dict(hud=0), changes=12)
+        # Down past UI STYLE, NEAR CLIP, RECORDING FOV and the BODY heading: a calibration at the next
+        # gameplay.
         press('down', 'down', 'down', 'down')
-        press('left', wait=.8)
-        step('hud_small', dict(hud=1, smooth_turn=60), changes=10)
-        press('left', wait=.8)
-        step('hud_off', dict(hud=0), changes=11)
-        # Down past the BODY heading: a calibration at the next gameplay.
-        press('down')
         press('right', wait=.8)
-        step('calibrate_on_resume', dict(calibrate=True, hud=0), changes=12)
+        step('calibrate_on_resume', dict(calibrate=True, hud=0), changes=13)
         # Down past the EXPERIMENTAL heading: the flips, off until switched on.
         press('down')
         press('right', wait=.8)
-        step('flips_on', dict(flips=True, calibrate=True), changes=13)
+        step('flips_on', dict(flips=True, calibrate=True), changes=14)
         # The flip speed, 180 degrees a second until stepped up to 240.
         press('down')
         press('right', wait=.8)
-        step('flip_speed_240', dict(flip_speed=240, flips=True), changes=14)
+        step('flip_speed_240', dict(flip_speed=240, flips=True), changes=15)
         press('y', wait=1.2)
         step('reset_all_asks')
         press('a', wait=1.2)
-        # Spidy's defaults: ten settings changed back (the web style, the web button, aim markers, swing speed,
-        # snap turn, smooth turn, the HUD, the calibration asked for, the flips, the flip speed; the weight the
-        # probe stepped to is Spidy's default, 100%). The web shooter, which the tab does not offer, stays as the
-        # probe started it.
+        # Spidy's defaults: eleven settings changed back (the web style, the web button, aim markers, swing speed,
+        # snap turn, smooth turn, body haptics, the HUD, the calibration asked for, the flips, the flip speed; the
+        # weight the probe stepped to is Spidy's default, 100%). The web shooter, which the tab does not offer,
+        # stays as the probe started it.
         step('reset_all', dict(arcade_webs=False, trigger_webs=False, aim_markers=True, air_webs=True,
                                swing_speed=32.0, weight=100, calibrate=False, snap_turn=30, smooth_turn=0, hud=2,
-                               flips=False, flip_speed=180, web_shooter=False, body=True), changes=24)
+                               flips=False, flip_speed=180, web_shooter=False, body=True, body_haptics=100),
+             changes=26)
         press('b', wait=.8)
         press('b', wait=.8)
         press('b', wait=1.5)

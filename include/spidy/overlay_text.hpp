@@ -13,7 +13,10 @@ struct TextStyle {
     Vec3 color{1, 1, 1}; // linear RGB, as the overlay's vertices take it
     // Strokes as a marker draws them: their ends and corners round, and
     // their edges fading out across `soft` metres so they stay smooth
-    // without multisampling. Otherwise each stroke is a hard-edged bar.
+    // without multisampling. Otherwise each stroke is a bar squared off half
+    // its width past its points, so two close a corner: hard-edged, or with
+    // its sides fading out across `soft` when that is given (a sixth of a
+    // round stroke's vertices).
     bool round{};
     float soft{};
 };

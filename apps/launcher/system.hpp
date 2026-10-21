@@ -2,6 +2,7 @@
 // What the launcher finds on this PC, what it remembers, and the VR session it
 // runs (tools/run_game_vr.py). Long work runs on worker threads; the window
 // reads snapshots.
+#include <spidy/launcher_profile.hpp>
 #include <spidy/launcher_text.hpp>
 #include <windows.h>
 #include <array>
@@ -15,6 +16,7 @@
 
 namespace launcher {
 using spidy::launcher::LineKind;
+using spidy::launcher::Profile;
 using spidy::launcher::SessionOptions;
 using spidy::launcher::SteamApp;
 
@@ -73,9 +75,35 @@ struct Settings {
     bool shortcutsAsked{};
     // Ask GitHub for a newer Spidy when the launcher starts.
     bool updateCheck = true;
+    // The settings profile last used or saved (its name), to which changes made since can be saved.
+    std::string profile;
 };
 Settings loadSettings();
 void saveSettings(const Settings& settings);
+
+// Settings profiles (spidy/launcher_profile.hpp), kept as %APPDATA%\Spidy\profiles\<name>.spidy.
+struct SavedProfile {
+    std::string name; // the file's, without .spidy
+    Profile profile;
+};
+// What the launcher keeps settings no profile holds as before it puts a profile's in their place.
+inline constexpr const char* kPreviousProfile = "Previous settings";
+std::wstring profilesFolder();
+// The profiles kept, by name; a file that holds no profile is left out.
+std::vector<SavedProfile> savedProfiles();
+bool profileExists(const std::string& name);
+// Keeps the text under that name (spidy::launcher::profileFileName), in place of a profile of that name.
+bool saveProfile(const std::string& name, const std::string& text);
+// Moves that profile's file to the Recycle Bin.
+bool deleteProfile(const std::string& name);
+// The MILES VR tab's settings that launcher.ini has no key for, which the game module keeps in
+// %APPDATA%\Spidy\spidy_vr.ini (game_xr.cpp's tabOnlyPath), and putting others there.
+spidy::vr_settings::Values loadTabOnly();
+bool saveTabOnly(const spidy::vr_settings::Values& values);
+// A text file of up to 64 KB as UTF-8 (one saved as UTF-16 converted); empty when it cannot be read.
+std::string readTextFile(const std::wstring& path);
+// Written whole and then put in place, so a failed write keeps the old file.
+bool writeTextFile(const std::wstring& path, const std::string& text);
 
 class Scanner {
 public:
@@ -174,6 +202,9 @@ std::optional<std::string> sha256(const std::wstring& path);
 void openUrl(const char* url);
 void openPath(const std::wstring& path);
 std::optional<std::wstring> browseForGame(HWND owner, const std::wstring& current);
+// A profile to import, and where to export one (`fileName` suggested).
+std::optional<std::wstring> browseForProfile(HWND owner);
+std::optional<std::wstring> browseProfileDestination(HWND owner, const std::wstring& fileName);
 bool createShortcuts(std::string& error);
 // Starts this launcher again as administrator (Windows asks first); the new one waits for this one to
 // close. False when it did not start, with `error` empty when the player declined Windows' question.

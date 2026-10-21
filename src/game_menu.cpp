@@ -149,7 +149,11 @@ AddItemFn originalAddItem{};
 uintptr_t imageBase{};
 SRWLOCK lock = SRWLOCK_INIT;
 vr_settings::Values shown;
-uint32_t pending{}; // bits 1 << Item changed in the tab and not taken yet
+// Bits 1 << Item changed in the tab and not taken yet. 64 of them: the haptics'
+// groups took Item past 31, where a 32-bit shift is undefined (x86 wraps it
+// onto another setting's bit).
+uint64_t pending{};
+static_assert(static_cast<unsigned>(vr_settings::lastItem) < 64, "more settings than pending's bits");
 std::atomic<uint64_t> tabsBuilt{}, changesMade{};
 std::atomic<uint32_t> failure{};
 std::atomic<bool> hooked{}, created{};
@@ -408,7 +412,7 @@ void change(Item item, int index) {
     AcquireSRWLockExclusive(&lock);
     const bool changed = vr_settings::choose(item, index, shown);
     if (changed)
-        pending |= 1u << static_cast<unsigned>(item);
+        pending |= uint64_t{1} << static_cast<unsigned>(item);
     ReleaseSRWLockExclusive(&lock);
     if (changed)
         ++changesMade;
@@ -584,9 +588,9 @@ bool matches(uintptr_t at, const unsigned char* bytes, size_t count) {
         return false;
     }
 }
-vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Values to, uint32_t which) {
+vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Values to, uint64_t which) {
     for (unsigned i = 1; i <= static_cast<unsigned>(vr_settings::lastItem); ++i)
-        if (which & (1u << i))
+        if (which & (uint64_t{1} << i))
             vr_settings::choose(static_cast<Item>(i), vr_settings::choice(static_cast<Item>(i), from), to);
     return to;
 }
@@ -639,7 +643,7 @@ void game_menu::publish(const vr_settings::Values& values) {
 }
 bool game_menu::take(vr_settings::Values& values) {
     AcquireSRWLockExclusive(&lock);
-    const uint32_t which = pending;
+    const uint64_t which = pending;
     if (which)
         values = copyItems(shown, values, which);
     pending = 0;
@@ -663,22 +667,23 @@ namespace {
 // calibration wanted (CALIBRATE BODY: ON RESUME); 128 flips (experimental);
 // 256 the trigger webs (WEB BUTTON: TRIGGER); 512 STAND ON WALLS; 1024 (in the
 // sample) VR VIEW: GAME SCREEN; 2048 arcade webs (WEB STYLE: ARCADE). hud: the
-// HUD row (0 off, 1-3); flipSpeed: FLIP SPEED, degrees a second.
+// HUD row (0 off, 1-3); flipSpeed: FLIP SPEED, degrees a second. Version 6:
+// bodyHaptics, BODY HAPTICS in percent, and a spare word.
 struct ProbeSettings {
-    uint32_t magic = 0x554e4d53, version = 5, bytes = sizeof(ProbeSettings), flags{};
+    uint32_t magic = 0x554e4d53, version = 6, bytes = sizeof(ProbeSettings), flags{};
     uint32_t snapTurn{}, haptics{}, screenSize{};
     float swingSpeed{};
-    uint32_t smoothTurn{}, weight{}, hud{}, flipSpeed{};
+    uint32_t smoothTurn{}, weight{}, hud{}, flipSpeed{}, bodyHaptics{}, spare{};
 };
-static_assert(sizeof(ProbeSettings) == 48);
+static_assert(sizeof(ProbeSettings) == 56);
 struct ProbeSample {
-    uint32_t magic = 0x554e4d53, version = 5, bytes = sizeof(ProbeSample), installed{};
+    uint32_t magic = 0x554e4d53, version = 6, bytes = sizeof(ProbeSample), installed{};
     uint64_t tabs{}, changes{};
     uint32_t status{}, flags{}, snapTurn{}, haptics{}, screenSize{};
     float swingSpeed{};
-    uint32_t smoothTurn{}, weight{}, hud{}, flipSpeed{};
+    uint32_t smoothTurn{}, weight{}, hud{}, flipSpeed{}, bodyHaptics{}, spare{};
 };
-static_assert(sizeof(ProbeSample) == 72);
+static_assert(sizeof(ProbeSample) == 80);
 } // namespace
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyMenuStart(void* input) {
     ProbeSettings s;
@@ -712,6 +717,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMenuStart(void* input) {
     v.weight = static_cast<int>(s.weight);
     v.hud = static_cast<int>(s.hud);
     v.flipSpeed = static_cast<int>(s.flipSpeed);
+    v.bodyHaptics = static_cast<int>(s.bodyHaptics);
     if (const auto code = install(reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))))
         return code;
     publish(vr_settings::sanitized(v));
@@ -739,6 +745,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMenuSample(void* output) {
     s.weight = static_cast<uint32_t>(v.weight);
     s.hud = static_cast<uint32_t>(v.hud);
     s.flipSpeed = static_cast<uint32_t>(v.flipSpeed);
+    s.bodyHaptics = static_cast<uint32_t>(v.bodyHaptics);
     __try {
         if (reinterpret_cast<uintptr_t>(output) < 0x10000)
             return 9601;

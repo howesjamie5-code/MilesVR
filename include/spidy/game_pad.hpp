@@ -2,6 +2,7 @@
 #include "prompt_buttons.hpp"
 #include "tracking.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -61,7 +62,9 @@ enum class Mapping {
     // trigger pulled with its hand at the temple is the game's R3, its scan
     // (TemplePress). The Steam Frame's View button and D-pad, which the
     // other controllers lack, are the game's own Back and D-pad here as on
-    // the game screen: its D-pad down heals as the stick's push does.
+    // the game screen: its D-pad down heals as the stick's push does. While
+    // the game names a button in a prompt, the VR control of that name sends
+    // it instead of doing its job in play (NamedPress).
     gameplay,
     // The game screen: every control as on an Xbox controller. A, B, X and Y
     // sit where Xbox has them; grips are the bumpers.
@@ -115,8 +118,10 @@ struct Walk {
     // The game's RT, a tap as a web takes the player into a swing (SwingTap):
     // what its own swing prompt ("Hold RT", the opening's first swing) waits for.
     bool swing{};
-    // What the game is asking for now, sent in place of the interact's Y
-    // (ContextPress). {}: nothing is, and interact is the game's Y as before.
+    // What a pull at a thing the game is prompting for sends instead of the
+    // pull's own LB + RB: the pair it names (its LT + RT for a vent). {}: the
+    // pull is as it is. The buttons a prompt names otherwise go out from the
+    // controls of their own names (NamedPress).
     prompt_buttons::Demand demand{};
 };
 // A held on the ground: a charged leap, Spidy's own. The game has one, its
@@ -977,48 +982,273 @@ class ScreenControls {
     bool menuDown_{}, menuSpent_{}, clickDown_{}, clickSpent_{}, dpad_{}, chord_{};
     float menuHeld_{}, startTap_{}, thumbTap_{}, chordHeld_{}, chordTap_{};
 };
-// The interact button, sending what the game is asking for.
+// What the game asks for, pressed with the VR control of the same name
+// ("press what you see", October 20).
 //
-// The game names the button of every prompt and QTE it raises, and Spidy
-// reads that name (game_prompts, prompt_buttons). In VR the player's Y
-// already means "do the thing in front of me", so while a prompt is live and
-// its button known, Y sends what the prompt asks for instead of the game's Y:
-// one control for every prompt the game has, in place of a gesture for each
-// moment someone reports. Without a prompt, or with one whose button could
-// not be read, Y is the game's Y exactly as before.
+// The game names the button of every prompt it raises (game_prompts reads it,
+// prompt_buttons spells it), and its names are an Xbox controller's: the
+// virtual pad it plays with is one. Four of them are on the Touch and Index
+// controllers under the very same letters, but VR play gave those other jobs:
+// X opens the game menu or the gadget wheel, A charges a leap and flips in the
+// air, B dodges only off the swing, and the triggers and grips shoot webs. So
+// "Press [BTN_X] for Vent Takedown" opened the map, and "Hold [BTN_L2] and tap
+// [BTN_R1] to fire webs and seal the leaks" could not be answered at all. One
+// player's whole playthrough (October 14-19: the Oscorp research stations, the
+// Shocker bank's columns, the museum's takedowns, the Web Bomb's lesson, the
+// hostage's "aim, and RB to disarm") came down to that; the game screen did
+// every one of them, because there the controllers are an Xbox controller.
 //
-// A press keeps the demand it began with until it is let go, so a prompt that
-// ends under the player's thumb does not change the buttons being sent; a
-// press that starts before the prompt shows (Y held while InteractStep walks
-// the hero up to a door) takes the first demand that arrives.
-class ContextPress {
+// So while the game names a button, the control with its name sends it:
+//   A, B, X, Y         the button itself, as long as it is held - no menu or
+//                      wheel, no leap or flip, no dodge held back for the swing
+//   LT or LB, RT or RB each hand's web-ball button (the trigger, or the grip
+//                      with WEB BUTTON: TRIGGER), the left hand's the left
+//                      ones: the swing's webs stay where they are, and a
+//                      mission that asks for its triggers still swings
+//   L3, R3             each thumbstick's click
+//   D-pad up, left,    the right thumbstick pushed that way (pushed down it is
+//   right              the heal's D-pad down already: StickPush)
+// and while it names X, a fist thrown fast is its X (a takedown, an attack;
+// held, where the prompt says hold: the Air Launch), and with X and A named in
+// the air a fist thrown down is both (the Ground Strike).
+//
+// A control is the game's only when it goes down while the game names it, and
+// it stays the game's, sending what it began with, until it is let go: a web
+// button held into a prompt still holds its web, and a prompt that ends under
+// the thumb still gets its button. Out of VR play nothing is claimed, and a
+// control held through that must be let go first.
+class NamedPress {
   public:
-    // held: the player's Y, as InteractStep leaves it. demand: what the live
-    // prompt asks for, {} for none. Returns what to send, {} for nothing -
-    // the caller's own Y then stands.
-    prompt_buttons::Demand update(bool held, prompt_buttons::Demand demand) {
-        if (!held) {
-            sent_ = {};
+    // A trigger or a grip: down past `pressed`, up again below `released`.
+    // The right thumbstick: pushed `pushed` far and no more than `aside` off
+    // the way, back once within `rest`.
+    static constexpr float pressed = .6f, released = .3f, pushed = .7f, aside = .45f, rest = .5f;
+    // A fist thrown: a free hand at blowSpeed (the punch's own least:
+    // PunchConfig::minSpeed), measured over about `smoothing`, and not pulled
+    // back toward the head as squarely as `inward` (the cosine between its way
+    // and the line to the head): a jab and an uppercut both, the recoil after
+    // either neither. Ready again below rearmSpeed or after rearmSeconds.
+    // Thrown down this steeply (the sine of its pitch) it is a slam. A blow
+    // sends its buttons for tapSeconds, or holdSeconds for a hold or two at once.
+    static constexpr float blowSpeed = 2.2f, rearmSpeed = 1.2f, rearmSeconds = .45f, smoothing = .01f,
+                           inward = .7f, steep = .6f, tapSeconds = .15f, holdSeconds = .6f;
+    // The VR controls a named button can claim, a bit each.
+    enum Control : uint32_t {
+        controlA = 1u << 0,
+        controlB = 1u << 1,
+        controlX = 1u << 2,
+        controlY = 1u << 3,
+        leftBall = 1u << 4,
+        rightBall = 1u << 5,
+        leftClick = 1u << 6,
+        rightClick = 1u << 7,
+        stickUp = 1u << 8,
+        stickLeft = 1u << 9,
+        stickRight = 1u << 10,
+        fist = 1u << 11,
+    };
+    // Each hand's web-ball button: 0 the left, 1 the right.
+    static constexpr uint32_t ball(unsigned hand) {
+        return hand ? rightBall : leftBall;
+    }
+    struct Input {
+        uint32_t buttons{}; // XrFrame::buttons
+        // Each hand's web-ball button (Input::HandInput::trigger before the
+        // swing sees it), 0 to 1, and whether a gesture has it (the temple's
+        // scan, the back pocket's draw): one that has is no press here.
+        float balls[2]{};
+        bool ballsTaken[2]{};
+        bool clicks[2]{};    // each thumbstick's click
+        float stickX{}, stickY{}; // the right thumbstick, -1..1, y up
+        // Each grip from the head, in tracking space (y up), whether it is
+        // tracked, and whether its web holds something (no blow from it).
+        Vec3 hands[2]{};
+        bool tracked[2]{}, busy[2]{};
+        bool airborne{};
+    };
+    // seconds: since the previous update. play: the controllers play VR, the
+    // pad layer off. demand: what the game names now, {} for nothing. Returns
+    // what the claimed controls send the game.
+    State update(float seconds, bool play, const Input& in, prompt_buttons::Demand demand) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        uint32_t down = 0;
+        const std::pair<uint32_t, uint32_t> faces[] = {
+            {buttonA, controlA}, {buttonB, controlB}, {buttonX, controlX}, {buttonY, controlY}};
+        for (const auto& [button, control] : faces)
+            if (in.buttons & button)
+                down |= control;
+        for (unsigned h = 0; h < 2; ++h) {
+            const uint32_t ball = h ? rightBall : leftBall;
+            const float value = std::isfinite(in.balls[h]) ? in.balls[h] : 0.f;
+            if (!in.ballsTaken[h] && value > ((down_ & ball) ? released : pressed))
+                down |= ball;
+            if (in.clicks[h])
+                down |= h ? rightClick : leftClick;
+        }
+        down |= stickWay(in.stickX, in.stickY);
+        const uint32_t pressedNow = down & ~down_;
+        down_ = down;
+        if (!play) {
+            claimed_ = 0;
+            fistLeft_ = 0;
+            for (auto& hand : hands_)
+                hand = {};
             return {};
         }
-        if (!sent_.any() && demand.any()) {
-            sent_ = demand;
+        // A claim lasts as long as its control is held.
+        claimed_ &= down;
+        for (unsigned c = 0; c < buttonControls; ++c) {
+            const uint32_t bit = 1u << c;
+            if (!(pressedNow & bit))
+                continue;
+            const State s = sends(bit, demand);
+            if (s == State{})
+                continue;
+            claimed_ |= bit;
+            sent_[c] = s;
             ++presses_;
         }
-        return sent_;
+        throwFists(dt, in, demand);
+        State out;
+        for (unsigned c = 0; c < buttonControls; ++c)
+            if (claimed_ & (1u << c))
+                add(out, sent_[c]);
+        if (fistLeft_ > 0) {
+            claimed_ |= fist;
+            add(out, fistSent_);
+        }
+        return out;
     }
-    // A demand is going out now.
-    bool sending() const {
-        return sent_.any();
+    // The controls the game has now: Spidy's own use of them waits until they
+    // are let go.
+    uint32_t claimed() const {
+        return claimed_;
     }
-    // Presses that sent a prompt's demand rather than the game's Y.
+    // Presses that went to a named button so far, thrown fists among them.
     uint32_t presses() const {
         return presses_;
     }
+    uint32_t blows() const {
+        return blows_;
+    }
+    // What `control` sends while the game names what `demand` holds: {} where
+    // the game names nothing of its.
+    static State sends(uint32_t control, prompt_buttons::Demand d) {
+        State s;
+        switch (control) {
+        case controlA:
+            s.buttons = static_cast<uint16_t>(d.buttons & a);
+            break;
+        case controlB:
+            s.buttons = static_cast<uint16_t>(d.buttons & b);
+            break;
+        case controlX:
+            s.buttons = static_cast<uint16_t>(d.buttons & x);
+            break;
+        case controlY:
+            s.buttons = static_cast<uint16_t>(d.buttons & y);
+            break;
+        case leftBall:
+            if (d.leftTrigger)
+                s.leftTrigger = 255;
+            else
+                s.buttons = static_cast<uint16_t>(d.buttons & leftShoulder);
+            break;
+        case rightBall:
+            if (d.rightTrigger)
+                s.rightTrigger = 255;
+            else
+                s.buttons = static_cast<uint16_t>(d.buttons & rightShoulder);
+            break;
+        case leftClick:
+            s.buttons = static_cast<uint16_t>(d.buttons & leftThumb);
+            break;
+        case rightClick:
+            s.buttons = static_cast<uint16_t>(d.buttons & rightThumb);
+            break;
+        case stickUp:
+            s.buttons = static_cast<uint16_t>(d.buttons & dpadUp);
+            break;
+        case stickLeft:
+            s.buttons = static_cast<uint16_t>(d.buttons & dpadLeft);
+            break;
+        case stickRight:
+            s.buttons = static_cast<uint16_t>(d.buttons & dpadRight);
+            break;
+        default:
+            break;
+        }
+        return s;
+    }
 
   private:
-    prompt_buttons::Demand sent_{};
-    uint32_t presses_{};
+    // The controls with a button of their own (all but the fist).
+    static constexpr unsigned buttonControls = 11;
+    static void add(State& to, const State& s) {
+        to.buttons |= s.buttons;
+        to.leftTrigger = std::max(to.leftTrigger, s.leftTrigger);
+        to.rightTrigger = std::max(to.rightTrigger, s.rightTrigger);
+    }
+    // The way the right thumbstick is pushed, held until it is back at rest.
+    uint32_t stickWay(float x, float y) const {
+        x = std::isfinite(x) ? x : 0.f;
+        y = std::isfinite(y) ? y : 0.f;
+        if (std::hypot(x, y) < rest)
+            return 0;
+        if (const uint32_t was = down_ & (stickUp | stickLeft | stickRight))
+            return was;
+        if (std::abs(x) >= pushed && std::abs(y) <= aside)
+            return x > 0 ? stickRight : stickLeft;
+        if (y >= pushed && std::abs(x) <= aside)
+            return stickUp;
+        return 0;
+    }
+    void throwFists(float dt, const Input& in, prompt_buttons::Demand d) {
+        fistLeft_ = std::max(0.f, fistLeft_ - dt);
+        const bool askedX = (d.buttons & x) != 0;
+        // X and A named in the air: the Ground Strike, a fist thrown down.
+        const bool strike = askedX && (d.buttons & a) && in.airborne;
+        for (unsigned h = 0; h < 2; ++h) {
+            auto& hand = hands_[h];
+            if (!in.tracked[h] || !finite(in.hands[h]) || dt <= 0) {
+                hand = {};
+                continue;
+            }
+            if (hand.seen) {
+                const Vec3 velocity = (in.hands[h] - hand.at) * (1 / dt);
+                hand.velocity = hand.velocity + (velocity - hand.velocity) * std::min(1.f, dt / smoothing);
+            }
+            hand.at = in.hands[h];
+            hand.seen = true;
+            hand.since += dt;
+            const float speed = length(hand.velocity);
+            if (speed < rearmSpeed || hand.since >= rearmSeconds)
+                hand.armed = true;
+            if (!askedX || in.busy[h] || !hand.armed || speed < blowSpeed)
+                continue;
+            const bool thrownDown = hand.velocity.y <= -steep * speed;
+            const float reach = length(hand.at);
+            const bool pulledIn = reach > 1e-3f && -dot(hand.velocity, hand.at) >= inward * speed * reach;
+            if (strike ? !thrownDown : pulledIn)
+                continue;
+            hand.armed = false;
+            hand.since = 0;
+            fistSent_ = {};
+            fistSent_.buttons = strike ? static_cast<uint16_t>(x | a) : static_cast<uint16_t>(x);
+            fistLeft_ = strike || d.hold ? holdSeconds : tapSeconds;
+            ++blows_;
+            ++presses_;
+        }
+    }
+    struct Hand {
+        Vec3 at{}, velocity{};
+        float since = rearmSeconds;
+        bool seen{}, armed = true;
+    };
+    std::array<Hand, 2> hands_{};
+    State sent_[buttonControls]{}, fistSent_{};
+    uint32_t down_{}, claimed_{}, presses_{}, blows_{};
+    float fistLeft_{};
 };
 // Handing the player back to the game for an interact.
 //
@@ -1157,9 +1387,8 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
             s.buttons |= a;
         if (walk.dodge)
             s.buttons |= b;
-        // What the game is asking for goes in place of the interact's Y (its
-        // own Y where that is what it asks); the game's Y does something else
-        // in a fight, so it does not go out beside it.
+        // A pull's pair goes in place of the interact's Y; the game's Y does
+        // something else in a fight, so it does not go out beside it.
         if (walk.demand.any()) {
             s.buttons |= walk.demand.buttons;
             if (walk.demand.leftTrigger)

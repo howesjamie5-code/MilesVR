@@ -10,6 +10,8 @@
 #include "spidy/native_hud.hpp"
 #include "spidy/native_view.hpp"
 #include "spidy/native_webs.hpp"
+#include "spidy/near_clip.hpp"
+#include "spidy/recording_fov.hpp"
 #include <MinHook.h>
 #include <atomic>
 #include <cstdint>
@@ -18,6 +20,21 @@
 #include <windows.h>
 using namespace spidy;
 using native_view::Descriptor;
+// NEAR CLIP's near plane for the head's and the eyes' lenses in immersive VR
+// (near_clip.hpp), metres: the XR worker sets it, each frame's lenses read it.
+std::atomic<float> nearClip{.02f};
+void spidy::near_clip::set(int millimetres) {
+    nearClip.store(static_cast<float>(std::clamp(millimetres, 10, 100)) / 1000, std::memory_order_relaxed);
+}
+float spidy::near_clip::metres() {
+    return nearClip.load(std::memory_order_relaxed);
+}
+// RECORDING FOV's angle (recording_fov.hpp), degrees, 0 for off: the XR
+// worker sets it, each frame's rest and the game's view's lens read it.
+std::atomic<int> recordingFov{};
+void spidy::recording_fov::set(int degrees) {
+    recordingFov.store(recording_fov::sanitized(degrees), std::memory_order_relaxed);
+}
 struct Config {
     uint32_t magic, version, bytes, pid;
     uint64_t base;
@@ -75,6 +92,8 @@ __declspec(dllexport) ShadowData SpidyShadowData;
 __declspec(dllexport) Data SpidyStereoData;
 __declspec(dllexport) native_eyes::FrameData SpidyStereoFrames;
 __declspec(dllexport) native_appearance::Data SpidyAppearanceData;
+// Frames in which the eyes marked what they drew for the game (rested, below).
+__declspec(dllexport) volatile LONG64 SpidyDrawnFrames;
 }
 namespace {
 using Maintain = void (*)(void*);
@@ -214,6 +233,19 @@ void* shadowFitting{};
 std::atomic<uintptr_t> tracedJobs[3]{};
 // The game's own view while this module keeps it from rendering (restGameView).
 std::atomic<uintptr_t> rested{};
+// What the player sees, for the game. Each scene submit clears its view's
+// list of drawn instances (1920e54: view +1b80, +1b88 entries) and the view's
+// model jobs mark every instance they draw (1799a7d, through job +2b0).
+// Gameplay reads the lists to know what is on screen: the
+// ViewportUpdateSystem's enter and leave events from the active view's
+// (214f150), and "drawn in any view" from the pool views' (18a1890; for an
+// instance 159e940: pedestrians, targeting, about 60 callers in all).
+// Offscreen views get no list (189ce20 skips kind 2), so the eyes marked
+// nothing, and a resting game view submits no scene, so its list kept the last
+// frame that view drew: from 0.2.12 on nothing the player saw in VR counted as
+// on screen. While the view rests, placeEyes clears its list each frame and
+// the eyes' model jobs mark into it (setupModels); SpidyDrawnFrames counts
+// those frames.
 // The eyes' distances (createViews bit 64 off). A wide lens makes the engine
 // draw a model's detail, and the model itself, only within a shorter distance
 // and ask for its textures only nearer (native_view::distanceScale): an eye's
@@ -506,9 +538,16 @@ void renderActor(void* context, void* actor, uint8_t visibility) {
 // it asked for textures as for the smaller one: two thirds of the detail the
 // headset shows at the default 67%. Its requests are sized for its image, as
 // upscalers are meant to have them; what the job leaves out as too small to
-// see (+300) stays at the rendered size.
+// see (+300) stays at the rendered size. While the game's view rests, an eye's
+// job marks what it draws in that view's list (+2b0; see rested above).
 uint64_t setupModels(void* context, void* job, void* third, uint64_t fourth, uint64_t fifth) {
     const auto result = originalSetupModels(context, job, third, fourth, fifth);
+    if (const auto resting = rested.load(std::memory_order_relaxed);
+        enabled && resting && eyeView(pointer(reinterpret_cast<uintptr_t>(context) + 8)) >= 0) {
+        auto& marks = *reinterpret_cast<uintptr_t*>(static_cast<uint8_t*>(context) + 0x2b0);
+        if (const auto drawn = pointer(resting + 0x1b80); drawn && !marks)
+            marks = drawn;
+    }
     const auto view = enabled && distances ? pointer(reinterpret_cast<uintptr_t>(context) + 8) : 0;
     float half[2]{};
     if (eyeView(view) < 0 || !read(view + 0x420, half, sizeof(half)) || !(half[0] > 0) || !(half[1] > 0))
@@ -1183,6 +1222,17 @@ bool heroPosition(Vec3& position) {
     position = {m[12], m[13], m[14]};
     return true;
 }
+// The lens of the game's own view on the head: the head's lens covering both
+// eyes, or, while RECORDING FOV has that view render for the window
+// (restGameView), the wider one of the window's shape that holds it. The
+// frame's first submit (activeView) and its last (placeEyes) both take it, so
+// what the view culls for and what it renders agree.
+native_eyes::Bounds viewLens(const native_eyes::Bounds& head) {
+    const int degrees = recordingFov.load(std::memory_order_relaxed);
+    return degrees && live.load() == 2 && !native_gpu::screenRequested()
+               ? recording_fov::covering(head, degrees, flatAspect.load())
+               : head;
+}
 // The engine's active view (ViewContextManager +f8) is its first pool view: the
 // stock camera. Offscreen eyes are never active, and the "drawn in any view"
 // (18a1890) and "sphere in any view" (18a12a0) queries visit pool views only.
@@ -1210,14 +1260,17 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
     if (!head.controlled || head.command.enabled != 1)
         return false;
     const auto& pose = head.pose;
-    const auto& lens = head.lens;
+    const auto lens = viewLens(head.lens);
     bool placed = head.viewed;
     if (placed) {
         out = stock;
-        // Keep the stock camera's clip planes and temporal jitter.
-        reinterpret_cast<Lens>(base + 0x1d86f60)(&out, stock.nearZ(), stock.farZ(), lens.left, lens.right,
-                                                 lens.top, lens.bottom, 0, 0, stock.values[0x428 / 4],
-                                                 stock.values[0x42c / 4], false, false);
+        // Keep the stock camera's far plane and temporal jitter. Its near
+        // plane, 10 cm, suits a camera behind the hero; on the head it cut
+        // off hands held up before the face (NEAR CLIP).
+        reinterpret_cast<Lens>(base + 0x1d86f60)(&out, near_clip::metres(), stock.farZ(), lens.left,
+                                                 lens.right, lens.top, lens.bottom, 0, 0,
+                                                 stock.values[0x428 / 4], stock.values[0x42c / 4], false,
+                                                 false);
         reinterpret_cast<SetPose>(base + 0x1d87e70)(&out, pose.data());
         placed = native_view::valid(out);
     }
@@ -1303,6 +1356,19 @@ bool writeByte(uintptr_t p, uint8_t value) {
 bool writeFloat(uintptr_t p, float value) {
     __try {
         *reinterpret_cast<volatile float*>(p) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+// Clears a view's list of drawn instances, as its scene submit does (1920e54).
+bool clearDrawn(uintptr_t view) {
+    __try {
+        const auto drawn = *reinterpret_cast<uint8_t* volatile*>(view + 0x1b80);
+        const auto count = *reinterpret_cast<volatile uint32_t*>(view + 0x1b88);
+        if (!drawn || !count || count >= (1u << 26))
+            return false;
+        std::memset(drawn, 0, count);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -1403,9 +1469,14 @@ void placeEyes() {
         ReleaseSRWLockShared(&commandLock);
     }
     latchedImmersive = render && enabled && controlled && desired.enabled == 1;
-    // The game's view is on the head and both eyes render: it need not.
+    // The game's view is on the head and both eyes render: it need not, unless
+    // RECORDING FOV wants it in the window.
     restGameView(primary, latchedImmersive && (config.createViews & 32) && live.load() == 2 &&
-                              !native_gpu::screenRequested());
+                              !native_gpu::screenRequested() &&
+                              !recordingFov.load(std::memory_order_relaxed));
+    // The eyes' jobs of this frame mark into the resting view's list (see rested).
+    if (const auto resting = rested.load(); resting && clearDrawn(resting))
+        InterlockedIncrement64(&SpidyDrawnFrames);
     // The HUD's second movie goes on its panel while the eyes are shown.
     // On the game screen in stereo only in a frame whose panel went onto
     // that screen (placeScreenHud, earlier in the frame): without the panel
@@ -1470,17 +1541,26 @@ void placeEyes() {
             pose[12] += placed.offset.x;
             pose[13] += placed.offset.y;
             pose[14] += placed.offset.z;
-            auto aligned = main;
-            reinterpret_cast<Lens>(base + 0x1d86f60)(
-                &aligned, main.nearZ(), main.farZ(), lens.left, lens.right, lens.top, lens.bottom,
-                0, 0, main.values[0x428 / 4], main.values[0x42c / 4], false, false);
-            reinterpret_cast<SetPose>(base + 0x1d87e70)(&aligned, pose.data());
+            const auto onHead = [&](const native_eyes::Bounds& b) {
+                auto view = main;
+                reinterpret_cast<Lens>(base + 0x1d86f60)(
+                    &view, near_clip::metres(), main.farZ(), b.left, b.right, b.top, b.bottom, 0, 0,
+                    main.values[0x428 / 4], main.values[0x42c / 4], false, false);
+                reinterpret_cast<SetPose>(base + 0x1d87e70)(&view, pose.data());
+                return view;
+            };
+            const auto aligned = onHead(lens);
             if (native_view::valid(aligned)) {
                 // Covers both eyes: what the first eye fits its shadow cascades to.
                 shadowLens = aligned;
                 shadowLensPass = offscreenPass;
-                if (config.createViews & 8) {
-                    originalSubmit(reinterpret_cast<void*>(primary), &aligned);
+                // The game's view takes RECORDING FOV's wider lens (viewLens), as
+                // at the frame's first submit. The eyes' shadows keep this one:
+                // rendering, the view fits cascades of its own to its own lens.
+                const auto viewed =
+                    recordingFov.load(std::memory_order_relaxed) ? onHead(viewLens(lens)) : aligned;
+                if ((config.createViews & 8) && native_view::valid(viewed)) {
+                    originalSubmit(reinterpret_cast<void*>(primary), &viewed);
                     activeAligned = true;
                 }
             }
@@ -1534,8 +1614,9 @@ void placeEyes() {
             const float aspect = static_cast<float>(config.width) / config.height;
             const auto& fov = desired.eyes[index].fov;
             const auto jitter = eyeJitter();
+            const float nearZ = controlled && desired.enabled == 1 ? near_clip::metres() : main.nearZ();
             reinterpret_cast<Lens>(base + 0x1d86f60)(
-                &descriptor, main.nearZ(), main.farZ(), controlled ? std::tan(fov[0]) : -aspect,
+                &descriptor, nearZ, main.farZ(), controlled ? std::tan(fov[0]) : -aspect,
                 controlled ? std::tan(fov[1]) : aspect, controlled ? -std::tan(fov[3]) : -1,
                 controlled ? -std::tan(fov[2]) : 1, 0, 0, jitter[0], jitter[1], false, false);
             reinterpret_cast<SetPose>(base + 0x1d87e70)(&descriptor, pose.data());

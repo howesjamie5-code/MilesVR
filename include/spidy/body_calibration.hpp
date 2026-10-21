@@ -1,5 +1,6 @@
 #pragma once
 #include "body_ik.hpp"
+#include "ui_style.hpp"
 #include "vertex.hpp"
 #include <array>
 #include <cstdint>
@@ -159,7 +160,11 @@ struct View {
 // The panel (instructions, what to change, the hold's bar; the result once
 // measured) and a ring at each tracked controller that turns green while its
 // arm is in place and fills with the hold. `viewer`: between the eyes.
-void appendView(std::vector<Vertex>& out, const View&, Vec3 viewer);
+// UiStyle::tech draws it as one of the game's menu panels (tech_marks.hpp),
+// translucent: then draw it with what has no depth, after the rest.
+void appendView(std::vector<Vertex>& out, const View&, Vec3 viewer, UiStyle style = UiStyle::comic);
+// The panel's size, metres.
+inline constexpr float panelWidth = 1.2f, panelHeight = .6f;
 // The panel's line for a hint while the pose is not held.
 const char* hintText(Hint);
 } // namespace spidy::body_calibration

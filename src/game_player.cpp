@@ -13,7 +13,7 @@ __declspec(dllexport) DWORD WINAPI SpidyPlayerFind(void* output);
 }
 namespace {
 constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0;
-constexpr uintptr_t heroLocal = 0x3e05ad8, heroMover = 0x3e123d8, moverStandard = 0x57d7700;
+constexpr uintptr_t heroLocal = 0x3e05ad8, heroMover = 0x3e123d8, moverStandard = 0x57d7700, heroHealthTable = 0x3e026c0;
 bool read(uintptr_t p, void* out, size_t n) {
     __try {
         if (p < 0x10000)
@@ -132,6 +132,28 @@ bool game_player::find(uintptr_t base, Player& out) {
     return true;
 }
 
+uint64_t game_player::heroHealth(uintptr_t base, uint64_t record) {
+    Registry r;
+    if (!record || !registry(base, r))
+        return 0;
+    uintptr_t found{};
+    for (uint32_t i = 0; i < r.count; ++i) {
+        uintptr_t address{};
+        uint32_t generation{};
+        if (!read(r.table + i * 16, &address, 8) || !read(r.table + i * 16 + 8, &generation, 4) ||
+            address < 0x10000 || address % 8 || !generation || generation > 0xfff ||
+            pointer(address) != base + heroHealthTable || pointer(address + 8) != record)
+            continue;
+        uint32_t handle{};
+        if (!read(address + 0x14, &handle, 4) || handle != (generation << 20 | i))
+            continue;
+        if (found)
+            return 0;
+        found = address;
+    }
+    return found;
+}
+
 bool game_player::live(uintptr_t base, const Player& p) {
     Registry r;
     return p.hero && registry(base, r) && registered(r, p.hero, base + heroLocal, p.record) &&
@@ -158,18 +180,37 @@ Player Watch::current(uint64_t& changes) const {
     changes = changes_;
     return player_;
 }
+uint64_t Watch::health() const {
+    std::lock_guard lock(lock_);
+    return health_;
+}
 void Watch::run() {
     Player known{};
+    uint64_t health{};
+    auto lookedForHealth = std::chrono::steady_clock::time_point{};
     for (;;) {
         Player next = known;
         // A live player is checked in microseconds; only a lost one is searched for.
         if (!known.hero || !live(base_, known))
             find(base_, next);
+        // His health, searched for once for each player and again should it
+        // go; a hero without one (none there yet) at most every two seconds.
+        Registry r;
+        if (!(next == known) || (health && (!registry(base_, r) ||
+                                            !registered(r, health, base_ + heroHealthTable, next.record)))) {
+            health = 0;
+            lookedForHealth = {};
+        }
+        if (next.hero && !health && std::chrono::steady_clock::now() - lookedForHealth >= std::chrono::seconds(2)) {
+            health = heroHealth(base_, next.record);
+            lookedForHealth = std::chrono::steady_clock::now();
+        }
         std::unique_lock lock(lock_);
         if (!(next == player_)) {
             player_ = next;
             ++changes_;
         }
+        health_ = next.hero ? health : 0;
         known = next;
         // A level change replaces the player within a second or two; look
         // often until it is back, then check it at the headset's pace.

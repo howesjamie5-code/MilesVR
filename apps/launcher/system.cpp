@@ -9,6 +9,7 @@
 #include <wintrust.h>
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -562,6 +563,7 @@ Settings loadSettings() {
         else if (key == "snap_turn") o.snapTurn = std::clamp(number(), 0, 90);
         else if (key == "smooth_turn") o.smoothTurn = std::clamp(number(), 0, 360);
         else if (key == "haptics") o.haptics = std::clamp(number(), 0, 100);
+        else if (key == "body_haptics") o.bodyHaptics = std::clamp(number(), 0, 100);
         else if (key == "screen_size") o.screenSize = std::clamp(number(), 0, 2);
         else if (key == "screen_depth") o.screenDepth = std::clamp(number(), 0, 3);
         else if (key == "hud") o.hud = std::clamp(number(), 0, 3);
@@ -580,6 +582,7 @@ Settings loadSettings() {
         else if (key == "hash") settings.hashValue = value;
         else if (key == "shortcuts_asked") settings.shortcutsAsked = number() != 0;
         else if (key == "update_check") settings.updateCheck = number() != 0;
+        else if (key == "profile") settings.profile = value;
     }
     if (weight)
         settings.options.weight = weight;
@@ -614,14 +617,122 @@ void saveSettings(const Settings& settings) {
          << "\nmonitor_rate=" << o.monitorRate
          << "\nswing_speed=" << o.swingSpeed << "\ngravity_percent=" << o.weight << "\nsnap_turn=" << o.snapTurn
          << "\nsmooth_turn=" << o.smoothTurn
-         << "\nhaptics=" << o.haptics << "\nscreen_size=" << o.screenSize << "\nscreen_depth=" << o.screenDepth
+         << "\nhaptics=" << o.haptics << "\nbody_haptics=" << o.bodyHaptics << "\nscreen_size=" << o.screenSize
+         << "\nscreen_depth=" << o.screenDepth
          << "\nhud=" << o.hud
          << "\nflip_speed=" << o.flipSpeed << "\neye_height_mm=" << o.eyeHeightMm
          << "\narm_length_mm=" << o.armLengthMm << "\ncalibration_prompt=" << o.calibrationPrompt
          << "\nhash_path=" << narrow(settings.hashPath)
          << "\nhash_size=" << settings.hashSize << "\nhash_time=" << settings.hashTime
          << "\nhash=" << settings.hashValue << "\nshortcuts_asked=" << settings.shortcutsAsked
-         << "\nupdate_check=" << settings.updateCheck << "\n";
+         << "\nupdate_check=" << settings.updateCheck << "\nprofile=" << settings.profile << "\n";
+}
+
+// --- Profiles ------------------------------------------------------------------
+
+std::wstring profilesFolder() {
+    const std::wstring appData = knownFolder(FOLDERID_RoamingAppData);
+    return appData.empty() ? std::wstring() : (fs::path(appData) / L"Spidy" / L"profiles").wstring();
+}
+
+namespace {
+fs::path profilePath(const std::string& name) {
+    const std::string file = text::profileFileName(name);
+    const std::wstring folder = profilesFolder();
+    return file.empty() || folder.empty() ? fs::path() : fs::path(folder) / (widen(file) + L".spidy");
+}
+
+// Beside launcher.ini, where the game module keeps them (game_xr.cpp's tabOnlyPath).
+fs::path tabOnlyPath() {
+    const std::wstring appData = knownFolder(FOLDERID_RoamingAppData);
+    return appData.empty() ? fs::path() : fs::path(appData) / L"Spidy" / L"spidy_vr.ini";
+}
+} // namespace
+
+std::vector<SavedProfile> savedProfiles() {
+    std::vector<SavedProfile> profiles;
+    const std::wstring folder = profilesFolder();
+    if (folder.empty())
+        return profiles;
+    std::error_code error;
+    for (fs::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
+        const fs::path& path = it->path();
+        if (_wcsicmp(path.extension().c_str(), L".spidy") != 0 || !isFile(path))
+            continue;
+        if (auto profile = text::readProfile(readTextFile(path.wstring())))
+            profiles.push_back({narrow(path.stem().wstring()), std::move(*profile)});
+    }
+    std::sort(profiles.begin(), profiles.end(), [](const SavedProfile& a, const SavedProfile& b) {
+        return lstrcmpiW(widen(a.name).c_str(), widen(b.name).c_str()) < 0;
+    });
+    return profiles;
+}
+
+bool profileExists(const std::string& name) {
+    const fs::path path = profilePath(name);
+    return !path.empty() && isFile(path);
+}
+
+bool saveProfile(const std::string& name, const std::string& text) {
+    const fs::path path = profilePath(name);
+    if (path.empty())
+        return false;
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    return writeTextFile(path.wstring(), text);
+}
+
+bool deleteProfile(const std::string& name) {
+    const fs::path path = profilePath(name);
+    if (path.empty() || !isFile(path))
+        return false;
+    // Two NULs end SHFileOperation's list of files.
+    std::wstring from = path.wstring();
+    from.push_back(L'\0');
+    SHFILEOPSTRUCTW operation{};
+    operation.wFunc = FO_DELETE;
+    operation.pFrom = from.c_str();
+    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    return SHFileOperationW(&operation) == 0 && !operation.fAnyOperationsAborted;
+}
+
+spidy::vr_settings::Values loadTabOnly() {
+    const fs::path path = tabOnlyPath();
+    return spidy::vr_settings::withTabOnly({}, path.empty() ? std::string() : readText(path, 1 << 16));
+}
+
+bool saveTabOnly(const spidy::vr_settings::Values& values) {
+    const fs::path path = tabOnlyPath();
+    if (path.empty())
+        return false;
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    return writeTextFile(path.wstring(), spidy::vr_settings::tabOnlyText(values));
+}
+
+std::string readTextFile(const std::wstring& path) {
+    std::string bytes = readText(path, 1 << 16);
+    // Notepad's "UTF-16 LE": the byte order mark FF FE, then two bytes a unit.
+    if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF &&
+        static_cast<unsigned char>(bytes[1]) == 0xFE) {
+        std::wstring wide((bytes.size() - 2) / 2, L'\0');
+        std::memcpy(wide.data(), bytes.data() + 2, wide.size() * sizeof(wchar_t));
+        return narrow(wide);
+    }
+    return bytes;
+}
+
+bool writeTextFile(const std::wstring& path, const std::string& text) {
+    const std::wstring written = path + L".new";
+    std::ofstream file(fs::path(written), std::ios::binary | std::ios::trunc);
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    file.close();
+    if (!file) {
+        DeleteFileW(written.c_str());
+        return false;
+    }
+    const DWORD replace = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
+    return MoveFileExW(written.c_str(), path.c_str(), replace) != 0;
 }
 
 // --- Scanner -------------------------------------------------------------------
@@ -1059,6 +1170,46 @@ std::optional<std::wstring> browseForGame(HWND owner, const std::wstring& curren
     }
     dialog->Release();
     return chosen;
+}
+
+namespace {
+// Windows' Open or Save As dialog for a profile file.
+std::optional<std::wstring> profileDialog(HWND owner, bool save, const std::wstring& fileName) {
+    IFileDialog* dialog{};
+    const CLSID kind = save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog;
+    if (FAILED(CoCreateInstance(kind, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+        return std::nullopt;
+    if (save) {
+        const COMDLG_FILTERSPEC filters[] = {{L"Spidy profile", L"*.spidy"}};
+        dialog->SetFileTypes(1, filters);
+        dialog->SetDefaultExtension(L"spidy");
+        dialog->SetFileName(fileName.c_str());
+        dialog->SetTitle(L"Export a Spidy profile");
+    } else {
+        // A profile copied into a text file reads as well.
+        const COMDLG_FILTERSPEC filters[] = {
+            {L"Spidy profiles", L"*.spidy"}, {L"Text files", L"*.txt;*.ini"}, {L"All files", L"*.*"}};
+        dialog->SetFileTypes(3, filters);
+        dialog->SetTitle(L"Import a Spidy profile");
+    }
+    std::optional<std::wstring> chosen;
+    IShellItem* item{};
+    if (SUCCEEDED(dialog->Show(owner)) && SUCCEEDED(dialog->GetResult(&item))) {
+        PWSTR path{};
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+            chosen = path;
+        CoTaskMemFree(path);
+        item->Release();
+    }
+    dialog->Release();
+    return chosen;
+}
+} // namespace
+
+std::optional<std::wstring> browseForProfile(HWND owner) { return profileDialog(owner, false, {}); }
+
+std::optional<std::wstring> browseProfileDestination(HWND owner, const std::wstring& fileName) {
+    return profileDialog(owner, true, fileName);
 }
 
 bool createShortcuts(std::string& error) {

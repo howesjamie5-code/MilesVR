@@ -1,5 +1,6 @@
 #include "spidy/body_calibration.hpp"
 #include "spidy/overlay_text.hpp"
+#include "spidy/tech_marks.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -181,8 +182,7 @@ const char* hintText(Hint hint) {
 }
 
 namespace {
-// The panel, in metres: its size and the colours (linear RGB).
-constexpr float panelWidth = 1.2f, panelHeight = .6f;
+// The panel's colours (linear RGB).
 constexpr Vec3 background{.010f, .012f, .020f}, accent{.62f, .02f, .03f}, white{1, 1, 1}, soft{.78f, .8f, .84f},
     amber{1, .52f, .05f}, green{.1f, .78f, .22f}, grey{.32f, .33f, .38f};
 // Points on the panel: x to the player's right and y up from its centre, z
@@ -234,7 +234,9 @@ void ring(std::vector<Vertex>& v, Vec3 centre, Vec3 view, float inner, float out
 }
 } // namespace
 
-void appendView(std::vector<Vertex>& out, const View& view, Vec3 viewer) {
+void appendView(std::vector<Vertex>& out, const View& view, Vec3 viewer, UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendCalibration(out, view, viewer);
     if (view.phase == Phase::idle || !finite(view.panel.position) || !finite(viewer))
         return;
     const auto& q = view.panel.orientation;

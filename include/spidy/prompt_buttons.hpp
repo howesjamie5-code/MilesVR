@@ -91,9 +91,10 @@ bool reachableInPlay(Demand);
 const char* vrControl(Demand);
 // `text` with the buttons it spells out replaced by the VR controls for
 // them: "LB + RB (Hold) Throw" becomes "RIGHT STICK CLICK (Hold) Throw".
-// `interactServes` (the interact button sends what a live prompt asks for,
-// game_pad::ContextPress) puts "Y" where VR play has no control of its own,
-// so "Tap LB" reads "Tap Y" rather than naming the pad layer.
+// `interactServes` (the interact button sending what a live prompt asks for,
+// which game_pad did until October 20) puts "Y" where VR play has no control
+// of its own, so "Tap LB" reads "Tap Y" rather than naming the pad layer. No
+// session rewrites a text (game_prompts::setRewriting).
 //
 // An icon id is left exactly as it stands. The ids sit inside the UI's own
 // markup, whose form is not known (YUIIconMarkupConfig, with MarkupText,
@@ -112,6 +113,61 @@ size_t rewrite(std::string_view text, char* out, size_t capacity, bool interactS
 // packs to 0. Round trips through unpack.
 uint32_t pack(Demand);
 Demand unpack(uint32_t);
+// What the game names now, kept from its UI's calls by when each came
+// (game_prompts feeds it, under a lock of its own; times are milliseconds).
+// A prompt call's demand lives liveMs after the last call that named or
+// raised it, and its manager's Hide or Clear ends it. A text shown on a
+// channel of its own - ShowText(channel, text, ...) - lives until HideText of
+// that channel or another text on it, channelMs at most: the help line "Hold
+// [BTN_L2] and tap [BTN_R1] to fire webs and seal the leaks" stood on screen
+// through its mission's whole timer, and a subtitle's HideText is its own
+// channel's.
+class LiveDemands {
+  public:
+    static constexpr unsigned channels = 16;
+    static constexpr uint64_t liveMs = 2000, channelMs = 60000;
+    // A prompt call: `word` what its text named (pack; 0 for none), `clears`
+    // its manager taking a prompt away.
+    void call(uint64_t now, uint32_t word, bool clears) {
+        if (clears) {
+            live_ = 0;
+        } else if (word) {
+            live_ = word;
+            fresh_ = now;
+        } else if (live_) {
+            fresh_ = now;
+        }
+    }
+    // ShowText on `channel` (clears false) or HideText (clears true).
+    void text(uint64_t now, unsigned channel, uint32_t word, bool clears) {
+        if (channel >= channels)
+            return;
+        texts_[channel] = clears ? 0 : word;
+        at_[channel] = now;
+    }
+    // Everything live at `now`, together; what has run out is dropped.
+    Demand demand(uint64_t now) {
+        Demand out;
+        if (live_ && now - fresh_ > liveMs)
+            live_ = 0;
+        if (live_)
+            out |= unpack(live_);
+        for (unsigned c = 0; c < channels; ++c) {
+            if (texts_[c] && now - at_[c] > channelMs)
+                texts_[c] = 0;
+            if (texts_[c])
+                out |= unpack(texts_[c]);
+        }
+        return out;
+    }
+    void clear() {
+        *this = {};
+    }
+
+  private:
+    uint32_t live_{}, texts_[channels]{};
+    uint64_t fresh_{}, at_[channels]{};
+};
 // Every control of the pad the game can ask for, so a check can cover them
 // all instead of the ones a player has reported.
 struct Control {

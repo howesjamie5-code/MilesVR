@@ -2,6 +2,7 @@
 // game's own web-shooter shots fired through the hero's gadget on the main
 // thread, and what they do where they land (game_shooter.hpp).
 #include "spidy/game_shooter.hpp"
+#include "spidy/gadget_wheel.hpp"
 #include "spidy/game_warp.hpp"
 #include "spidy/game_targets.hpp"
 #include "spidy/native_bodies.hpp"
@@ -53,11 +54,34 @@ constexpr uint32_t collisionEvent = 0xd930bcb2, hitActorField = 0x21eb297b, hitP
 constexpr uintptr_t findInTableRva = 0x1b844b0, findInListRva = 0x1b85650, weaponManagerType = 0x78446a0,
                     weaponManagerTable = 0x3e160d8, weaponByIdRva = 0x266feb0, ammoNowRva = 0x10759f0,
                     ammoMostRva = 0x1075a70;
-constexpr uintptr_t gadgetTables[] = {0x3eec7b8, 0x3eeb990, 0x3eebe38, 0x3ee81e0, 0x3eea6e0,
-                                      0x3eeb030, 0x3eeb4e0, 0x3ee7698, 0x3ee8ff0};
+// MilesVR: Miles's own three last (WeaponRemoteTrap, WeaponPeopleSucker,
+// WeaponHoloAllyBot, MilesMorales.exe only), their slots +0x108 to +0x190 the
+// shared ones above, as checked as the module starts.
+constexpr uintptr_t gadgetTables[] = {0x3eec7b8, 0x3eeb990, 0x3eebe38, 0x3ee81e0, 0x3eea6e0, 0x3eeb030,
+                                      0x3eeb4e0, 0x3ee7698, 0x3ee8ff0, 0x3eeab80, 0x3ee9e08, 0x3ee8b40};
 // Each gadget's own part of its fire event (vtable +0x100), in that order.
-constexpr uintptr_t gadgetFills[] = {0x10967d0, 0x1094370, 0x1094a90, 0x108bb90, 0x1090f50,
-                                     0x1093560, 0x1093b90, 0x10869e0, 0x108d340};
+constexpr uintptr_t gadgetFills[] = {0x10967d0, 0x1094370, 0x1094a90, 0x108bb90, 0x1090f50, 0x1093560,
+                                     0x1093b90, 0x10869e0, 0x108d340, 0x1092ac0, 0x108e9e0, 0x108c7d0};
+static_assert(std::size(gadgetTables) == static_cast<size_t>(Gadget::holoDrone) &&
+              std::size(gadgetFills) == std::size(gadgetTables));
+// The game's charged Web Shooter gadget, which the wheel does not list.
+constexpr size_t unlisted = static_cast<size_t>(Gadget::gameWebShooter) - 1;
+// A gadget's place round the wheel: Peter's where Spider-Man's own wheel has
+// them; Miles's four as a cross, the web shooter at the top, the Remote Mine
+// right, the Gravity Well at the bottom, the Holo Drone left, so a short move
+// of the hand any of four ways picks one.
+uint8_t wheelPlace(Gadget g) {
+    switch (g) {
+    case Gadget::remoteMine:
+        return 2;
+    case Gadget::gravityWell:
+        return 4;
+    case Gadget::holoDrone:
+        return 6;
+    default:
+        return static_cast<uint8_t>(static_cast<int>(g) - 1);
+    }
+}
 // Equipping one, as the game's own wheel does (791c20, 793320): the hero's
 // GameInventoryManager (by its type), its GameEquipInventory (bbfba0), whose
 // items (its vtable +0x3a0 the count, +0x1b0 one by index) are weapons at
@@ -643,12 +667,12 @@ void listGadgets() {
                 const auto weapon = id ? weaponById(manager, id) : 0;
                 const auto table = weapon ? pointer(weapon) : 0;
                 uint8_t kind{};
-                for (size_t k = 0; k < 8; ++k)
-                    if (table == base + gadgetTables[k])
+                for (size_t k = 0; k < std::size(gadgetTables); ++k)
+                    if (k != unlisted && table == base + gadgetTables[k])
                         kind = static_cast<uint8_t>(k + 1);
                 if (kind && std::none_of(found, found + count, [&](const Owned& o) { return o.kind == kind; })) {
                     const uint8_t most = charges(ammo(ammoMostRva, weapon));
-                    found[count++] = {id, kind, static_cast<uint8_t>(kind - 1),
+                    found[count++] = {id, kind, wheelPlace(static_cast<Gadget>(kind)),
                                       most ? std::min(charges(ammo(ammoNowRva, weapon)), most) : uint8_t{}, most};
                 }
                 return count >= 8;
@@ -673,8 +697,8 @@ uintptr_t equippedGadget() {
         return 0;
     const auto weapon = weaponById(listedManager, listedEquipped);
     const auto table = weapon ? pointer(weapon) : 0;
-    for (size_t k = 1; k < 8; ++k)
-        if (table == base + gadgetTables[k] && pointer(table + 0x100) == base + gadgetFills[k])
+    for (size_t k = 1; k < std::size(gadgetTables); ++k)
+        if (k != unlisted && table == base + gadgetTables[k] && pointer(table + 0x100) == base + gadgetFills[k])
             return weapon;
     return 0;
 }

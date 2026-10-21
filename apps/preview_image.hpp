@@ -120,12 +120,15 @@ inline void draw(Image& image, const std::vector<Vertex>& vertices, const Camera
         const int bottom = std::min(y0 + h - 1, static_cast<int>(std::ceil(std::max({y[0], y[1], y[2]}))));
         for (int py = top; py <= bottom; ++py)
             for (int px = left; px <= right; ++px) {
-                const float sx = static_cast<float>(px) + .5f, sy = static_cast<float>(py) + .5f;
+                // A centre on an edge two triangles share belongs to one of them, as on the GPU: the sample
+                // sits a hair off the centre, so no edge runs through it, and a translucent mark's seams are
+                // not blended twice.
+                const float sx = static_cast<float>(px) + .5f + 1.7e-4f;
+                const float sy = static_cast<float>(py) + .5f + 3.1e-4f;
                 const float b0 = ((x[1] - sx) * (y[2] - sy) - (x[2] - sx) * (y[1] - sy)) / area;
                 const float b1 = ((x[2] - sx) * (y[0] - sy) - (x[0] - sx) * (y[2] - sy)) / area;
                 const float b2 = 1 - b0 - b1;
-                // (A centre on an edge two triangles share belongs to one of them, as on the GPU.)
-                if (b0 < -1e-4f || b1 < -1e-4f || b2 < -1e-4f)
+                if (b0 < 0 || b1 < 0 || b2 < 0)
                     continue;
                 const float a = std::clamp(
                     vertices[i].alpha * b0 + vertices[i + 1].alpha * b1 + vertices[i + 2].alpha * b2, 0.f, 1.f);

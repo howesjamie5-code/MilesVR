@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -47,10 +48,13 @@ Trace trace;
 Rule rule;
 std::atomic<bool> hooked{};
 
+size_t readable(const void* p, size_t want);
+// Memory of the game's, read only where Windows says it can be (readable): the
+// guard below is a second line, not the first.
 bool read(uintptr_t p, void* out, size_t n) {
+    if (p < 0x10000 || readable(reinterpret_cast<const void*>(p), n) < n)
+        return false;
     __try {
-        if (p < 0x10000)
-            return false;
         std::memcpy(out, reinterpret_cast<void*>(p), n);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -185,6 +189,8 @@ struct Call {
     bool clears;
     // The argument holding a text to read the buttons out of, or -1 for none.
     int text = -1;
+    // Its first argument is the channel the text shows on (ShowText's own).
+    bool channel = false;
 };
 constexpr Call promptCalls[] = {
     {0x3df0988, false}, // ShowPlaceablePrompt
@@ -199,8 +205,8 @@ constexpr Call promptCalls[] = {
     // 13: ShowText(channel, text, ...) through this same wrapper, its text
     // naming its buttons as `[BTN_B]`. HideText(channel, ...) ends it. The
     // localized lookup never carried one of these texts, in two sessions.
-    {0x57ac648, false, 1}, // ShowText
-    {0x57ac658, true},     // HideText
+    {0x57ac648, false, 1, true}, // ShowText
+    {0x57ac658, true, -1, true}, // HideText
 };
 static_assert(std::size(promptCalls) == callNames);
 std::atomic<bool> reading{}, rewriting{};
@@ -213,24 +219,37 @@ uint32_t callAt{};
 const char* censusAt[censusNames]{};
 // When the list started, so every line can carry its own moment.
 uint64_t ringStart{};
-// Appends one line to the ring (the lock held), stamped with the time.
+// Appends one line to the ring (the lock held), stamped with the time, cut to
+// the ring's width. A call's line alone can fill callChars - 1 (formatCall
+// stops a text where the line ends), and until October 20 the stamp went in
+// front of it through sprintf_s into a buffer of that same width: any prompt
+// whose text ran past about a hundred characters - a help line, a subtitle,
+// the flood of them a save's load brings - overflowed it, and sprintf_s ends
+// the process for that, with no exception to catch and no crash dump - which
+// is how the reading's deaths of October 13 went (CONTINUE at the main menu,
+// every time; the free roam of profile 1, seconds after the reading went on),
+// and why sessions had it off since.
 void keepLine(const char* text) {
     const uint64_t now = GetTickCount64();
     if (!ringStart)
         ringStart = now;
-    char stamped[callChars];
-    sprintf_s(stamped, "%6llu %s", static_cast<unsigned long long>(now - ringStart), text);
-    strncpy_s(seenCalls.line[callAt], stamped, _TRUNCATE);
+    _snprintf_s(seenCalls.line[callAt], callChars, _TRUNCATE, "%6llu %s",
+                static_cast<unsigned long long>(now - ringStart), text);
     callAt = (callAt + 1) % callLines;
     if (seenCalls.count < callLines)
         ++seenCalls.count;
 }
-std::atomic<uint32_t> livePacked{}, lastPacked{}, beyondPlay{}, keyboardTexts{};
-// Whether the UI's calls are looked at at all. Off for a session until the
-// October 13 death on a save load is found; SpidyPromptsWatch turns it on for
-// a probe, which is where it gets found.
+std::atomic<uint32_t> lastPacked{}, beyondPlay{}, keyboardTexts{};
+// What is live now (prompt_buttons::LiveDemands: a prompt call's demand for
+// liveMs, a channel's text until that channel is hidden). Written from the
+// game's UI thread, read from the VR thread.
+SRWLOCK demandLock = SRWLOCK_INIT;
+prompt_buttons::LiveDemands liveDemands;
+// Whether the UI's calls are looked at at all: in every session since October
+// 20 (the reading's deaths were keepLine's), unless the launcher's
+// --no-prompt-help says otherwise; SpidyPromptsWatch for a probe.
 std::atomic<bool> observing{};
-std::atomic<uint64_t> invokes{}, promptCallsSeen{}, raised{}, cleared{}, named{}, rewrote{}, freshAt{};
+std::atomic<uint64_t> invokes{}, promptCallsSeen{}, raised{}, cleared{}, named{}, rewrote{};
 // The rewritten lines, kept in turn so a pointer handed to the game stays
 // good while its text field reads it.
 constexpr unsigned lineCount = 8, lineChars = 512;
@@ -267,35 +286,50 @@ void __fastcall resolveHook(void* self, void* field, const char* text) {
 } // namespace
 
 namespace {
-// The buttons a prompt's own text names, published as the live demand. The
-// text is a Scaleform string, managed or not (game_menu's layout).
-void readPromptText(const GfxValue* value) {
+// The buttons a prompt's own text names, packed (prompt_buttons::pack); 0 for
+// none. The text is a Scaleform string, managed or not (game_menu's layout).
+uint32_t readPromptText(const GfxValue* value) {
     GfxValue v;
     if (!value || !readValue(value, v) || (v.type & 0x8f) != 6)
-        return;
+        return 0;
     uintptr_t p = v.data;
     if ((v.type & 0x40) && !read(p, &p, sizeof(p)))
-        return;
+        return 0;
     if (p < 0x10000)
-        return;
+        return 0;
     char seen[lineChars];
     const size_t length = copyText(reinterpret_cast<const char*>(p), seen, sizeof(seen));
     if (!length)
-        return;
+        return 0;
     const std::string_view view(seen, length);
     const auto asked = prompt_buttons::forText(view);
     if (!asked.any()) {
         if (asked.keyboard)
             keyboardTexts.fetch_add(1, std::memory_order_relaxed);
-        return;
+        return 0;
     }
     const uint32_t word = prompt_buttons::pack(asked);
-    livePacked.store(word, std::memory_order_relaxed);
     lastPacked.store(word, std::memory_order_relaxed);
-    freshAt.store(GetTickCount64(), std::memory_order_relaxed);
     named.fetch_add(1, std::memory_order_relaxed);
     if (!prompt_buttons::reachableInPlay(asked))
         beyondPlay.fetch_add(1, std::memory_order_relaxed);
+    return word;
+}
+// The channel a ShowText or HideText names: its first argument, a whole
+// number below LiveDemands::channels; -1 for anything else.
+int readChannel(const GfxValue* args, uint32_t count) {
+    GfxValue v;
+    if (!args || !count || !readValue(args, v))
+        return -1;
+    const uint32_t type = v.type & 0x8f;
+    double number = -1;
+    if (type == 5)
+        std::memcpy(&number, &v.data, sizeof(number));
+    else if (type == 2 || type == 3 || type == 4)
+        number = static_cast<int32_t>(v.data);
+    if (!(number >= 0 && number < prompt_buttons::LiveDemands::channels) || number != std::floor(number))
+        return -1;
+    return static_cast<int>(number);
 }
 } // namespace
 
@@ -304,8 +338,11 @@ void game_prompts::setObserving(bool on) {
 }
 void game_prompts::setReading(bool on) {
     reading.store(on, std::memory_order_relaxed);
-    if (!on)
-        livePacked.store(0, std::memory_order_relaxed);
+    if (on)
+        return;
+    AcquireSRWLockExclusive(&demandLock);
+    liveDemands.clear();
+    ReleaseSRWLockExclusive(&demandLock);
 }
 
 void game_prompts::setRewriting(bool on) {
@@ -414,37 +451,41 @@ void game_prompts::observeCall(uintptr_t imageBase, const char* name, const void
         if (call.name != offset)
             continue;
         promptCallsSeen.fetch_add(1, std::memory_order_relaxed);
+        const auto values = static_cast<const GfxValue*>(args);
+        const bool reads = reading.load(std::memory_order_relaxed);
         // A call that carries a text: its buttons are the demand.
-        if (call.text >= 0 && args && count > static_cast<uint32_t>(call.text) &&
-            reading.load(std::memory_order_relaxed))
-            readPromptText(static_cast<const GfxValue*>(args) + call.text);
+        const uint32_t word = call.text >= 0 && args && count > static_cast<uint32_t>(call.text) && reads
+                                  ? readPromptText(values + call.text)
+                                  : 0;
         // The call with its arguments, for the session report.
         char line[callChars];
-        formatCall(name, static_cast<const GfxValue*>(args), count, line, sizeof(line));
+        formatCall(name, values, count, line, sizeof(line));
         AcquireSRWLockExclusive(&callLock);
         ++seenCalls.perName[index];
         keepLine(line);
         ReleaseSRWLockExclusive(&callLock);
-        if (call.clears) {
-            // Its manager says the prompt is gone: no demand outlives it.
-            livePacked.store(0, std::memory_order_relaxed);
-            cleared.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            raised.fetch_add(1, std::memory_order_relaxed);
-            if (livePacked.load(std::memory_order_relaxed))
-                freshAt.store(GetTickCount64(), std::memory_order_relaxed);
-        }
+        (call.clears ? cleared : raised).fetch_add(1, std::memory_order_relaxed);
+        // A channel's text: what it names stands until that channel is hidden
+        // or shows another text. Any other call: its demand for liveMs, and its
+        // manager's Hide or Clear ends it (LiveDemands).
+        const int channel = call.channel ? readChannel(values, count) : -1;
+        AcquireSRWLockExclusive(&demandLock);
+        if (channel < 0)
+            liveDemands.call(GetTickCount64(), word, call.clears);
+        else if (call.clears || reads)
+            liveDemands.text(GetTickCount64(), static_cast<unsigned>(channel), word, call.clears);
+        ReleaseSRWLockExclusive(&demandLock);
         return;
     }
 }
 
 // The game's localized text, on its way to its UI.
 //
-// This no longer reads it, and October 13 is why: with the reading on, loading
-// a save killed the game every time - the process simply gone, no crash dump -
-// while the same save with the reading off loaded and played. Measured both
-// ways, twice each. A load resolves a flood of the game's texts, and walking
-// every one of them as a C string is a bet this lost.
+// This no longer reads it. On October 13, with the reading on, loading a save
+// killed the game every time - the process simply gone, no crash dump - and
+// this walk of every text the load resolves was the first suspect. It was not
+// the cause: the deaths were keepLine's (October 20, measured in the game with
+// and without its fix), and the walk asks Windows before it reads (readable).
 //
 // The prompts never needed it. The vent's own text arrived as an ARGUMENT of
 // POIInteractAvailable - `POIInteractAvailable(5, 0, '[BTN_Y] Enter')` -
@@ -632,16 +673,10 @@ void game_prompts::recentCalls(Calls& out) {
 }
 
 prompt_buttons::Demand game_prompts::demand() {
-    const uint32_t word = livePacked.load(std::memory_order_relaxed);
-    if (!word)
-        return {};
-    if (GetTickCount64() - freshAt.load(std::memory_order_relaxed) > liveMs) {
-        // Nothing has named it for liveMs: the prompt is taken as gone even
-        // where its manager's Hide was missed.
-        livePacked.store(0, std::memory_order_relaxed);
-        return {};
-    }
-    return prompt_buttons::unpack(word);
+    AcquireSRWLockExclusive(&demandLock);
+    const auto out = liveDemands.demand(GetTickCount64());
+    ReleaseSRWLockExclusive(&demandLock);
+    return out;
 }
 
 Live game_prompts::live() {

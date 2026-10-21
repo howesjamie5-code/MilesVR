@@ -6,6 +6,8 @@
 *.user
 __pycache__/
 /dist/
+# The bHaptics Developer Portal app a local build plays body haptics as (CMakeLists.txt).
+/bhaptics-app.local
 # The phone's songs, in a checkout the launcher's folder (phone_music.hpp).
 /Music/
 /.claude/settings.local.json

@@ -1,10 +1,13 @@
 #include "spidy/web_visual.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/overlay_text.hpp"
+#include "spidy/soft_shapes.hpp"
+#include "spidy/tech_marks.hpp"
 #include <string>
 
 namespace spidy {
 namespace {
+using soft::perpendicular, soft::quad, soft::softArc, soft::softBar, soft::softTriangle;
 constexpr float pi = 3.14159265f;
 constexpr float braid = .075f; // metres per visible twist of the strand
 Vec3 mix(Vec3 a, Vec3 b, float t) {
@@ -12,12 +15,6 @@ Vec3 mix(Vec3 a, Vec3 b, float t) {
 }
 Vec3 brightest(Vec3 c) {
     return {std::min(c.x, 1.f), std::min(c.y, 1.f), std::min(c.z, 1.f)};
-}
-void quad(std::vector<Vertex>& out, const Vertex& a, const Vertex& b, const Vertex& c, const Vertex& d) {
-    out.insert(out.end(), {a, b, c, a, c, d});
-}
-Vec3 perpendicular(Vec3 d) {
-    return normalized(cross(d, std::abs(d.y) < .9f ? Vec3{0, 1, 0} : Vec3{1, 0, 0}));
 }
 float halfWidth(const WebLook& look, Vec3 viewer, Vec3 p, float pixelAngle, float radius) {
     return std::max(radius, .5f * look.minPixels * pixelAngle * length(viewer - p));
@@ -36,82 +33,6 @@ void glob(std::vector<Vertex>& out, Vec3 center, Vec3 viewer, float radius, Vec3
         const Vec3 p0 = center + (a * std::cos(t0) + b * std::sin(t0)) * radius;
         const Vec3 p1 = center + (a * std::cos(t1) + b * std::sin(t1)) * radius;
         out.insert(out.end(), {{center, color}, {p0, color * .8f}, {p1, color * .8f}});
-    }
-}
-// Soft-edged shapes for the aim markers: at `alpha` inside, fading to nothing
-// across `soft` metres at every edge, so their outlines stay smooth without
-// multisampling while they move by fractions of a pixel.
-//
-// An arc of a flat ring around c in the plane of unit axes a and b, from
-// angle t0 to t1 (a whole ring when they span 2 pi) in `segments` pieces a
-// whole turn, between radii inner and outer (0: a disc); its inner edge
-// fades across `innerSoft` instead when that is given.
-void softArc(std::vector<Vertex>& out, Vec3 c, Vec3 a, Vec3 b, float inner, float outer, float t0, float t1,
-             Vec3 color, float alpha, float soft, int segments, float innerSoft = -1) {
-    const bool whole = t1 - t0 > 2 * pi - 1e-3f;
-    const int pieces = std::max(2, static_cast<int>(std::ceil((t1 - t0) / (2 * pi) * segments)));
-    const float radii[4] = {std::max(inner - (innerSoft >= 0 ? innerSoft : soft), 0.f), inner, outer, outer + soft};
-    const float alphas[4] = {inner > 0 ? 0.f : alpha, alpha, alpha, 0};
-    const auto at = [&](float t, int k, float opacity) {
-        return Vertex{c + (a * std::cos(t) + b * std::sin(t)) * radii[k], color, opacity};
-    };
-    const int first = inner > 0 ? 0 : 1; // a disc has no inner edge
-    for (int i = 0; i < pieces; ++i) {
-        const float u0 = t0 + (t1 - t0) * i / pieces, u1 = t0 + (t1 - t0) * (i + 1) / pieces;
-        for (int k = first; k < 3; ++k)
-            quad(out, at(u0, k, alphas[k]), at(u1, k, alphas[k]), at(u1, k + 1, alphas[k + 1]),
-                 at(u0, k + 1, alphas[k + 1]));
-    }
-    if (whole)
-        return;
-    // Each end fades out along the ring.
-    const float cap = soft / std::max((inner + outer) / 2, 1e-6f);
-    for (const float end : {t0, t1}) {
-        const float beyond = end == t0 ? t0 - cap : t1 + cap;
-        for (int k = first; k < 3; ++k)
-            quad(out, at(end, k, alphas[k]), at(beyond, k, 0), at(beyond, k + 1, 0), at(end, k + 1, alphas[k + 1]));
-    }
-}
-// A flat bar from p to q across the line of sight `view`, its ends squared
-// off half its width beyond them so two bars close a corner.
-void softBar(std::vector<Vertex>& out, Vec3 p, Vec3 q, Vec3 view, float halfWidth, Vec3 color, float alpha,
-             float soft) {
-    const Vec3 along = normalized(q - p), side = normalized(cross(q - p, view));
-    const float span = length(q - p);
-    const float x[4] = {-halfWidth - soft, -halfWidth, span + halfWidth, span + halfWidth + soft};
-    const float y[4] = {-halfWidth - soft, -halfWidth, halfWidth, halfWidth + soft};
-    const auto at = [&](int i, int j) {
-        return Vertex{p + along * x[i] + side * y[j], color, i % 3 && j % 3 ? alpha : 0.f};
-    };
-    for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 3; ++j)
-            quad(out, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
-}
-// A flat triangle across the line of sight `view`, grown `grow` past its
-// corners' edges and then fading out across `soft`.
-void softTriangle(std::vector<Vertex>& out, std::array<Vec3, 3> p, Vec3 view, Vec3 color, float alpha, float grow,
-                  float soft) {
-    const Vec3 centre = (p[0] + p[1] + p[2]) / 3;
-    std::array<Vec3, 3> outward{}, mitre{};
-    for (int i = 0; i < 3; ++i) {
-        const Vec3 normal = normalized(cross(p[(i + 1) % 3] - p[i], view));
-        outward[i] = dot(normal, (p[i] + p[(i + 1) % 3]) * .5f - centre) < 0 ? -normal : normal;
-    }
-    // A corner moves out along the bisector of its edges' normals, far
-    // enough to move both edges out by one unit, but no more than three.
-    for (int i = 0; i < 3; ++i) {
-        const Vec3 bisector = normalized(outward[(i + 2) % 3] + outward[i]);
-        mitre[i] = bisector / std::max(dot(bisector, outward[i]), 1.f / 3);
-    }
-    std::array<Vec3, 3> inside{}, edge{};
-    for (int i = 0; i < 3; ++i) {
-        inside[i] = p[i] + mitre[i] * grow;
-        edge[i] = p[i] + mitre[i] * (grow + soft);
-    }
-    out.insert(out.end(), {{inside[0], color, alpha}, {inside[1], color, alpha}, {inside[2], color, alpha}});
-    for (int i = 0; i < 3; ++i) {
-        const int j = (i + 1) % 3;
-        quad(out, {inside[i], color, alpha}, {inside[j], color, alpha}, {edge[j], color, 0}, {edge[i], color, 0});
     }
 }
 // Each hand's aim markers in their own colour (linear RGB): sky blue for the
@@ -395,7 +316,10 @@ void appendWeb(std::vector<Vertex>& out, const WebLine& web, Vec3 viewer, float 
     }
     glob(out, center + normal * .002f, viewer, halfWidth(look, viewer, center, pixelAngle, .026f), look.core);
 }
-void appendAimMarker(std::vector<Vertex>& out, const AimMarker& marker, Vec3 viewer, float pixelAngle) {
+void appendAimMarker(std::vector<Vertex>& out, const AimMarker& marker, Vec3 viewer, float pixelAngle,
+                     UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendAimMarker(out, marker, viewer, pixelAngle);
     const float distance = length(viewer - marker.point);
     const float opacity = std::isfinite(marker.opacity) ? std::clamp(marker.opacity, 0.f, 1.f) : 0.f;
     if (!finite(marker.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
@@ -501,7 +425,9 @@ Vec3 onAimLine(Vec3 point, Vec3 normal, Vec3 origin, Vec3 direction) {
                : point;
 }
 void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view, Pose hand, Vec3 viewer,
-                           float pixelAngle, float seconds) {
+                           float pixelAngle, float seconds, UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendSlowMotionMeter(out, view, hand, viewer, pixelAngle, seconds);
     const float opacity = std::isfinite(view.meter) ? std::clamp(view.meter, 0.f, 1.f) : 0.f;
     if (opacity <= 0 || !finite(hand.position) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0)
         return;
@@ -547,7 +473,10 @@ void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view,
             softTriangle(out, shape, view3, shadow ? shadowColor : mix(glass, fill, .35f),
                          opacity * (shadow ? .55f : .9f), shadow ? 1.2f * px : 0.f, shadow ? 1.6f * px : soft);
 }
-void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle) {
+void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle,
+                  UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendImpact(out, impact, viewer, pixelAngle);
     const float distance = length(viewer - impact.point);
     if (!finite(impact.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
         !std::isfinite(impact.age) || impact.age < 0 || impact.age > ImpactView::seconds ||
@@ -618,7 +547,9 @@ void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewe
                      [&] { print.text(text, {width * -.5f, height * -.5f}, height, .2f, plate::yellow); });
     }
 }
-void appendCue(std::vector<Vertex>& out, const CueView& cue, Vec3 viewer, float pixelAngle) {
+void appendCue(std::vector<Vertex>& out, const CueView& cue, Vec3 viewer, float pixelAngle, UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendCue(out, cue, viewer, pixelAngle);
     const float distance = length(viewer - cue.point);
     if (!finite(cue.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
         !std::isfinite(cue.left) || cue.left <= 0 || !std::isfinite(cue.age) || cue.age < 0 ||
@@ -714,7 +645,10 @@ void appendCue(std::vector<Vertex>& out, const CueView& cue, Vec3 viewer, float 
         print.line(tip, neck - across * (size * .4f), size * .085f, fill, false);
     });
 }
-void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle) {
+void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle,
+                    UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendKnockout(out, knockout, viewer, pixelAngle);
     const float distance = length(viewer - knockout.point);
     if (!finite(knockout.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
         !std::isfinite(knockout.age) || knockout.age < 0 || knockout.age >= KnockoutView::seconds ||
@@ -844,7 +778,10 @@ bool senseShows(SenseAnswer answer, float age, float left, float broken, float p
            pixelAngle > 0;
 }
 } // namespace
-void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle) {
+void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, float pixelAngle,
+                 UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendSense(out, sense, viewer, pixelAngle);
     const float away = length(viewer - sense.point);
     if (!finite(sense.point) || !finite(viewer) || !(away >= .3f && away <= 60) ||
         !senseShows(sense.answer, sense.age, sense.left, sense.broken, pixelAngle))
@@ -866,7 +803,9 @@ void appendSense(std::vector<Vertex>& out, const SenseView& sense, Vec3 viewer, 
     senseMark(print, sense.answer, s, sense.left, sense.timed, sense.age, sense.broken);
 }
 void appendSenseSight(std::vector<Vertex>& out, const SenseSightView& view, Pose head, float pixelAngle,
-                      const SenseSightConfig& config) {
+                      const SenseSightConfig& config, UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendSenseSight(out, view, head, pixelAngle, config);
     const float across = std::sqrt(view.sight.x * view.sight.x + view.sight.y * view.sight.y);
     if (!view.sight.shown || !finite(head.position) || !(across > .5f && across < 2) ||
         !senseShows(view.answer, view.age, view.left, view.broken, pixelAngle))
@@ -925,6 +864,254 @@ void appendSenseSight(std::vector<Vertex>& out, const SenseSightView& view, Pose
             }
         }
     });
+}
+namespace {
+// A gadget's picture on its badge, `s` the badge's radius, in strokes of
+// `color`: what the gadget does, as a sign painter would draw it.
+void gadgetPicture(Print& print, Gadget g, Flat at, float s, Vec3 color) {
+    const auto p = [&](float x, float y) { return Flat{at.x + x * s, at.y + y * s}; };
+    const auto round = [&](float r, float a) { return p(r * std::cos(a), r * std::sin(a)); };
+    const float h = .085f * s; // a stroke's half width
+    switch (g) {
+    case Gadget::webShooter:
+        // A web: six spokes and two rounds strung between them.
+        for (int k = 0; k < 6; ++k) {
+            const float a = pi / 2 + pi / 3 * static_cast<float>(k), b = a + pi / 3;
+            print.line(at, round(.68f, a), h * .7f, color);
+            print.line(round(.34f, a), round(.34f, b), h * .55f, color);
+            print.line(round(.62f, a), round(.62f, b), h * .55f, color);
+        }
+        break;
+    case Gadget::impactWeb:
+        // The burst of a web ball that lands hard.
+        print.star(at, .3f * s, .68f * s, 8, .4f, color);
+        break;
+    case Gadget::webBomb:
+        // A round bomb, its fuse alight.
+        print.disc(p(-.08f, -.12f), .42f * s, color);
+        print.line(p(.2f, .2f), p(.34f, .4f), h, color);
+        print.star(p(.4f, .48f), .06f * s, .18f * s, 6, 1.1f, color);
+        break;
+    case Gadget::electricWeb:
+        // A bolt.
+        print.line(p(.26f, .66f), p(-.18f, .06f), h * 1.4f, color);
+        print.line(p(-.18f, .06f), p(.18f, .06f), h * 1.4f, color, false);
+        print.line(p(.18f, .06f), p(-.26f, -.66f), h * 1.4f, color, false);
+        break;
+    case Gadget::tripMine:
+        // A mine on a wall, its line across to the next.
+        print.disc(p(-.36f, 0), .22f * s, color);
+        print.line(p(-.36f, 0), p(.56f, 0), h * .7f, color);
+        print.line(p(.56f, -.28f), p(.56f, .28f), h, color);
+        break;
+    case Gadget::concussionBlast:
+        // A blast of air, its rings going out from where it went off.
+        print.disc(p(-.44f, 0), .12f * s, color);
+        for (int k = 0; k < 3; ++k)
+            print.ring(p(-.44f, 0), (.34f + .22f * static_cast<float>(k)) * s, h * .75f, color, -.9f, .9f);
+        break;
+    case Gadget::spiderDrone: {
+        // A spider: its body, its head and eight legs.
+        print.disc(p(0, -.1f), .2f * s, color);
+        print.disc(p(0, .16f), .12f * s, color);
+        static constexpr Flat knees[4] = {{.3f, .24f}, {.36f, .1f}, {.36f, -.1f}, {.28f, -.26f}};
+        static constexpr Flat feet[4] = {{.44f, .52f}, {.62f, .16f}, {.6f, -.24f}, {.44f, -.56f}};
+        for (const float side : {-1.f, 1.f})
+            for (int k = 0; k < 4; ++k) {
+                const Flat knee = p(side * knees[k].x, knees[k].y), foot = p(side * feet[k].x, feet[k].y);
+                print.line(p(side * .1f, -.04f), knee, h * .5f, color);
+                print.line(knee, foot, h * .5f, color, false);
+            }
+        break;
+    }
+    case Gadget::suspensionMatrix:
+        // The field that lifts what it catches: an orb, two orbits crossing
+        // round it.
+        print.disc(at, .2f * s, color);
+        for (const float tilt : {.45f, -.45f}) {
+            constexpr int pieces = 18;
+            Flat from{};
+            for (int k = 0; k <= pieces; ++k) {
+                const float t = 2 * pi * static_cast<float>(k) / pieces;
+                const float x = .64f * std::cos(t), y = .24f * std::sin(t);
+                const Flat to =
+                    p(x * std::cos(tilt) - y * std::sin(tilt), x * std::sin(tilt) + y * std::cos(tilt));
+                if (k)
+                    print.line(from, to, h * .55f, color, k == 1);
+                from = to;
+            }
+        }
+        break;
+    case Gadget::remoteMine:
+        // Miles's Remote Mine: a round mine, its light in the middle, and the
+        // remote's signal going out to it in two arcs.
+        print.disc(p(-.2f, -.2f), .3f * s, color);
+        print.disc(p(.24f, .24f), .07f * s, color);
+        for (int k = 0; k < 2; ++k)
+            print.ring(p(-.2f, -.2f), (.48f + .18f * static_cast<float>(k)) * s, h * .6f, color, .35f, 1.25f);
+        break;
+    case Gadget::gravityWell: {
+        // Miles's Gravity Well: a spiral drawing everything into its middle.
+        constexpr int pieces = 28;
+        Flat from = at;
+        for (int k = 1; k <= pieces; ++k) {
+            const float t = static_cast<float>(k) / pieces, a = pi / 2 - t * 3.2f * pi;
+            const Flat to = at + Flat{std::cos(a), std::sin(a)} * (.08f + .6f * t) * s;
+            print.line(from, to, h * (.4f + .45f * t), color, k == 1);
+            from = to;
+        }
+        print.disc(at, .12f * s, color);
+        break;
+    }
+    case Gadget::holoDrone:
+        // Miles's Holo Drone: the drone up top, its rotors either side, and
+        // the hologram it throws below it, a figure in its light.
+        print.disc(p(0, .44f), .16f * s, color);
+        print.line(p(-.5f, .54f), p(.5f, .54f), h * .7f, color);
+        print.line(p(-.5f, .54f), p(-.5f, .44f), h * .6f, color, false);
+        print.line(p(.5f, .54f), p(.5f, .44f), h * .6f, color, false);
+        print.line(p(0, .28f), p(-.36f, -.62f), h * .4f, color);
+        print.line(p(0, .28f), p(.36f, -.62f), h * .4f, color);
+        print.disc(p(0, -.1f), .09f * s, color);
+        print.line(p(0, -.2f), p(0, -.46f), h * .9f, color);
+        print.line(p(-.14f, -.28f), p(.14f, -.28f), h * .7f, color);
+        print.line(p(0, -.46f), p(-.1f, -.62f), h * .7f, color, false);
+        print.line(p(0, -.46f), p(.1f, -.62f), h * .7f, color, false);
+        break;
+    default:
+        break;
+    }
+}
+} // namespace
+void appendGadgetWheel(std::vector<Vertex>& out, const GadgetWheelView& view, Vec3 viewer, float pixelAngle,
+                       UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendGadgetWheel(out, view, viewer, pixelAngle);
+    const WheelFrame& f = view.frame;
+    const float distance = length(viewer - f.centre);
+    if (!view.open || !finite(f.centre) || !finite(f.right) || !finite(f.up) || !finite(f.out) ||
+        !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 || !std::isfinite(view.age) ||
+        view.age < 0 || !(distance >= .05f && distance <= 5))
+        return;
+    // Sizes in metres in the wheel's plane: the places' ring, a badge, the lit
+    // one, a bead where a place is empty, a charge's pip.
+    constexpr float radius = .13f, badge = .03f, litBadge = .038f, bead = .006f, pip = .0042f;
+    const float px = pixelAngle * distance;
+    const int lit = view.lit >= 0 && view.lit < gadgetPlaces &&
+                            view.places[static_cast<size_t>(view.lit)] != Gadget::none
+                        ? view.lit
+                        : -1;
+    const auto place = [](int p, float r) {
+        return Flat{r * std::sin(gadgetPlaceAngle(p)), r * std::cos(gadgetPlaceAngle(p))};
+    };
+    const auto spent = [&](int p) {
+        return view.most[static_cast<size_t>(p)] && !view.ammo[static_cast<size_t>(p)];
+    };
+    // A badge's charges round its outer side, from `centre` (its own `s` the
+    // badge's radius): yellow left, grey spent; eight at most.
+    const auto charges = [&](Print& print, int p, Flat centre, float s) {
+        const int most = std::min<int>(view.most[static_cast<size_t>(p)], 8);
+        if (!most)
+            return;
+        const float outward = pi / 2 - gadgetPlaceAngle(p);
+        const float step =
+            std::min(21 * plate::degree, 160 * plate::degree / static_cast<float>(std::max(most - 1, 1)));
+        for (int k = 0; k < most; ++k) {
+            const float a = outward + step * (static_cast<float>(k) - .5f * static_cast<float>(most - 1));
+            const Flat at = centre + Flat{std::cos(a), std::sin(a)} * (s + .0105f);
+            if (k < view.ammo[static_cast<size_t>(p)])
+                print.disc(at, pip, plate::yellow);
+            else
+                print.disc(at, pip * .75f, mix(plate::paper, plate::ink, .5f));
+        }
+    };
+    // The wheel lands as the marks do, out of register on its first poses.
+    const Landing land = landing(view.age);
+    const float misprint = land.hit ? .006f : 0;
+    Print wheel(out, f.centre, f.right, f.up, f.out, px);
+    wheel.place(land.scale, land.turn);
+    // The ring the places are on, a bead where one is empty, and the middle
+    // while nothing is lit.
+    wheel.layers(.0022f, 0, {}, misprint, [&] {
+        wheel.ring({}, radius, .0016f, plate::paper);
+        for (int p = 0; p < gadgetPlaces; ++p)
+            if (view.places[static_cast<size_t>(p)] == Gadget::none)
+                wheel.disc(place(p, radius), bead, plate::paper);
+        if (lit < 0)
+            wheel.disc({}, bead, plate::paper);
+    });
+    // The badges but the lit one, keyed with a hard drop; their charges,
+    // keyed finer.
+    wheel.layers(.0028f, .0045f, plate::ink, misprint, [&] {
+        for (int p = 0; p < gadgetPlaces; ++p) {
+            if (view.places[static_cast<size_t>(p)] == Gadget::none || p == lit)
+                continue;
+            const Vec3 plateColor = spent(p) ? mix(plate::paper, plate::ink, .5f)
+                                    : p == view.equipped ? plate::yellow
+                                                         : plate::paper;
+            wheel.disc(place(p, radius), badge, plateColor);
+        }
+    });
+    wheel.layers(.0012f, .002f, plate::ink, misprint, [&] {
+        for (int p = 0; p < gadgetPlaces; ++p)
+            if (view.places[static_cast<size_t>(p)] != Gadget::none && p != lit)
+                charges(wheel, p, place(p, radius), badge);
+    });
+    for (int p = 0; p < gadgetPlaces; ++p)
+        if (view.places[static_cast<size_t>(p)] != Gadget::none && p != lit)
+            gadgetPicture(wheel, view.places[static_cast<size_t>(p)], place(p, radius), badge, plate::ink);
+    if (lit < 0)
+        return;
+    const Gadget chosen = view.places[static_cast<size_t>(lit)];
+    // The lit badge: red and larger. It snaps on each time another gadget
+    // lights - a pose wide and out of register, a pose short - and then
+    // boils, as a held drawing does: drawn in three places by turns, two
+    // poses each.
+    const float litFor = std::isfinite(view.litAge) ? std::max(view.litAge, 0.f) : 1.f;
+    const int pose = static_cast<int>(litFor / plate::pose);
+    const Landing pop = pose == 0 ? Landing{1.16f, -4 * plate::degree, true}
+                        : pose == 1 ? Landing{.95f, 2 * plate::degree, false}
+                                    : Landing{};
+    struct Boil {
+        float turn;
+        Flat shift;
+    };
+    static constexpr Boil boils[3] = {{0, {}}, {-.8f, {.015f, .022f}}, {.7f, {-.022f, -.015f}}};
+    const Boil& boil = boils[pose < 3 ? 0 : (pose / 2) % 3];
+    // Where the wheel's landing has its place.
+    const float c = std::cos(land.turn), s = std::sin(land.turn);
+    const Flat at = place(lit, radius);
+    const Vec3 centre =
+        f.centre + (f.right * (at.x * c - at.y * s) + f.up * (at.x * s + at.y * c)) * land.scale;
+    Print badgePrint(out, centre, f.right, f.up, f.out, px);
+    badgePrint.place(land.scale * pop.scale, land.turn + pop.turn + boil.turn * plate::degree,
+                     boil.shift * (litBadge * land.scale));
+    badgePrint.layers(.0034f, .0055f, plate::ink, pop.hit ? .006f : 0, [&] {
+        badgePrint.disc({}, litBadge, plate::red);
+        if (lit == view.equipped)
+            badgePrint.ring({}, litBadge + .0048f, .0024f, plate::yellow);
+    });
+    const float pipsFrom = litBadge + (lit == view.equipped ? .0065f : 0.f);
+    badgePrint.layers(.0012f, .002f, plate::ink, pop.hit ? .006f : 0,
+                      [&] { charges(badgePrint, lit, {}, pipsFrom); });
+    badgePrint.layers(.0016f, 0, {}, 0,
+                      [&] { gadgetPicture(badgePrint, chosen, {}, litBadge, plate::paper); });
+    // Its name in a yellow caption across the middle, leaning as its
+    // lettering does, snapping on with the badge.
+    const char* name = gadgetName(chosen);
+    const float height = fittedHeight(name, .0135f, .15f);
+    const float width = textWidth(name, height) + Print::lean * height;
+    const float halfWidth = width * .5f + .008f, halfHeight = height * .5f + .0075f;
+    const float slant = Print::lean * halfHeight;
+    Print caption(out, f.centre, f.right, f.up, f.out, px);
+    caption.place(land.scale * pop.scale, land.turn + pop.turn + 2 * plate::degree);
+    caption.layers(.003f, .0045f, plate::ink, pop.hit ? .005f : 0, [&] {
+        const Flat a{-halfWidth - slant, -halfHeight}, b{halfWidth - slant, -halfHeight},
+            d{halfWidth + slant, halfHeight}, e{-halfWidth + slant, halfHeight};
+        caption.triangle(a, b, d, plate::yellow);
+        caption.triangle(a, d, e, plate::yellow);
+    });
+    caption.text(name, {width * -.5f, height * -.5f}, height, .17f, plate::ink);
 }
 void AimMarkerMotion::reset() {
     *this = {};

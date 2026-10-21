@@ -36,7 +36,8 @@ endfunction()
 add_library(spidy_core src/swing.cpp src/web_grab.cpp src/lab_world.cpp src/lab_props.cpp src/game_tracking.cpp
             src/web_visual.cpp src/body_ik.cpp src/punch.cpp src/shooter.cpp src/vr_settings.cpp
             src/body_calibration.cpp src/overlay_text.cpp src/slow_motion.cpp src/web_strike.cpp
-            src/impact_sound.cpp src/prompt_buttons.cpp src/gadget_wheel.cpp src/spider_sense.cpp src/phone.cpp)
+            src/impact_sound.cpp src/prompt_buttons.cpp src/gadget_wheel.cpp src/spider_sense.cpp src/phone.cpp
+            src/body_haptics.cpp src/tech_marks.cpp)
 target_include_directories(spidy_core PUBLIC include)
 if(MSVC)
   target_compile_options(spidy_core PRIVATE /W4 /permissive-)
@@ -44,6 +45,9 @@ else()
   target_compile_options(spidy_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 enable_testing()
+add_executable(spidy_realistic_flip_tests tests/realistic_flip_tests.cpp)
+target_include_directories(spidy_realistic_flip_tests PRIVATE include)
+add_test(NAME realistic_flips COMMAND spidy_realistic_flip_tests)
 add_executable(spidy_tests tests/core_tests.cpp)
 target_link_libraries(spidy_tests PRIVATE spidy_core)
 if(WIN32)
@@ -51,7 +55,9 @@ if(WIN32)
   target_sources(spidy_tests PRIVATE src/game_targets.cpp)
 endif()
 add_test(NAME core COMMAND spidy_tests)
-add_executable(spidy_launcher_tests tests/launcher_tests.cpp)
+# Settings profiles (launcher_profile.hpp) hold the SPIDY VR tab's settings: the launcher's programs build
+# vr_settings themselves, as the launcher has the static runtime and spidy_core the DLL one.
+add_executable(spidy_launcher_tests tests/launcher_tests.cpp src/vr_settings.cpp)
 target_include_directories(spidy_launcher_tests PRIVATE include)
 add_test(NAME launcher COMMAND spidy_launcher_tests)
 add_executable(spidy_sim apps/sim.cpp)
@@ -159,11 +165,58 @@ if(SPIDY_BUILD_XR)
   add_library(spidy_openxr src/xr_session.cpp)
   target_link_libraries(spidy_openxr PUBLIC spidy_d3d12 openxr_loader)
   target_compile_definitions(spidy_openxr PUBLIC XR_USE_PLATFORM_WIN32 XR_USE_GRAPHICS_API_D3D12)
+  # Body haptics on bHaptics devices (bhaptics_output.hpp) with bHaptics' own SDK: its header names the
+  # functions, and its library, beside the modules, is loaded at run time. The Developer Portal app they play as
+  # comes from the environment (the release workflow's repository secrets), else from bhaptics-app.local
+  # (git-ignored; app_id=... and api_key=... lines); a build without one plays no body haptics.
+  set(SPIDY_BHAPTICS_SDK "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tact-cpp2/sdk")
+  if(NOT EXISTS "${SPIDY_BHAPTICS_SDK}/include/bhaptics/bhaptics.h")
+    message(FATAL_ERROR "Run tools/bootstrap.ps1 to fetch the pinned bHaptics SDK")
+  endif()
+  set(SPIDY_BHAPTICS_APP_ID "$ENV{SPIDY_BHAPTICS_APP_ID}")
+  set(SPIDY_BHAPTICS_API_KEY "$ENV{SPIDY_BHAPTICS_API_KEY}")
+  set(bhaptics_app "${CMAKE_CURRENT_SOURCE_DIR}/bhaptics-app.local")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${bhaptics_app}")
+  if(EXISTS "${bhaptics_app}" AND (NOT SPIDY_BHAPTICS_APP_ID OR NOT SPIDY_BHAPTICS_API_KEY))
+    file(STRINGS "${bhaptics_app}" bhaptics_lines)
+    foreach(line IN LISTS bhaptics_lines)
+      if(line MATCHES "^[ \t]*app_id[ \t]*=[ \t]*([^ \t]+)")
+        set(SPIDY_BHAPTICS_APP_ID "${CMAKE_MATCH_1}")
+      elseif(line MATCHES "^[ \t]*api_key[ \t]*=[ \t]*([^ \t]+)")
+        set(SPIDY_BHAPTICS_API_KEY "${CMAKE_MATCH_1}")
+      endif()
+    endforeach()
+  endif()
+  foreach(value IN ITEMS "${SPIDY_BHAPTICS_APP_ID}" "${SPIDY_BHAPTICS_API_KEY}")
+    if(NOT value MATCHES "^[A-Za-z0-9_-]*$")
+      message(FATAL_ERROR "A bHaptics App ID or API key has more than letters, digits, - and _ in it")
+    endif()
+  endforeach()
+  if(SPIDY_BHAPTICS_APP_ID AND SPIDY_BHAPTICS_API_KEY)
+    message(STATUS "bHaptics app: ${SPIDY_BHAPTICS_APP_ID}")
+  else()
+    message(STATUS "No bHaptics app (SPIDY_BHAPTICS_APP_ID, SPIDY_BHAPTICS_API_KEY): no body haptics in this build")
+  endif()
+  add_library(spidy_bhaptics STATIC src/bhaptics_output.cpp)
+  target_include_directories(spidy_bhaptics PRIVATE "${SPIDY_BHAPTICS_SDK}/include")
+  target_link_libraries(spidy_bhaptics PUBLIC spidy_core)
+  target_compile_definitions(spidy_bhaptics PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+                             SPIDY_BHAPTICS_APP_ID="${SPIDY_BHAPTICS_APP_ID}"
+                             SPIDY_BHAPTICS_API_KEY="${SPIDY_BHAPTICS_API_KEY}")
+  # The SDK's library beside the modules: the test loads it from there, and a VR session puts a copy beside
+  # the stereo module it stages (run_game_vr.py).
+  add_custom_command(TARGET spidy_bhaptics POST_BUILD
+                     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${SPIDY_BHAPTICS_SDK}/lib/x64/bhaptics_library.dll"
+                             "${CMAKE_BINARY_DIR}")
+  add_executable(spidy_haptics_test apps/haptics_test.cpp)
+  target_link_libraries(spidy_haptics_test PRIVATE spidy_bhaptics)
+  target_compile_definitions(spidy_haptics_test PRIVATE _CRT_SECURE_NO_WARNINGS) # getenv
+  spidy_stamp_version(spidy_haptics_test "Spidy VR haptics test")
   if(SPIDY_BUILD_OBSERVER)
     target_sources(spidy_stereo_probe PRIVATE src/game_xr.cpp src/game_venom.cpp src/game_venom_events.cpp src/game_player.cpp src/game_pad.cpp
                    src/game_menu.cpp src/game_time.cpp src/game_prompts.cpp src/game_steam.cpp
                    src/phone_music.cpp)
-    target_link_libraries(spidy_stereo_probe PRIVATE spidy_openxr)
+    target_link_libraries(spidy_stereo_probe PRIVATE spidy_openxr spidy_bhaptics shell32 ole32 uuid)
   endif()
   add_executable(spidy_xr_lab apps/xr_lab.cpp)
   target_link_libraries(spidy_xr_lab PRIVATE spidy_openxr)
@@ -176,7 +229,7 @@ if(SPIDY_BUILD_XR)
   target_link_libraries(spidy_xr_swapchain_probe PRIVATE spidy_openxr)
   add_executable(spidy_graphics_test tests/graphics_test.cpp)
   target_link_libraries(spidy_graphics_test PRIVATE spidy_d3d12 spidy_core)
-  foreach(target spidy_d3d12 spidy_openxr spidy_xr_lab spidy_graphics_test)
+  foreach(target spidy_d3d12 spidy_openxr spidy_xr_lab spidy_graphics_test spidy_bhaptics spidy_haptics_test)
     target_compile_options(${target} PRIVATE /W4 /permissive-)
   endforeach()
 endif()
@@ -189,7 +242,8 @@ if(SPIDY_BUILD_LAUNCHER)
     message(FATAL_ERROR "Run tools/bootstrap.ps1 to fetch the pinned Dear ImGui")
   endif()
   add_executable(spidy_launcher WIN32 apps/launcher/main.cpp apps/launcher/ui.cpp apps/launcher/system.cpp
-                 apps/launcher/update.cpp apps/launcher/video.cpp apps/launcher/launcher.rc apps/launcher/launcher.manifest
+                 apps/launcher/update.cpp apps/launcher/video.cpp src/vr_settings.cpp apps/launcher/launcher.rc
+                 apps/launcher/launcher.manifest
                  ${SPIDY_IMGUI}/imgui.cpp ${SPIDY_IMGUI}/imgui_draw.cpp ${SPIDY_IMGUI}/imgui_tables.cpp
                  ${SPIDY_IMGUI}/imgui_widgets.cpp ${SPIDY_IMGUI}/backends/imgui_impl_win32.cpp
                  ${SPIDY_IMGUI}/backends/imgui_impl_dx11.cpp)

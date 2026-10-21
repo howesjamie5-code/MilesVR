@@ -1,23 +1,29 @@
 // Draws the combat marks (web_visual.hpp's appendCue, appendImpact,
-// appendKnockout, and Spider-Sense's appendSense and appendSenseSight) and the
-// gadget wheel (appendGadgetWheel) over a
+// appendKnockout, and Spider-Sense's appendSense and appendSenseSight), the
+// gadget wheel (appendGadgetWheel), the aim markers, slow motion's meter and
+// the calibration panel over a
 // headset's eye captures, without a headset: the overlay's own vertices, one
 // sample a pixel with its blending, at about the headset's pixel density.
-// It writes sheets of the marks' states and poses as BMP files; the wheel's
-// is the near capture's, at a hand's distance where its pixel is.
+// It writes sheets of the marks' states and poses as BMP files; the wheel's,
+// the meter's and the panel's are the near capture's, at a hand's distance
+// (the panel's 1.4 m) where its pixel is.
 // tools/preview-marks.ps1 feeds it captures and turns the sheets into PNG.
 //
 //   spidy_mark_preview <out folder> <scale> <far.bmp|-> <u> <v> <metres> <near.bmp|-> <u> <v> <metres>
+//                      [comic|tech]
 //
 // Each backdrop is a 24-bit BMP of an eye capture enlarged `scale` times
 // (the captures are 512 pixels wide, about 235 pixels a unit of tangent),
 // with the capture pixel (u, v) of the enemy's chest and how far off he is;
-// "-" for a plain backdrop, dark to the left and pale to the right.
+// "-" for a plain backdrop, dark to the left and pale to the right. The last
+// argument is the SPIDY VR tab's UI STYLE (ui_style.hpp), comic if left out.
+#include "spidy/body_calibration.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/overlay_text.hpp"
 #include "spidy/web_visual.hpp"
 #include "preview_image.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -85,10 +91,12 @@ bool sheet(const std::string& path, const Image& backdrop, const Camera& camera,
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 11) {
-        std::printf("spidy_mark_preview <out folder> <scale> <far.bmp|-> <u> <v> <metres> <near.bmp|-> <u> <v> <metres>\n");
+    if (argc != 11 && argc != 12) {
+        std::printf("spidy_mark_preview <out folder> <scale> <far.bmp|-> <u> <v> <metres> "
+                    "<near.bmp|-> <u> <v> <metres> [comic|tech]\n");
         return 1;
     }
+    const UiStyle style = argc == 12 && std::string(argv[11]) == "tech" ? UiStyle::tech : UiStyle::comic;
     const std::string out = argv[1];
     const float scale = std::clamp(static_cast<float>(std::atof(argv[2])), 1.f, 8.f);
     struct Scene {
@@ -119,17 +127,17 @@ int main(int argc, char** argv) {
         const Vec3 p = camera.ray(scene.u, scene.v) * scene.metres;
         const auto cue = [&](CueWay way, bool finisher, float left, float age, bool locked = false) {
             std::vector<Vertex> v;
-            appendCue(v, {p, way, finisher, left, age, locked}, viewer, pixelAngle);
+            appendCue(v, {p, way, finisher, left, age, locked}, viewer, pixelAngle, style);
             return v;
         };
         const auto knockout = [&](float age) {
             std::vector<Vertex> v;
-            appendKnockout(v, {p, age}, viewer, pixelAngle);
+            appendKnockout(v, {p, age}, viewer, pixelAngle, style);
             return v;
         };
         const auto impact = [&](BlowKind kind, float strength, int count, float age, bool called = false) {
             std::vector<Vertex> v;
-            appendImpact(v, {p, strength, kind, count, age, called}, viewer, pixelAngle);
+            appendImpact(v, {p, strength, kind, count, age, called}, viewer, pixelAngle, style);
             return v;
         };
         const std::string name = out + (i ? "/near-" : "/far-");
@@ -237,7 +245,7 @@ int main(int argc, char** argv) {
         const auto sense = [&](SenseAnswer answer, float left, float age, float broken = -1,
                                bool timed = true) {
             std::vector<Vertex> v;
-            appendSense(v, {headTop, answer, left, timed, age, broken}, viewer, pixelAngle);
+            appendSense(v, {headTop, answer, left, timed, age, broken}, viewer, pixelAngle, style);
             return v;
         };
         const float markSize = .055f * std::clamp(length(headTop) / .9f, 1.4f, 9.f);
@@ -276,10 +284,141 @@ int main(int argc, char** argv) {
             upLeft.timed = true;
             upLeft.left = .375f;
             upLeft.age = 1.17f;
-            appendSenseSight(v, right, eyes, pixelAngle);
-            appendSenseSight(v, upLeft, eyes, pixelAngle);
+            appendSenseSight(v, right, eyes, pixelAngle, {}, style);
+            appendSenseSight(v, upLeft, eyes, pixelAngle, {}, style);
             draw(senseEye, v, camera, 0, 0, 0, 0, senseEye.w, senseEye.h);
             ok &= save(senseEye, name + "sense-eye.bmp");
+        }
+        // The gadget wheel 0.45 m off, facing the eyes, every gadget on it as the game's wheel has them: the
+        // spider-drone equipped, the concussion blast out of charges. As it lands, at rest, and as one
+        // lights.
+        if (i) {
+            GadgetWheelView wheel;
+            wheel.open = true;
+            wheel.frame.centre = camera.ray(scene.u, scene.v) * .45f;
+            wheel.frame.out = normalized(viewer - wheel.frame.centre);
+            wheel.frame.up = normalized(Vec3{0, 1, 0} - wheel.frame.out * wheel.frame.out.y);
+            wheel.frame.right = cross(wheel.frame.up, wheel.frame.out);
+            // MilesVR: Miles's wheel - the web shooter at the top, the Remote Mine right, the Gravity Well at the
+            // bottom (out of charges), the Holo Drone left (equipped).
+            const Gadget all[] = {Gadget::webShooter, Gadget::none,        Gadget::remoteMine, Gadget::none,
+                                  Gadget::gravityWell, Gadget::none,       Gadget::holoDrone,  Gadget::none};
+            for (int g = 0; g < gadgetPlaces; ++g) {
+                wheel.places[static_cast<size_t>(g)] = all[g];
+                wheel.most[static_cast<size_t>(g)] = g && all[g] != Gadget::none ? 3 : 0;
+                wheel.ammo[static_cast<size_t>(g)] = static_cast<uint8_t>(g == 4 ? 0 : 2);
+            }
+            wheel.equipped = 6;
+            const auto drawn = [&](float age, int lit, float litAge) {
+                auto view = wheel;
+                view.age = age;
+                view.lit = lit;
+                view.litAge = litAge;
+                std::vector<Vertex> v;
+                appendGadgetWheel(v, view, viewer, pixelAngle, style);
+                return v;
+            };
+            const int wide = static_cast<int>(210 * scale);
+            ok &= sheet(name + "wheel.bmp", scene.backdrop, camera, scene.u, scene.v, wide, 5,
+                        {{"OPENING POSE 1", drawn(at(0), -1, 0)},
+                         {"OPENING POSE 2", drawn(at(1), -1, 0)},
+                         {"OPENING POSE 3", drawn(at(2), -1, 0)},
+                         {"OPEN", drawn(1, -1, 0)},
+                         {"LIT POSE 1", drawn(1, 2, at(0))},
+                         {"LIT POSE 2", drawn(1, 2, at(1))},
+                         {"LIT", drawn(1, 2, 1)},
+                         {"LIT, BOILING", drawn(1, 2, at(3))},
+                         {"EQUIPPED, LIT", drawn(1, 6, 1)},
+                         {"EMPTY, LIT", drawn(1, 4, 1)},
+                         {"WEB SHOOTER, LIT", drawn(1, 0, 1)}});
+            // Slow motion's meter 0.4 m off, over the back of a left hand held with no turn: at rest, being
+            // spent, in slow motion and as a refused press flashes it.
+            const Vec3 face = camera.ray(scene.u, scene.v) * .4f;
+            const auto meter = [&](float focus, bool active, float blend, float warning, float clock) {
+                SlowMotionView slow;
+                slow.meter = 1;
+                slow.focus = focus;
+                slow.active = active;
+                slow.blend = blend;
+                slow.warning = warning;
+                std::vector<Vertex> v;
+                const Pose hand{face - Vec3{0, .045f, .065f}, {}};
+                appendSlowMotionMeter(v, slow, hand, viewer, pixelAngle, clock, style);
+                return v;
+            };
+            const int small = static_cast<int>(60 * scale);
+            ok &= sheet(name + "meter.bmp", scene.backdrop, camera, scene.u, scene.v, small, 6,
+                        {{"FULL", meter(1, false, 0, 0, 0)},
+                         {"60%", meter(.6f, false, 0, 0, 0)},
+                         {"SLOW 35%", meter(.35f, true, 1, 0, .1f)},
+                         {"SLOW 35% LATER", meter(.35f, true, 1, 0, .6f)},
+                         {"REFUSED", meter(.1f, false, 0, 1, 0)},
+                         {"EMPTY", meter(0, false, 0, 0, 0)}});
+            // The calibration panel 1.4 m ahead, as the XR worker places it, waiting, holding and done; and a
+            // controller's ring.
+            body_calibration::View calibration;
+            calibration.panel = body_calibration::panelPose({viewer, {}});
+            calibration.handTracked = {true, true};
+            calibration.grips[0].position = calibration.panel.position + Vec3{-.25f, -.05f, .9f};
+            calibration.grips[1].position = calibration.panel.position + Vec3{.7f, 0, .9f};
+            const auto panel = [&](body_calibration::Phase phase, float progress, bool ready) {
+                auto view = calibration;
+                view.phase = phase;
+                view.hint = body_calibration::Hint::armsOut;
+                view.progress = progress;
+                view.ready = {ready, ready};
+                view.result = {1.63f, .59f, {.59f, .58f}};
+                std::vector<Vertex> v;
+                body_calibration::appendView(v, view, viewer, style);
+                return v;
+            };
+            const Vec3 middle = calibration.panel.position, grip = calibration.grips[0].position;
+            const auto pixelOf = [&](Vec3 at) {
+                return std::array<float, 2>{camera.cx + camera.f * at.x / -at.z,
+                                            camera.cy - camera.f * at.y / -at.z};
+            };
+            const auto [pu, pv] = pixelOf(middle);
+            const int panelSide = static_cast<int>(250 * scale);
+            ok &= sheet(name + "panel.bmp", scene.backdrop, camera, pu, pv, panelSide, 2,
+                        {{"WAITING", panel(body_calibration::Phase::waiting, 0, false)},
+                         {"HOLDING", panel(body_calibration::Phase::holding, .6f, true)},
+                         {"DONE", panel(body_calibration::Phase::done, 1, true)}});
+            const auto [gu, gv] = pixelOf(grip);
+            const int ringSide = static_cast<int>(110 * scale);
+            ok &= sheet(name + "panel-ring.bmp", scene.backdrop, camera, gu, gv, ringSide, 3,
+                        {{"WAITING", panel(body_calibration::Phase::waiting, 0, false)},
+                         {"HOLDING", panel(body_calibration::Phase::holding, .6f, true)},
+                         {"DONE", panel(body_calibration::Phase::done, 1, true)}});
+        }
+        // The aim markers where the enemy is, for each hand: as each kind, squeezed, and a target's ring as
+        // it locks on.
+        {
+            const auto aim = [&](AimMark kind, unsigned hand, float squeeze = 0, float lock = 1,
+                                 float spin = .3f, float radius = .3f) {
+                AimMarker marker;
+                marker.kind = kind;
+                marker.point = p;
+                marker.hand = hand;
+                marker.squeeze = squeeze;
+                marker.lock = lock;
+                marker.spin = spin;
+                marker.radius = radius;
+                std::vector<Vertex> v;
+                appendAimMarker(v, marker, viewer, pixelAngle, style);
+                return v;
+            };
+            const int cell = static_cast<int>((i ? 150 : 100) * scale);
+            ok &= sheet(name + "aim.bmp", scene.backdrop, camera, scene.u, scene.v, cell, 5,
+                        {{"ANCHOR LEFT", aim(AimMark::anchor, 0)},
+                         {"ANCHOR RIGHT", aim(AimMark::anchor, 1)},
+                         {"SQUEEZED", aim(AimMark::anchor, 0, .6f)},
+                         {"AIR", aim(AimMark::air, 0)},
+                         {"BLOCKED", aim(AimMark::blocked, 1)},
+                         {"TARGET LEFT", aim(AimMark::target, 0)},
+                         {"TARGET RIGHT", aim(AimMark::target, 1)},
+                         {"LOCKING", aim(AimMark::target, 0, 0, .3f)},
+                         {"SMALL TARGET", aim(AimMark::target, 1, 0, 1, 1.2f, .02f)},
+                         {"TARGET SQUEEZED", aim(AimMark::target, 0, .6f, 1, 2)}});
         }
         // The whole eye image with a call on him.
         Image whole = scene.backdrop;

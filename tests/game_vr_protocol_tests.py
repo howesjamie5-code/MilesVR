@@ -21,14 +21,15 @@ from run_game_vr import (snapshot as xr_snapshot, accepted as accepted_xr, timin
                          ray_traced_view, RAY_TRACING_OFF, ASPECT_RATIO_AUTO, other_mods, real_vr_refusal,
                          other_mods_warning, REFLEX_OFF, device_removed, device_lost_advice, game_adapters,
                          demand_name, reachable_in_play, prompts_line, prompt_snapshot,
-                         controller_buttons, venom_events_snapshot, sense_snapshot, attack_flags)
+                         controller_buttons, venom_events_snapshot, sense_snapshot, attack_flags, haptics_snapshot,
+                         stage_haptics, HAPTIC_KINDS, HAPTICS_BYTES)
 from probe_collision import snapshot as collision_snapshot
 from probe_movement import snapshot as movement_snapshot
 from probe_native_motion import snapshot as motion_snapshot
 from capture_game_state import Game, LIVE_VTABLES
 from probe_native_rays import snapshot as ray_snapshot, command as ray_command
 from probe_game_swing import (snapshot as swing_snapshot, command as swing_command, assess as assess_swing,
-                              flight_summary)
+                              flight_summary, climb_snapshot)
 from probe_game_grab import grab_snapshot, hand_command as grab_hand_command
 
 
@@ -58,6 +59,31 @@ class ProtocolTests(unittest.TestCase):
         struct.pack_into('<Q', torn, 24, 5)
         self.assertEqual(venom_events_snapshot(Reader(*([torn, struct.pack('<Q', 5)]*8)), 0), None)
         self.assertIsNone(venom_events_snapshot(Reader(bytes(1184)), 0))
+    def test_wall_roll_flag_uses_version_5_and_does_not_change_legacy_commands(self):
+        old = swing_command(1, (0, 0, 0))
+        self.assertEqual(len(old), 168)
+        packet = swing_command(1, (0, 0, 0), wall_rotate=True)
+        self.assertEqual(len(packet), 240)
+        self.assertEqual(struct.unpack_from('<3I', packet), (0x5357434d, 5, 240))
+        self.assertEqual(struct.unpack_from('<I', packet, 232), (1,))
+        self.assertEqual(struct.unpack_from('<4f', packet, 168), (0, 0, 0, 1))
+        with self.assertRaises(ValueError):
+            swing_command(1, (0, 0, 0), wall_rotate=2)
+
+    def test_wall_contact_snapshot_reads_both_palms_and_counters(self):
+        raw = struct.pack('<4IQ2Q2I', 0x53434c44, 1, 48, 1, 2, 7, 9, 3, 0)
+        result = climb_snapshot(Reader(raw, struct.pack('<Q', 2)), 0)
+        self.assertEqual(result, dict(status=1, contacts=[7, 9], hands=3))
+
+    def test_wall_contact_snapshot_rejects_incompatible_and_torn_data(self):
+        raw = struct.pack('<4IQ2Q2I', 0x53434c44, 2, 48, 1, 2, 7, 9, 3, 0)
+        with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
+            climb_snapshot(Reader(raw), 0)
+        odd = struct.pack('<4IQ2Q2I', 0x53434c44, 1, 48, 1, 3, 7, 9, 3, 0)
+        self.assertIsNone(climb_snapshot(Reader(*([odd] * 8)), 0))
+        bad = struct.pack('<4IQ2Q2I', 0x53434c44, 1, 48, 1, 2, 7, 9, 4, 0)
+        with self.assertRaisesRegex(RuntimeError, 'Invalid wall contact'):
+            climb_snapshot(Reader(bad, struct.pack('<Q', 2)), 0)
 
     def test_appearance_decodes_each_eye_and_rejects_torn_reads(self):
         raw = bytearray(360)
@@ -423,6 +449,61 @@ class ProtocolTests(unittest.TestCase):
             slow_motion_snapshot(Reader(wrong, struct.pack('<q', 6)), 0)
         # The session checks the time system's update is unpatched before and restored after.
         self.assertIn(0x1ec6bd0, GAME_HOOKS)
+
+    def test_body_haptics_decode_the_player_the_devices_and_the_events_and_reject_torn_reads(self):
+        raw = bytearray(HAPTICS_BYTES)
+        # Playing at 75%: the vest, the left sleeve and the visor on, all four seen; 120 events, 3000 frames; 40 s
+        # of play, the vest on for 40% of it at 12% on average, the left sleeve 25% at 20%, the visor 10% at 8%.
+        struct.pack_into('<4Iq4I3Q4I', raw, 0, 0x53485044, 2, HAPTICS_BYTES, 7, 6, 75, 0b1011, 0b1111, 2, 120,
+                         3000, 1, 4, 3, 9, 1000)
+        struct.pack_into('<8I', raw, 80, 400, 250, 0, 100, 4800, 5000, 0, 800)
+        struct.pack_into('<I', raw, 112, 12)
+        struct.pack_into('<I', raw, 112 + 4*HAPTIC_KINDS.index('spider_sense'), 5)
+        # The tab's WIND HAPTICS off, the other three on.
+        struct.pack_into('<I', raw, HAPTICS_BYTES - 4, 0b1101)
+        result = haptics_snapshot(Reader(raw, struct.pack('<q', 6)), 0)
+        self.assertEqual(result, dict(written=True, status='playing', level=75,
+                                      devices=['vest', 'left_sleeve', 'visor'],
+                                      devices_seen=['vest', 'left_sleeve', 'right_sleeve', 'visor'], connects=2,
+                                      events=120, frames=3000, refused=1, hits=4, aimed_hits=3, landings=9,
+                                      live_seconds=40.0,
+                                      played=dict(vest=dict(share=.4, mean_peak=12.0),
+                                                  left_sleeve=dict(share=.25, mean_peak=20.0),
+                                                  visor=dict(share=.1, mean_peak=8.0)),
+                                      groups=['webs', 'combat', 'movement'],
+                                      kinds=dict(web_shot=12, spider_sense=5)))
+        # Not written by the session yet: its level is nobody's setting.
+        fresh = bytearray(raw)
+        struct.pack_into('<q', fresh, 16, 0)
+        self.assertFalse(haptics_snapshot(Reader(fresh, struct.pack('<q', 0)), 0)['written'])
+        torn = bytearray(raw)
+        struct.pack_into('<q', torn, 16, 7)
+        self.assertIsNone(haptics_snapshot(Reader(*([torn, struct.pack('<q', 7)]*8)), 0))
+        wrong = bytearray(raw)
+        struct.pack_into('<I', wrong, 4, 1)
+        with self.assertRaises(RuntimeError):
+            haptics_snapshot(Reader(wrong, struct.pack('<q', 6)), 0)
+        # The kinds in body_haptics.cpp's order, which HapticsData counts them in.
+        source = (pathlib.Path(__file__).resolve().parents[1]/'src/body_haptics.cpp').read_text(encoding='utf-8')
+        table = re.search(r'constexpr const char\* names\[\] = \{(.*?)\};', source, re.S).group(1)
+        self.assertEqual(tuple(re.findall(r'"([a-z_]+)"', table)), HAPTIC_KINDS)
+        self.assertEqual(HAPTICS_BYTES, 256)
+
+    def test_the_bhaptics_library_goes_beside_the_staged_stereo_module(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            built, staged = root/'build/windows-ninja/bhaptics_library.dll', root/'reports/stereo-modules/abc'
+            built.parent.mkdir(parents=True)
+            staged.mkdir(parents=True)
+            with patch('run_game_vr.ROOT', root):
+                stage_haptics('abc')
+                self.assertFalse((staged/built.name).exists())
+                built.write_bytes(b'one')
+                stage_haptics('abc')
+                self.assertEqual((staged/built.name).read_bytes(), b'one')
+                built.write_bytes(b'two')
+                stage_haptics('abc')
+                self.assertEqual((staged/built.name).read_bytes(), b'two')
 
     def test_hud_decodes_the_panel_its_texture_and_the_second_movie_and_rejects_torn_reads(self):
         raw = bytearray(192)
@@ -1655,13 +1736,13 @@ class ProtocolTests(unittest.TestCase):
                     no_body=False, swing_speed=32.0, weight=60, snap_turn=30, smooth_turn=0, haptics=100,
                     screen_size=1, flips=False, flip_speed=180, trigger_webs=False, hud=2, eye_height=0,
                     arm_length=0, no_calibration_prompt=False, no_stand_on_walls=False, screen_depth=2,
-                    venom_left_hand=False, arcade_webs=False, venom_trigger=False)
+                    venom_left_hand=False, arcade_webs=False, venom_trigger=False, body_haptics=100)
         start = start_settings(args)
         self.assertEqual(start, dict(aim_markers=True, web_grab=True, air_webs=True, web_shooter=True, punch=False,
                                      body=True, swing_speed=32.0, weight=60, snap_turn=30, smooth_turn=0,
                                      haptics=100, screen_size=1, flips=False, flip_speed=180, trigger_webs=False,
                                      hud=2, stand_on_walls=True, screen_depth=2, arcade_webs=False,
-                                     eye_height_mm=0, arm_length_mm=0, calibration_prompt=True,
+                                     body_haptics=100, eye_height_mm=0, arm_length_mm=0, calibration_prompt=True,
                                      venom_left_hand=False, venom_trigger=False))
         # Nothing changed, or no sample: no line.
         self.assertIsNone(settings_line(start, dict(vr_settings=dict(start))))
@@ -1672,8 +1753,11 @@ class ProtocolTests(unittest.TestCase):
                          SETTINGS_LINE + 'aim_markers=1 web_grab=1 air_webs=0 web_shooter=0 punch=1 body=1 '
                                          'swing_speed=48 weight=150 snap_turn=0 smooth_turn=90 haptics=100 '
                                          'screen_size=1 flips=0 flip_speed=180 trigger_webs=0 hud=2 '
-                                         'stand_on_walls=1 screen_depth=2 arcade_webs=0 eye_height_mm=0 '
-                                         'arm_length_mm=0 calibration_prompt=1 venom_left_hand=0 venom_trigger=0')
+                                         'stand_on_walls=1 screen_depth=2 arcade_webs=0 body_haptics=100 '
+                                         'eye_height_mm=0 arm_length_mm=0 calibration_prompt=1 venom_left_hand=0 '
+                                         'venom_trigger=0')
+        # BODY HAPTICS turned down in the headset stays for the next session.
+        self.assertIn(' body_haptics=25 ', settings_line(start, dict(vr_settings=dict(start, body_haptics=25))))
         # The experimental flips switched on in the headset go to the launcher too; so do their speed, the web
         # button and the HUD.
         self.assertIn(' flips=1 ', settings_line(start, dict(vr_settings=dict(start, flips=True))))

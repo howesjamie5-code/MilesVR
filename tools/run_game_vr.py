@@ -7,6 +7,7 @@ import json
 import math
 import pathlib
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -573,7 +574,7 @@ def start_settings(a):
                 snap_turn=a.snap_turn, smooth_turn=a.smooth_turn, haptics=a.haptics, screen_size=a.screen_size,
                 flips=a.flips, flip_speed=a.flip_speed, trigger_webs=a.trigger_webs, hud=a.hud,
                 stand_on_walls=not a.no_stand_on_walls, screen_depth=a.screen_depth, arcade_webs=a.arcade_webs,
-                eye_height_mm=a.eye_height, arm_length_mm=a.arm_length,
+                body_haptics=a.body_haptics, eye_height_mm=a.eye_height, arm_length_mm=a.arm_length,
                 calibration_prompt=not a.no_calibration_prompt, venom_left_hand=a.venom_left_hand,
                 venom_trigger=a.venom_trigger)
 
@@ -1176,7 +1177,7 @@ def punch_snapshot(game, address):
 
 
 GADGETS = ('none', 'web_shooter', 'impact_web', 'web_bomb', 'electric_web', 'trip_mine', 'concussion_blast',
-           'spider_drone', 'suspension_matrix', 'game_web_shooter')
+           'spider_drone', 'suspension_matrix', 'game_web_shooter', 'remote_mine', 'gravity_well', 'holo_drone')
 
 
 def gadgets_of(raw):
@@ -1473,6 +1474,76 @@ def slow_motion_snapshot(game, address):
                       moment_scale=round(scale, 3))
         return result
     return None
+
+
+# Body haptics on bHaptics devices (game_xr.cpp HapticsData; bhaptics_output.hpp's Status, body_haptics.hpp's
+# Device bits and Kind order).
+HAPTICS_STATUS = ('off', 'starting', 'no_library', 'no_app', 'no_player', 'waiting', 'connected', 'playing', 'failed',
+                  'rejected')
+HAPTIC_DEVICES = ((1, 'vest'), (2, 'left_sleeve'), (4, 'right_sleeve'), (8, 'visor'))
+HAPTIC_KINDS = ('web_shot', 'web_attach', 'web_taken', 'web_release', 'zip', 'grab_caught', 'grab_yanked', 'grab_held',
+                'grab_let_go', 'air_pull', 'web_pull', 'wall_land', 'wall_jump', 'landing', 'leap_charge', 'leap',
+                'punch', 'heavy_blow', 'finisher', 'strike_rush', 'knockout', 'counter', 'spider_sense',
+                'sense_dodge', 'hit', 'heal', 'slow_start', 'slow_stop', 'perfect_dodge', 'dodge', 'calibrated',
+                'scan', 'gadget', 'phone', 'wall_grip')
+HAPTICS_BYTES = 116 + 4*len(HAPTIC_KINDS)
+# The groups the SPIDY VR tab's switches leave on (body_haptics.hpp's Group bits).
+HAPTIC_GROUPS = ((1, 'webs'), (2, 'wind'), (4, 'combat'), (8, 'movement'))
+# The output thread's ticks a second (bhaptics_output.hpp's tickMs).
+HAPTIC_TICKS = 25
+
+
+def haptics_snapshot(game, address):
+    """Body haptics: what the connection to the bHaptics Player does (no_player for a PC without one), BODY
+    HAPTICS now (percent; `written` once the session has said), the devices on now and at any time, the Player's
+    connections, events posted, frames sent to a device and refused, blows the player took (the aimed ones placed
+    by the attacker the game warned of), landings, the seconds of VR play with the Player connected and each
+    device's share of them with something playing and its strongest motor's mean over those (percent), the
+    groups the tab's switches leave on, and the events by kind that came (played or not)."""
+    for _ in range(8):
+        raw = game.read(address, HAPTICS_BYTES)
+        if len(raw) != HAPTICS_BYTES:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53485044, 2, HAPTICS_BYTES):
+            raise RuntimeError('Body haptics protocol mismatch')
+        sequence = struct.unpack_from('<Q', raw, 16)[0]
+        if sequence & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        status = struct.unpack_from('<I', raw, 12)[0]
+        level, devices, seen, connects = struct.unpack_from('<4I', raw, 24)
+        events, frames, refused = struct.unpack_from('<3Q', raw, 40)
+        hits, aimed, landings, live = struct.unpack_from('<4I', raw, 64)
+        on = struct.unpack_from('<4I', raw, 80)
+        peaks = struct.unpack_from('<4I', raw, 96)
+        kinds = struct.unpack_from(f'<{len(HAPTIC_KINDS)}I', raw, 112)
+        groups = struct.unpack_from('<I', raw, 112 + 4*len(HAPTIC_KINDS))[0]
+        played = {name: dict(share=round(on[i]/live, 3), mean_peak=round(peaks[i]/on[i], 1))
+                  for i, (_, name) in enumerate(HAPTIC_DEVICES) if on[i] and live}
+        return dict(written=sequence > 0,
+                    status=HAPTICS_STATUS[status] if status < len(HAPTICS_STATUS) else status, level=level,
+                    devices=[name for bit, name in HAPTIC_DEVICES if devices & bit],
+                    devices_seen=[name for bit, name in HAPTIC_DEVICES if seen & bit], connects=connects,
+                    events=events, frames=frames, refused=refused, hits=hits, aimed_hits=aimed, landings=landings,
+                    live_seconds=round(live/HAPTIC_TICKS, 1), played=played,
+                    groups=[name for bit, name in HAPTIC_GROUPS if groups & bit],
+                    kinds={kind: n for kind, n in zip(HAPTIC_KINDS, kinds) if n})
+    return None
+
+
+def stage_haptics(digest):
+    """bHaptics' library beside the staged stereo module (reports/stereo-modules/<digest>), which loads it from its
+    own folder once body haptics are on (bhaptics_output.hpp). Without it a session plays no body haptics, and says
+    so; a copy the game already holds stays."""
+    source = ROOT/'build/windows-ninja/bhaptics_library.dll'
+    target = ROOT/'reports/stereo-modules'/digest/source.name
+    if not source.exists():
+        return
+    try:
+        if not target.exists() or target.read_bytes() != source.read_bytes():
+            shutil.copyfile(source, target)
+    except OSError as error:
+        print(f'WARNING: the bHaptics library could not be staged ({error}): no body haptics this session.',
+              flush=True)
 
 
 # The prompt and QTE interface's eight names, in the order PromptData counts them.
@@ -1815,6 +1886,9 @@ def main():
                    help='Degrees a second the right stick turns you while held over, at full tilt '
                         '(0: it snap turns instead; default 0)')
     p.add_argument('--haptics', type=int, default=100, help='Controller vibration in percent (default 100)')
+    p.add_argument('--body-haptics', type=int, default=100,
+                   help='How strongly a bHaptics vest, sleeves and visor play, in percent (0: off; default 100). '
+                        'They play through the bHaptics Player, which has to be running')
     p.add_argument('--screen-size', type=int, choices=(0, 1, 2), default=1,
                    help='The game screen for menus, cutscenes and flat mode: 0 small, 1 medium, 2 large')
     p.add_argument('--screen-depth', type=int, choices=(0, 1, 2, 3), default=2,
@@ -1847,6 +1921,8 @@ def main():
         p.error('Use a monitor rate of %d..%d a second (0: every frame)' % MONITOR_RATES)
     if not 0 <= a.snap_turn <= 90 or not 0 <= a.smooth_turn <= 360 or not 0 <= a.haptics <= 100:
         p.error('Use 0..90 degrees of snap turn, 0..360 degrees a second of smooth turn and 0..100% vibration')
+    if not 0 <= a.body_haptics <= 100:
+        p.error('Use 0..100% body haptics')
     if not 40 <= a.weight <= 300:
         p.error('Use a weight of 40..300% of real gravity')
     if not 90 <= a.flip_speed <= 480:
@@ -2023,12 +2099,15 @@ def session(a, startup):
                                            'SpidyGpuData', 'SpidyXrTimingData', 'SpidyAppearanceData',
                                            'SpidyStereoFrames', 'SpidyXrSnapshot', 'SpidyStereoData',
                                            'SpidyBodyData', 'SpidySlowMotionData', 'SpidyHudData',
-                                           'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData', 'SpidyImpostorReach'))
+                                           'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData', 'SpidyImpostorReach',
+                                           'SpidyHapticsData'))
+        stage_haptics(xr_hash)
+
         saved = vr_display.Registry().read(('ScreenSpaceReflections', 'RTReflections'))
         reflections, reflections_line = eye_reflections(saved.get('ScreenSpaceReflections'), a.no_eye_reflections,
                                                         saved.get('RTReflections', 0))
         game_view, game_view_line = ray_traced_view(saved.get('RTReflections', 0))
-        config = struct.pack('<4I7Q2IfI', 0x53585243, 23, 664, game.pid, game.base, queue,
+        config = struct.pack('<4I7Q2IfI', 0x53585243, 24, 664, game.pid, game.base, queue,
                              bridge_module, ray_module, motion_module, 0, 0,
                              int(a.seconds*1000), a.size, a.swing_speed,
                              int(a.capture_images) | (2 if a.overlay_webs else 0) |
@@ -2046,7 +2125,8 @@ def session(a, startup):
                              (0x800000 if a.venom_trigger else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
-                                                 a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth, 0)
+                                                 a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth,
+                                                 a.body_haptics)
         startup.stage = 'starting VR'
         code = call_with_payload(process, xr['SpidyXrStart'], config)
         if code:
@@ -2081,6 +2161,8 @@ def session(a, startup):
         slow_motion_samples = deque(maxlen=2000)
         # The HUD: the latest (native_hud::Data), for a report written after the game closed.
         hud_last = None
+        # Body haptics: the latest, once the session has written it.
+        haptics_last = None
         prompt_last = None
         eye_jobs = None
         timing = None
@@ -2111,7 +2193,10 @@ def session(a, startup):
                            render_size=None)
 
         def hand_over_settings(sample):
-            """Tell the launcher what the VR settings were left at, for the next session."""
+            """Tell the launcher what the VR settings were left at, for the next session. BODY HAPTICS rides its
+            own struct, as written last."""
+            if sample and sample.get('vr_settings') and haptics_last:
+                sample = dict(sample, vr_settings=dict(sample['vr_settings'], body_haptics=haptics_last['level']))
             line = settings_line(settings_start, sample)
             if line:
                 print(line, flush=True)
@@ -2144,7 +2229,7 @@ def session(a, startup):
                         ropes=ropes, steam_guard=steam, venom_events=venom_events,
                         shooter=shooter, shooter_samples=list(shooter_samples),
                         slow_motion=slow_motion, slow_motion_samples=list(slow_motion_samples), hud=hud_last,
-                        prompts=prompt_section(list(samples)),
+                        haptics=haptics_last, prompts=prompt_section(list(samples)),
                         ray_samples=list(ray_samples), appearance=appearance, eye_jobs=eye_jobs,
                         render_memory=render_memory, timing=timing, network=links,
                         stream_stalls=stream_stalls(list(samples)),
@@ -2255,6 +2340,13 @@ def session(a, startup):
                         if any(slow[k] != (slow_motion or {}).get(k) for k in SLOW_MOTION_COUNTS):
                             slow_motion_samples.append(dict(slow, seconds=round(time.monotonic()-started, 3)))
                         slow_motion = slow
+                    # Body haptics: whether the Player and the devices are there, and what they played.
+                    felt = haptics_snapshot(game, xr['SpidyHapticsData'])
+                    if felt and felt['written']:
+                        haptics_last = felt
+                        sample['haptics'] = {k: felt[k] for k in ('status', 'devices', 'frames', 'hits', 'landings')}
+                        if sample.get('vr_settings'):
+                            sample['vr_settings']['body_haptics'] = felt['level']
                     # What the game asked for, and the census of the calls its UI
                     # makes: kept for the report however the session ends.
                     prompt_last = prompt_snapshot(game, xr['SpidyPromptData']) or prompt_last
@@ -2399,6 +2491,8 @@ def session(a, startup):
         bridge_stop = call_remote(process, bridge['SpidyStop'])
         bridge_active = bridge_stop != 0
         final_render_memory = render_memory_snapshot(game, render_data) if render_data else None
+        if (felt := haptics_snapshot(game, xr['SpidyHapticsData'])) and felt['written']:
+            haptics_last = felt
         render_stop = call_remote(process, render_module['SpidyRenderMemoryStop']) if render_module else 0
         result = dict(pid=game.pid, module_base=hex(game.base), bridge_hash=bridge_hash, xr_hash=xr_hash,
             eye_size=a.size,render_scale=a.render_scale,eyes=eye_options,capture_images=a.capture_images,
@@ -2419,7 +2513,7 @@ def session(a, startup):
             shooter=shooter_snapshot(game, rays['SpidyShooterData']) or shooter,
             shooter_samples=list(shooter_samples),
             slow_motion=slow_motion_snapshot(game, xr['SpidySlowMotionData']) or slow_motion,
-            slow_motion_samples=list(slow_motion_samples),
+            slow_motion_samples=list(slow_motion_samples), haptics=haptics_last,
             motion_samples=list(motion_samples), appearance=appearance_snapshot(game,xr['SpidyAppearanceData']),
             hud=hud_snapshot(game, xr['SpidyHudData']),
             prompts=prompt_snapshot(game, xr['SpidyPromptData']),

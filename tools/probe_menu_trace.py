@@ -81,8 +81,8 @@ def main():
             time.sleep(1.5 if name in ('start', 'a', 'b') else .6)
             seen, calls = entries(game, exports['SpidyMenuTraceData'], seen)
             # VR VIEW: GAME SCREEN, as the menu holds it (SpidyMenuSample's flag 1024).
-            code, raw = pad.call_with_output(game, process, exports['SpidyMenuSample'], b'', 72)
-            flags = struct.unpack_from('<I', raw, 36)[0] if not code and len(raw) == 72 else 0
+            code, raw = pad.call_with_output(game, process, exports['SpidyMenuSample'], b'', 80)
+            flags = struct.unpack_from('<I', raw, 36)[0] if not code and len(raw) == 80 else 0
             step = dict(step=name, capture=capture(game, f'{n:02d}-{name}'), calls=calls,
                         game_screen=bool(flags & 1024), changes=struct.unpack_from('<Q', raw, 24)[0])
             report['steps'].append(step)

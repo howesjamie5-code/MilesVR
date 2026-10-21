@@ -3,7 +3,638 @@
 Every build, newest first, with what changed, why, and what was measured.
 Per-check results are in [VALIDATION.md](VALIDATION.md).
 
-**Latest build (October 19, fourth): arcade webs, and the SPIDY VR tab in
+**Latest build (October 21, fourth): RECORDING FOV, optional - pull request
+21 (iplusdvr).** You: "review and fix whats needed if needed", then "it should
+be an optional feature".
+
+- **RECORDING FOV, the last row under DISPLAY, OFF unless you pick 130, 140
+  or 150 degrees.** Off, the game window mirrors your left eye as it has
+  since 0.3.5, Spidy's marks and all. With an angle, the game renders its own
+  view again for the window, at least that wide across and of the window's
+  shape: a wider picture to record, without Spidy's marks (they stay in the
+  headset), every frame whatever the monitor frame rate, at a cost in frame
+  rate. That view is the engine's active view, which the eyes rely on for
+  culling, occlusion and the far buildings' full models, so its lens never
+  covers less than the head's lens covering both eyes: a Quest 3 in a 16:9
+  window needs 128.5 degrees. While it is on, far buildings draw their full
+  models within the game's own 145 m, not the half as far again they get
+  while the game's view rests.
+- **Settings profiles leave it out** (October 20, eighth, below), as they
+  do the monitor and the other graphics options: it suits one PC, and a
+  shared profile would cost someone else frame rate. Using a profile keeps
+  your `recording_fov` line in `spidy_vr.ini` as it was.
+- **In the launcher too:** Options, the Monitor card, "Recording FOV",
+  with the tab's own choices on the same `spidy_vr.ini` line (the build
+  before put every other SPIDY VR setting in the launcher). Reset options
+  turns it off.
+- **Measured by the author** in a Quest 3 (3032 x 3248 an eye), standing in
+  one place 30 s each: 117.1 newly rendered frames a second off, 84.5 at 130
+  degrees, 112.3 off again, so about 3 ms a frame while it is on. They saw
+  nothing missing at the headset's edges or in the far buildings.
+- **What the review changed.** The eyes' shared shadows stay fitted to the
+  head's lens: the pull request fitted them to the recording lens, which
+  would have coarsened the headset's shadows while recording (the game's view
+  fits cascades of its own when it renders). The view's first submit of the
+  frame, which sets up its culling, takes the recording lens too; only its
+  last one had it. The choices are 130, 140 and 150 degrees: the pull
+  request's 80 to 120 all showed the same 128.5 on a Quest 3. The code and
+  `spidy_vr.ini` call it what the tab does (`recording_fov.hpp`,
+  `recording_fov=`; it was spectator), the help is in the tab's words, and
+  the angles carry their degree signs. The tab's layout test checks the row
+  where it is instead of leaving it out, and the docs are here, in
+  PLAYERS.md and DEVELOPMENT.md rather than a file of their own. Kept from
+  the pull request: the menu's record of changed settings has 64 bits, since
+  the body haptics' switches took the settings past 31, where a 32-bit shift
+  is undefined.
+- **Checked:** core tests (new: the recording FOV's choices, range and line
+  in the tab's file, its lens holding lopsided eyes at four window shapes and
+  a Quest 3's at 16:9), the launcher's, all the protocol suites. The author's
+  headset check ran their version; the review's lens changes have not run in
+  the game, and the launcher's row was not looked at on screen.
+
+**Earlier build (October 21, third): every SPIDY VR setting in the launcher's
+options.** You: "why doesnt the new launcher include all the realstic flips
+stuff?", then "yeah lets add all".
+
+- **Why they were missing:** the settings that launcher.ini has no key for
+  (REALISTIC FLIPS and its nine rows, HAND WALL CLIMBING, WALL CAMERA
+  DISTANCE, NEAR CLIP, UI STYLE, the four body haptics switches) were only
+  in the game's SPIDY VR tab, which keeps them in `%APPDATA%\Spidy\spidy_vr.ini`.
+  The facelift laid out the options the launcher had; none of these were
+  among them.
+- **Now in Options:** "Walls and flips" is two cards. Walls: wall running,
+  hand wall climbing (experimental), wall camera distance. Flips: flips,
+  flip speed, realistic flips (experimental), and while it is on its nine
+  rows under it (rotation strength, max rotation speed, minimum flight
+  speed, swing momentum, rotation response, hand momentum, angular drag,
+  minimum hand speed, air rotation brake). Body and haptics: web, wind,
+  combat and movement haptics under Body haptics while it plays. Picture:
+  near clip. Game screen and HUD: UI style.
+- **Same file, same steps:** the launcher changes them in `spidy_vr.ini`,
+  where the game reads them as VR starts, and its lists are the tab's own
+  choices (written "Very slow", "20 cm", "90°/s"), so the two never offer
+  different steps. Reset options puts them back to Spidy's own too. Profiles
+  held them already.
+- **Checked:** the launcher and its tests built in a scratch folder, no
+  warnings; 30 launcher tests pass. In a scratch copy beside your launcher:
+  every new row showing your `spidy_vr.ini` (hand wall climbing on, swing
+  momentum off, hand momentum 75%, angular drag Very slow, minimum hand
+  speed 3 m/s); switching realistic flips on wrote `realistic_flips=1` and
+  showed the nine rows; Angular drag's list (Fast to Very slow) and picking
+  Medium wrote `angular_drag_ms=1500`; Reset options wrote the defaults.
+  launcher.ini and `spidy_vr.ini` put back byte for byte after.
+- **Not checked:** a VR session started after changing them in the
+  launcher.
+
+**Earlier build (October 21, second): the launcher in Spidy's print, laid out
+again.** You: "lets give the launcher a facelift with out style, better layout
+and UX", then "we have a control map visual, maybe use it?" and "i feel like
+the ui is a bit much with the colors and contrast".
+
+- **The look:** the print of Spidy's videos and README, toned down after your
+  third note: a dark ground and dark cards; Barlow Condensed capitals for
+  names, buttons and tabs; the narrator's Comic Neue for the one line that says
+  what to do next; the name SPIDY and white headlines misprinted (a cyan ghost
+  left, a magenta one right); the release as an issue box (`No. 0.4.0`,
+  `FREE`); halftone dots in the corners. Colour is kept small: red is START VR
+  and the tab you are on, yellow what needs a look, cyan what is fine, violet
+  a switch that is on. The fonts are compiled into the launcher (SIL Open Font
+  License, in `docs/licenses` and THIRD_PARTY_NOTICES).
+- **Play:** a panel that says what the session is doing in a headline (READY,
+  STARTING THE GAME, IN VR · 12:34, VR COULD NOT START), what to do next in the
+  narrator's line, and the session's three steps (headset, game, play), ticked
+  off from the log as they pass and the one that failed marked; START VR at
+  its foot, with the profile VR starts with. When VR fails, the error and what
+  to do about it (copy the log, ask on the Discord, restart as administrator,
+  close the game and start VR, force stop) are in the panel. This PC and the
+  session log on the right, with shorter words while nothing has run.
+- **Options have their own tab:** the Profile card (and Reset options), then
+  the options in seven cards in two columns: webs, moving, walls and flips,
+  body and haptics, picture, game screen and HUD, monitor. The two sliders
+  are gauges.
+- **Controls:** the README's picture of the controls first, then every control
+  in words. The picture was re-shot: its issue box says PC VR, not 0.3.7, and
+  its red box what is true since the prompts read by name: the game shows a
+  button? Press that one; its LT, LB, RT, RB are your triggers. The README
+  shows the same file (its alt text says that too).
+- **Ko-fi, highlighted** (you: "lets highlight kofi a bit more and maybe change
+  the copy", and you chose "Buy me a coffee"): the header's Ko-fi button is
+  yellow-keylined, "♥ BUY ME A COFFEE / ON KO-FI", beside a quiet "JOIN THE
+  DISCORD". After a session that got into VR the panel adds "Had fun? Buy me a
+  coffee: it pays for the next update." and the same button. About's Ko-fi card
+  (yellow-keylined) reads "SPIDY IS FREE. THE AI TOKENS ARE NOT. / BUY ME A
+  COFFEE / Your tip pays for updates. And the next full VR conversion.", beside
+  the Discord card.
+- **The README's launcher picture** is the new Play tab.
+- **Checked:** the launcher and its tests built in a scratch folder, `/W4`
+  clean; 30 launcher tests. Every tab looked at on this PC (150 %), in a
+  scratch copy run beside your own launcher: the profile menu, the Save as a
+  profile dialog, the controls picture drawn pixel for pixel, the smallest
+  window (980 x 700). The states a session brings, in a scratch copy with the
+  session faked: in VR, stopping, ended, failed, needs administrator, close the
+  game first, could not start, not ready, the update offer. launcher.ini and
+  `spidy_vr.ini` the same before and after.
+- **Not checked:** a VR session with it, another Windows scaling than 150 %,
+  Windows 10, a real update, tooltips.
+
+**Earlier build (October 21, first): a tech look for Spidy's marks, as the
+game's own HUD.** You: "lets make an optional alternative set of our custom
+ingame vr ui in more scifi techy style like the based game ui".
+
+- **Where:** UI STYLE in Settings > SPIDY VR, under DISPLAY after the HUD:
+  COMIC (the printed marks, as before, and still the default) or TECH. It
+  changes at once. Like NEAR CLIP it is the tab's own: Spidy keeps it in
+  `%APPDATA%\Spidy\spidy_vr.ini` (`ui_style=0` or `1`), and settings
+  profiles carry it.
+- **The look**, taken from the game's own pause menu, Settings and HUD:
+  lines a pixel or two wide in its pale line white, cyan for what is picked
+  or answers now, amber for what is equipped or finishes, red for danger,
+  translucent blue panels edged with thin rules, the menus' corner brackets
+  and diamonds, lettering upright in square strokes. Every shape has a soft
+  dark halo under it, so it reads on the sky and on a lit wall, and the lit
+  ones a faint glow. Nothing holds a pose: the marks ease in, flicker on as
+  the game's displays do, turn and fade.
+- **Each mark**, in the same place, at the same size and for the same time
+  as its comic one:
+  - aim markers: a scope's four arcs round a diamond with a tick out at each
+    gap (the left hand's cyan-blue, the right hand's amber-orange, as
+    before); faint dashes for open air; an open red cross for a miss; for a
+    target three ticked arcs with claws round a dashed ring turning the
+    other way, closing in as before;
+  - the mark over the enemy: four arcs; locked, cyan, with a pointer in at
+    each side and a dashed ring turning; a call, three chevrons the way the
+    fist must go, a light running along them, over a ring of 24 segments
+    that runs down; the finisher's amber inside a red ring with six
+    diamonds;
+  - a landed blow: a hit marker's four strokes springing out and a ring
+    going out (white; amber for a hard blow; red with an amber hexagon
+    turning for a finisher; cyan ticks for a called one), and the count on
+    a callout, "X3" under the game's COMBO;
+  - a knockout: a red reticle closing on where he stood, a cross in it, and
+    a "KO" tag drawn out beside it;
+  - Spider-Sense: five glowing wavy lines over his head, as the game draws
+    its own round the hero's, cyan, red or amber for what to do, inside a
+    ring of dashes closing on the blow, amber with pointers in at its last
+    notch; a counter throws the lines out with a ring. In the sightline:
+    the same mark, chevrons pointing to him, and three arcs pinging at the
+    rim of the view;
+  - the gadget wheel: a translucent blue ring of eight places with line
+    pictures, ticked round its edge; the lit place's wedge cyan inside the
+    menus' corner brackets; its name between two ruled lines and its
+    charges in the middle; the equipped gadget amber;
+  - slow motion's meter: a watch face over the wrist, the focus in 20
+    segments round an hourglass whose sand runs down, a sweep going round
+    in slow motion, red for a refused press;
+  - the calibration panel: one of the game's menu panels, its title on a
+    tab, the hint amber, the hold's bar in segments, the controllers' rings
+    in segments, "(B) SKIP" as the game's prompts are.
+  The phone keeps its own look, the game's FNSM app's.
+- **Its cost**, built for each image as the comic marks are: the wheel
+  22,020 vertices (the comic one 45,582), a blow with its count 2,664
+  (6,210), a target's ring 5,517 (2,436), a Spider-Sense mark 9,936
+  (6,804), the meter 7,686 (3,504), the calibration panel 24,168 (3,996),
+  each under 0.1 ms.
+- **Checked:** 426 core tests (4 new: COMIC is every mark's default and
+  TECH draws each anew; the tech marks' colours, motion, placement and
+  ends; Spider-Sense over his head and in the sightline where the comic
+  one is; the wheel, the meter and the panel, the panel translucent with
+  nothing behind it, the wheel under 60,000 vertices), the aim markers'
+  test now for both styles, 30 launcher tests (profiles hold `ui_style`,
+  the change list says "UI STYLE COMIC → TECH"), the six protocol suites,
+  the GPU overlay test (debug layer clean), and the game's modules built
+  but the launcher. Sheets of every mark's states in both styles over two
+  headset captures: `tools\preview-marks.ps1 -Style Tech`, which now draws
+  the aim markers, the meter and the panel too.
+- **Not checked:** in the game or a headset (no game launch while the PC's
+  hard resets are unexplained). `tools/probe_menu.py` takes one more Down
+  for the new row; not run.
+
+**Earlier build (October 20, eighth): settings profiles, to keep, share and
+import.** You: "lets add spidy settings profiles so people can easily import
+and export and share them".
+
+- **Where:** "Profile", the first of the launcher's options. Its menu lists
+  your profiles (pick one to use it; a tooltip says what it would change),
+  *Save as a profile...*, *Save changes to* the one you used once you have
+  changed something (the row then shows its name with a `*`), *Copy to
+  share*, *Export a file...*, *Paste a profile*, *Import a file...*, *Delete a
+  profile* (to the Recycle Bin) and *Open the profiles folder*. A `.spidy`
+  file dropped on the launcher's window is imported too.
+- **What a profile holds:** every setting of the SPIDY VR tab but VR VIEW and
+  CALIBRATE BODY, the tab's own ones too (NEAR CLIP, the four body haptics
+  switches, HAND WALL CLIMBING, WALL CAMERA DISTANCE, REALISTIC FLIPS and its
+  nine), and "Wall running": 33 settings. Not the graphics options (render
+  resolution, upscaling, the game window, the monitor, the game's depth of
+  field and sharpening), which suit one PC, and not the body calibration.
+- **The text** is what the files hold: a line saying what it is and how to
+  use it, `name=`, `spidy=0.4.0`, then a `key=value` line per setting, with
+  launcher.ini's and spidy_vr.ini's keys. *Copy to share* puts it in a Discord
+  code block. *Paste a profile* takes it back from a whole message, quoted or
+  not, and also takes a session's "VR settings from the headset" line,
+  launcher.ini, or a few lines written by hand (`hud=3`, `wall_run=off`).
+  Values out of range are clamped; anything else is passed over. A setting a
+  profile lacks stays as it is: a profile from an older Spidy, or a partial
+  one, changes only what it names.
+- **Importing shows what changes first:** each setting it would change, as
+  the tab names it ("WEB STYLE  REALISTIC → ARCADE", "NEAR CLIP  2 CM → 1 CM"),
+  and how many of the 33 it holds; then *Save and use*, *Save only* or
+  *Cancel*. A name you already have says saving replaces it.
+- **Nothing is lost by trying one:** using a profile while no saved profile
+  holds your settings first keeps them as "Previous settings"; picking that
+  goes back, and keeps what you had in its place, to switch again.
+- **Where they live:** `%APPDATA%\Spidy\profiles\<name>.spidy`, beside
+  launcher.ini. The launcher now reads `spidy_vr.ini` for the tab's own
+  settings and writes it when a profile changes one, the way the stereo
+  module does. launcher.ini gets `profile=` (the one last used or saved). All
+  of it is off while VR runs, as the options are.
+- **Checked:** 30 launcher tests (6 new: the profile holds every tab row and
+  `spidy_vr.ini`'s keys at the module's ranges, the exact text of the
+  defaults, a round trip that leaves graphics and the calibration alone, a
+  Discord message, a session's line, launcher.ini and words, the change list
+  in the tab's words, file names), and each of seven planted bugs fails one.
+  The launcher driven on this PC with your settings backed up: save, the
+  `*` after a change, the tooltip, copy (the clipboard held the code block),
+  paste of an 8-setting message (preview, then *Save and use*: launcher.ini
+  and `spidy_vr.ini` changed in those 8 only, Previous settings saved), a
+  dropped file, *Save only*, going back and forth with Previous settings,
+  export and import through Windows' dialogs, delete, a clipboard with no
+  profile. Then launcher.ini and `spidy_vr.ini` put back (same SHA-256), the
+  test profiles and the clipboard too. Core 422, realistic flips, all six
+  protocol suites (138). No protocol change: the launcher changes, and the
+  stereo module is only rebuilt (`vr_settings::steps` made public).
+- **Not checked:** a VR session started after a profile was used, reading
+  the `spidy_vr.ini` the launcher wrote (the same text the module writes;
+  core tests read it back).
+
+**Earlier build (October 20, seventh): after a realistic flip the stick walks
+where you look.** You: "i tried the new experimental locomotion and crawling
+settings - they somehow caused offset where moving forward would cause me to
+walk left (see last session)".
+
+- **The session** (16:58, 6 minutes 44 seconds; HAND WALL CLIMBING and
+  REALISTIC FLIPS switched on at 1:32-1:36, FLIPS at 1:40): from the first
+  flights with REALISTIC FLIPS on, every walk on the ground went off to the
+  side of where you looked, measured from your view against the way you
+  moved: 91 degrees to the left at 3:45, 85 to 90 at 5:35-5:45, 55 at 6:35,
+  and the game was sent its left key (A) where you pushed ahead. Your body's
+  legs kept their air pose on the ground from 2:30 to the end; before the
+  switches they stood (164 of 166 samples on the ground).
+- **Why: the heading a realistic flip keeps stayed in its tilt.** A realistic
+  flip brings you upright with your heading kept, and it kept that heading in
+  the tilt it turns the view by. The stick walks by the tracking space's yaw,
+  which leaves a flip's tilt aside, and the game's camera turns with the
+  view: whatever turn about the vertical a spin left was missing from every
+  walk, until a menu turned the view back. FLIPS' own flips always end
+  level, so they never had it. The body took the leftover turn for a lean,
+  and a lean over 5 degrees has its feet off the ground. HAND WALL CLIMBING
+  was no part of it: its turns go into the yaw, and its roll ends with the
+  wall.
+- **Fixed:** while you are within a quarter turn of upright, the yaw takes
+  the spin's turn about the vertical every frame, about the point the tilt
+  turns round, so nothing in view moves; the tilt keeps only the lean, level
+  again once you land or press A in the air. The stick walks, and steers in
+  the air, where you look; a menu or a recenter keeps the way you face; the
+  legs stand again after a landing.
+- **Checked:** a new rig test (both arms swept to the left in the air, then a
+  landing or A: the stick walks along the look, the head stays where it is,
+  the view never jumps a frame) failed on the old code and passes, and fails
+  with the place not made up for as the yaw turns. In the realistic flips'
+  own test, a twin that keeps the turn in its tilt turns the same to 0.000006
+  radians over 900 frames of webs, a release, arm swings, A and a landing,
+  and leaving out any of the five things that turn with the heading breaks
+  it. 422 core tests, the realistic flips' and the launcher's programs, all
+  six protocol suites. Only the stereo and ray modules change; no protocol
+  change. Not run in the game or a headset.
+
+**Earlier build (October 20, sixth): body haptics on bHaptics devices, retuned
+after the first session on the devkit, with a switch for each group.** You:
+"plan and build the bhaptics implementation. im getting my devkit tomorrow
+(TactSuit Pro, TactSleeve, and TactVisor)"; after the first session: "ok it
+worked buy way too agressive, directionality didnt really feel like anything,
+felt like 0 to 100 always with sometimes still going when im standing (on the
+wall or in pause menu etc)"; then "also add a toggle to settings?" (one switch
+per effect group).
+
+- **The first session** (a TactSuit Pro and both TactSleeves; the visor was
+  not paired): 5,483 frames to the devices, none refused, 227 events (80 webs
+  taking hold and 80 letting go, 52 zips, 11 walls, 2 landings, a scan). The
+  report and the bHaptics Player's own log showed what you felt: the wind blew
+  94% of the time in the air (the swing's speed was 31 m/s at the middle and
+  it blew from 12 m/s) and along walls too; most events played at 50-100% on
+  half the vest; each device's 70 ms frames came every 40 ms, overlapping for
+  30 ms of each; and the vest faced wherever your head looked. The
+  pause menu itself was quiet: nothing went to the Player in its 4 s.
+- **Gentler, and from nothing.** Events play at 10-45%, the heaviest blows
+  (finishers, heavy blows) up to 75%. A web's pull grows with its tension from
+  nothing: 2% hanging, 8% in the middle of a swing, 23% at the bottom of a fast
+  one, 30% at most (until now any pull over 2 m/s^2 played 12% at once). A
+  motor under 3% is sent as off.
+- **The wind only in free flight**: in the air, off any wall, no web holding
+  you. From 15 m/s (nothing) to 40 m/s (16%), on the motors that face where
+  you fly, gliding instead of fluttering, coming and going over a quarter of a
+  second; in a fall it comes up round the waist.
+- **Spots instead of halves.** A blow, a zip, a wall and Spider-Sense play on
+  a few motors toward where they come from, the nearest at full strength (a
+  blow from the side was weaker than one from ahead). Zips play toward where
+  the web pulls you, walls on the side the wall is; a blow from nowhere known
+  on the chest and the back.
+- **The vest faces where your body does**: a look over your shoulder (up to 34
+  degrees) leaves it; past that it follows your head, and it turns with snap
+  and smooth turns, a wall you stand on and a flip at once.
+- **One frame at a time.** Each device's last frame is stopped before the next
+  plays. Whether the Player played two overlapping frames at once, adding them
+  up, is not to be seen from outside; now it cannot.
+- **The switches.** A new HAPTICS section in the SPIDY VR tab: CONTROLLER
+  VIBRATION (from COMFORT), BODY HAPTICS (OFF, 25-100%) and four switches:
+  WEB HAPTICS (shots, holds, the swing's pull, zips, grabs), WIND HAPTICS,
+  COMBAT HAPTICS (punches, hits, Spider-Sense, dodges, heals, slow motion and
+  the heart) and MOVEMENT HAPTICS (landings, walls, wall climbing, leaps). A
+  group switched off stops at once. They are the tab's alone, kept in
+  `%APPDATA%\Spidy\spidy_vr.ini` like the other tab-only rows; "Body haptics"
+  in the launcher stays the level.
+- **What else you feel.** The arm whose web takes hold ticks, then its
+  shoulder; a web ball ticks in its forearm. Landings come up from the waist,
+  as hard as you came down; a charged leap builds round the waist and lets go
+  up the body; HAND WALL CLIMBING's grips tick in their arm. Every punch kicks
+  back through its arm and shoulder, a heavy blow through the chest, a
+  finisher through everything. Spider-Sense tingles in the visor, two motors
+  at a time a dozen times a second, strongest on the attacker's side, and on
+  a spot at your shoulders toward him; a warning to dodge harder and longer.
+  Blows you take are as hard as the health they took (falls in the hero's
+  `HeroHealth`, vtable `38a6df0`, hit points at +0x88), from the attack the
+  game warned of last. Below 30% health your heart races left of the chest's
+  middle; slow motion beats it slowly. Menus, scenes and the game screen are
+  quiet.
+- **How.** The patterns are code (`body_haptics`, in the core): nothing is
+  designed in bHaptics' portal. bHaptics' C/C++ SDK 2.7.1 (tact-cpp2) plays
+  them, its library loaded only once BODY HAPTICS is on, on a thread of its
+  own (`bhaptics_output`). A PC without the bHaptics Player does nothing more;
+  a Player started after VR is found by itself. "No device" waits three
+  seconds for the Player's device list.
+- **The bHaptics app.** The Player plays only for an app of bHaptics'
+  Developer Portal: its workspace ID (not the app's own record ID, which gets
+  "No workspace") and API key go in `bhaptics-app.local` (git-ignored) or the
+  `SPIDY_BHAPTICS_APP_ID` / `SPIDY_BHAPTICS_API_KEY` variables, and the
+  release workflow takes repository secrets of those names (not set yet). Your
+  app, SpidyVR, is in this PC's `bhaptics-app.local`. A Player that connects
+  but sends no event list within 5 s says `rejected`.
+- **`spidy_haptics_test.exe`**, in the zip too: `check`, `map` (each part of
+  each device in turn), `effects` (every pattern, named, with what it should
+  feel like), `stream`, and `--dry` (the frames as the devices would get them,
+  no Player).
+- **Protocol:** XrConfig version 24 (`bodyHaptics` in version 23's spare
+  word); a new export, `SpidyHapticsData` (version 2, 256 bytes: the report's
+  and each sample's `haptics` - now also the seconds of play with the Player,
+  each device's share of them playing and its mean strength (`played`), and
+  the switches on (`groups`) - and `vr_settings.body_haptics`); a new kind,
+  `wall_grip` (35); the menu probe's structs version 6 (`body_haptics`);
+  launcher.ini `body_haptics`; `--body-haptics`. A session puts
+  `bhaptics_library.dll` beside the stereo module it stages. The DLLs,
+  run_game_vr.py and the launcher go together. On main's 3ce3baa (October 20,
+  fifth) with pull requests 22, 23 and 24 and the prompt fixes.
+- **Checked:** 421 core tests (new here: the TactSuit Pro's grid and the
+  body's frame, the torso staying put for a look aside and turning with the
+  room, a pattern on its own side only and out of VR play never, each switch
+  silencing its group at once, blows on a spot toward the attacker and
+  Spider-Sense on his side, the wind in free flight only and the webs' pull,
+  mixing below full strength and the heart, landings and health, the tab's
+  HAPTICS section and its lines in `spidy_vr.ini`), 24 launcher tests, the
+  realistic flips' tests, all six protocol suites (138 tests). The Player,
+  probed from this PC: `stop` ends a frame at once, its legacy socket does not
+  report the SDK's dots, and `isPlayingByRequestId` stuck on after some
+  streams. The retuned patterns have not been felt yet, nor run in the game.
+  `tools/probe_menu.py` follows the new rows (26 changes); not run in the game.
+
+**Earlier build (October 20, fifth): realistic flips, experimental - pull
+request 23 (iplusdvr).** You: "review and merge or fix the open prs".
+
+- **REALISTIC FLIPS, under EXPERIMENTAL, off by default, and nine rows that
+  tune it.** While it is on it takes the place of FLIPS' turns: on a web,
+  above a travel speed, the body turns toward the web's pull; a web let go
+  leaves the swing's spin; arm swings in the air add spin and swings the
+  other way take it out; drag lets it die away, and a spin can go past a
+  whole turn, with no flip of a set size. A in the air, or landing, brings
+  you upright with your heading kept. With FLIPS on as well, the left stick,
+  let go once in the air, steers the turn. The author drew on the
+  interaction of Blaze's Spider-Man for Blade & Sorcery, with none of its
+  code, and tried it in a headset. Off, the flips are as they were.
+- **What the review changed.** The ten rows came first in the tab, above
+  WEBS; they are last under EXPERIMENTAL now, and FLIPS keeps its own help
+  (the pull request had rewritten it for the new mode). The settings went
+  into `SpidyRotation.ini` beside the stereo module, which runs from a copy
+  staged per build, so every update would have reset them; they are kept in
+  `%APPDATA%\Spidy\spidy_vr.ini` with the tab's other own settings. The new
+  files are formatted as the rest (`.clang-format`), the speeds read as
+  FLIP SPEED's do (degrees a second), the separate test program is
+  `spidy_realistic_flip_tests` (ctest `realistic_flips`), and the flight is
+  only sampled for the rig while the switch is on.
+- **Checked:** 408 core tests (new: the pull request's three, and one that
+  realistic flips off turn nothing and that the rows step through their
+  values), the realistic flips' own test program, the launcher's, all six
+  protocol suites. Not run here in the game or a headset.
+
+**Earlier build (October 20, fourth): NEAR CLIP - pull request 22
+(iplusdvr).** You: "review and merge or fix the open prs".
+
+- **NEAR CLIP, the last row under DISPLAY: how near the eyes the headset
+  still shows things, 2 cm unless you change it (1, 1.5, 2, 3, 5, 7.5 or 10
+  cm).** Spidy used to keep the game's own camera's near plane, 10 cm: right
+  for a camera behind the hero, but on the head it cut off hands held up
+  before the face. The head's view and both eyes take it while you are
+  immersive; the game screen and menus keep the game's. The engine's depth
+  is reversed, so the nearer plane costs no precision far away, and the
+  hero's head is already shrunk to a millimetre in VR, so its inside does not
+  show. The author tried it in a headset.
+- **What the review changed.** The row came first in the tab, above WEBS;
+  it is under DISPLAY now. The setting went into a file beside the stereo
+  module, which runs from a copy staged per build, so every update would
+  have reset it; and the render thread read that file every half second. It
+  is kept in `%APPDATA%\Spidy\spidy_vr.ini` with the tab's other own
+  settings (see the build before), and the XR worker hands it to the lenses
+  (`near_clip::set`) as the settings apply. `tools/probe_menu.py` steps past
+  the new row.
+- **Checked:** core tests (new: the near clip's choices and range, and its
+  line in the tab's file), the launcher's, all six protocol suites. Not run
+  here in the game or a headset.
+
+**Earlier build (October 20, third): hand wall climbing, experimental -
+Adrian's pull request 24 (AdrianGzzEsc).** You: "review and merge or fix the
+open prs".
+
+- **HAND WALL CLIMBING, under EXPERIMENTAL, off by default.** On a wall with
+  the left stick at rest the view stays upright beside it, a little
+  crouched, the eyes WALL CAMERA DISTANCE out (40 cm; 20 to 100). A grip
+  squeezed within about 18 cm of the wall holds on, open-palmed, with a short
+  buzz, and pulling it moves you the other way along the wall; two hands
+  share the pull. Both grips held and rolled turn the view along the wall
+  (90 degrees a second at most); the stick runs along the wall, steered by
+  the head's left and right; A jumps off. Round an outside corner the view
+  turns onto the next face and the body goes 85 cm on along it. Off, the
+  climbing paths do not run.
+- **What the review changed.** The pull request came from the author's own
+  preview builds, and three of their changes would have reached every
+  player: the launcher's title, its settings moved to a folder of its own
+  (`%APPDATA%\SpidyWallClimbPreview`, so everyone's saved options would have
+  gone), and the update check switched off. Those are out, and so are the
+  preview's notes (`docs/WALL_CLIMB_PREVIEW.md`); the player's part is in
+  PLAYERS.md. The swing command went from version 4 to one version 5 (240
+  bytes: each grip's place and squeeze, the roll's flag) instead of the
+  previews' versions 5, 6 and 7, whose gaze direction nothing read any more.
+  WALL CAMERA DISTANCE lost 10 and 15 cm: the eyes keep 20 cm from any
+  surface anyway (`HeadClearance::margin`, as the pull request's own test
+  showed), and the tab shows nine choices at most. The two rows were for one
+  session only; they now stay, in `%APPDATA%\Spidy\spidy_vr.ini`, which the
+  game's side of Spidy keeps for the SPIDY VR rows the launcher does not
+  show. Every row is checked against the tab's nine choices.
+- **Checked:** 403 core tests (41 new from the pull request; new here: the
+  tab-only settings' lines and their reading), the launcher's, all six
+  protocol suites. The rebuilt ray module takes a version 2 and the probe's
+  version 5 command and refuses a roll flag of 2 and the previews' version
+  7. The author played earlier previews; the last one (corners) had not been
+  played. Not run here in the game or a headset.
+
+**Earlier build (October 20, second): what the eyes draw counts as on
+screen.** You: "its not the textures its like the game lod system range is
+very short with low LOD objects seen from pretty close and stuff popping in
+from nearby (cars pedestrians). it didnt use to be like this".
+
+- **The cause, from 0.2.12 on.** Each of the game's views keeps a list of
+  the render instances it drew in its last frame (view `+1b80`, a byte each,
+  327,808 at your save). The view's scene submit clears it (`1920e54`) and
+  its model jobs mark what they draw (`1799a7d`). Gameplay reads these lists
+  to know what you see: the ViewportUpdateSystem sends actors their
+  entered- and left-the-viewport events from the active view's list
+  (`214f150`), and about 60 places ask whether an instance was drawn in any
+  of the game's views (`18a1890`, for one instance `159e940`), among them
+  the pedestrian groups and bots, the joint matching of attached models,
+  and the game's targeting (`ClosestOnScreenTargeting`, `5a3020`, and the
+  target scoring, `211c950`; projects-87 found these two). The eyes never
+  had a list (the view setup, `189ce20`, gives offscreen views none), and
+  since 0.2.12 the game's own view rests in VR and submits no scene, so its
+  list kept the last frame it drew before VR started. In 0.2.11 that view
+  still rendered from your head every frame, which kept its list right.
+- **Measured, in the game without a headset** (your save, the eyes at a
+  street, `reports/drawn-ab.json`): before VR the game's camera had 116
+  instances marked. With the eyes on as 0.4.0 has them, the list did not
+  change for whole 16-second stretches: it held the game camera's last
+  rendered frame (113 to 116 instances) while the eyes drew 3,900 to 4,600.
+- **What changed.** While the game's view rests, Spidy clears its list each
+  frame before the eyes' jobs are set up (`placeEyes`), and each eye's model
+  job marks what it draws into it (`setupModels`, job `+2b0`). The clear
+  comes where the game's own would (`1920240`, just before the views' scene
+  submits in `175a060`), so gameplay reads the list at the same point of
+  its frame as in the flat game. With this build (`reports/tree-drawn.json`,
+  `reports/tree-fly.json`): 4,460 to 4,600 instances at the street, every
+  frame (`SpidyDrawnFrames`, a new export, counts them; a sample taken
+  between the clear and the jobs' marks reads empty, in the flat game too);
+  following the view through a 15 m/s flight down the street (4,897 down to
+  884 as it opened up); with the game's view rendering again and resting
+  again in between; the eyes stopped cleanly each time.
+- **Not shown without the headset:** what the game does differently with a
+  right list. The viewport events go to the actors' own scripts, and people
+  and traffic come and go at random, so a few minutes of eye images showed
+  no difference I could put down to it. In the headset: swing along a street
+  with people and cars, and watch whether they still appear and vanish close
+  by; and where there is something to throw or yank, watch whether its
+  marker stays. hantop's playthrough lost those markers in VR (Fisk's
+  turrets, the Shocker bank's throwables, the car-crash boxes) and got them
+  back by switching to GAME SCREEN and back, which is what a list frozen at
+  the game camera's last frame does. Traffic's own code (`d67740` to
+  `d6b8b6`) reaches none of the readers within three direct calls, so cars
+  that still pop in may have another cause. Not changed: animated models get
+  part of their joint update only in the game's view's model job (`+342`),
+  which rests in VR; not looked into.
+- **Checked:** the build, both C++ suites and all six Python suites. Only
+  `spidy_stereo_probe.dll` changed; no protocol changed.
+
+**Earlier build (October 20): press what you see.** You, about hantop's
+playthrough in #mod-chat (50 items, October 14-19, the Oscorp research
+stations among them): "review the research hantop did ... try to come up
+with a unified immersive fix or a set of fixes", then "build it" for its
+first part.
+
+- **What the playthrough came down to.** The moments it could finish only on
+  the game screen name buttons VR play never sent. Read off its recordings:
+  "Hold LT and tap RB to fire webs and seal the leaks" (Under Pressure,
+  Chemical Leak, Ventilate the Problem), "Press LB to disperse vaccine"
+  (Vaccinate the Fish, Pigeon Vaccine), "Press D-pad up to equip the
+  camera", "Hold LT to aim the camera" (the smog stations, the landmarks),
+  "Press X for Vent Takedown" (Fisk Tower, the museum), "hold X + A to
+  Ground Strike" (Shaking Harlem), "Hold RB to bring up the Gadget Select"
+  (the Web Bomb's lesson), and a hostage's "use the left stick to aim, RB to
+  disarm". In VR play X opened the map or the wheel, the triggers and grips
+  shot Spidy's webs, and the game's LB, RB and LT on their own and its D-pad
+  up could not be sent at all.
+- **Why "Y sends what the prompt asks for" never helped.** Every session
+  since October 15 had the prompt reading off: on October 13 it closed the
+  game at CONTINUE, every time. The fault was Spidy's own logging, not the
+  game: each prompt call's line for the report went through `sprintf_s` with
+  a timestamp in front into a 128-byte buffer, and a call's line alone can
+  be 126 characters. A long text - the help line a save's load brings, a
+  police dispatch subtitle - overflowed it, and `sprintf_s` ends the process
+  for that, with no exception and no crash dump. The line is cut to its
+  buffer now (`keepLine`), and every raw read of the game's memory asks
+  Windows first (`readable`), and the reading is on in every session again.
+- **Measured, in the game without a headset** (your save, CONTINUE, the
+  reading on from the title): with 0.4.0's module the game died right after
+  CONTINUE, both times, its log ending on the load's own save request. With
+  this build the same run went through CONTINUE (the player at 68 s) and two
+  minutes of free roam, and lived. The first thing the game showed after the
+  load was `ShowText(7, 'Press [STICK_LEFT_PRESS] to <span
+  class='emphasis'>dive</span> and <span class='emphasis'>gain speed</span>
+  while swinging. ...')`, 127 characters in the report's ring. A later
+  load's help line, "Press [BTN_X] then [BTN_B] to perform the Dodge Under
+  move", came through as the pad's X and B and stayed live the 6.5 s it was
+  shown. Your 17 save files came out byte-identical after every run.
+- **Press what you see** (`game_pad::NamedPress`). While the game names a
+  button, the VR control of that name sends it. A, B, X and Y as they are: X
+  is then no menu or wheel, A no leap or flip, and B goes out while you
+  swing. LT or LB is the left hand's web-ball button and RT or RB the right
+  one's: the trigger, or the grip with WEB BUTTON: TRIGGER. The grips stay
+  your webs, so a mission that asks for its triggers still swings. L3 and R3
+  are the sticks' clicks (no slow motion, no pull meanwhile), and D-pad up,
+  left or right is the right stick pushed that way (no zip, no turn
+  meanwhile). A control is the game's only when it goes down while the game
+  names it, and it stays so until it is let go. Pressed in flight, it asks
+  the swing to let the game have its move (AirYield): the dive, the game's
+  own web swing, the Ground Strike.
+- **Fists.** While the game names its X, a fist thrown fast (2.2 m/s, and
+  not pulled back toward the head) is that X: held 0.6 s where the prompt
+  says hold (the Air Launch's uppercut). With X and A named in the air, a
+  fist thrown down is both: the Ground Strike. Spidy's own blows stand down
+  meanwhile (the swing's `noBlows`), so a takedown is the game's alone.
+- **A help line lasts as long as it is shown.** `ShowText(channel, text)`
+  stays up until `HideText(channel)`. What it names now lives that long (60
+  s at most without a call), not 2 s, and not until any `HideText` (a
+  subtitle sends one on its own channel). The rules are
+  `prompt_buttons::LiveDemands`, tested on their own.
+- **New words.** `[STICK_LEFT_PRESS]` and `[STICK_RIGHT_PRESS]`, which the
+  exe does not hold (the texts' own data has words of its own), and
+  `[FUNC_MELEE]`, the melee's button: X. **Not read yet:** a third kind,
+  the game's actions by name. Another load showed "While in the air, hold
+  `[ACTION_WEB_YANK_BOT]` to yank enemies up to you": an action of its own
+  binding configs (Fire, Swing, WebZip, WebYankBot, WebStrike, AimMode,
+  UseGadget, Heal and the rest), whose buttons the configs hold and the exe
+  does not. A line that names an action names nothing to Spidy until those
+  are read; guessing would press the wrong thing.
+- **What went.** `ContextPress`, the interact sending a prompt's demand: it
+  never ran with the reading off, and with each button now its own, there is
+  nothing left for it. A pull with both webs at a thing whose prompt names
+  both triggers still sends LT + RT.
+- **Docs:** PLAYERS.md (WHEN THE GAME ASKS FOR A BUTTON, the troubleshooting
+  line), the README, the launcher's Controls page. Discord's Controls post
+  and Webster's `faq.ts` still say "press Y": they follow with the release.
+- **Protocol:** none. The report's `prompts.context_presses` now counts the
+  presses that went to a named button, thrown fists included, and the
+  report's prompts section (census, timeline) fills again.
+- **Checked:** 365 core tests (new: the named presses, the fists, a coverage
+  test that every button the game can name is sent in VR play, the help
+  lines measured in the game, and what stays live how long); three bugs planted on purpose, each caught by
+  its test; all six protocol suites; the launcher's tests. **Not yet in a
+  headset:** the presses themselves, the fists, and the game taking its move
+  from the swing.
+
+**Earlier build (October 19, fourth): arcade webs, and the SPIDY VR tab in
 sections.** You: "the current web swinging is hard - webs get tangled over
 lightpoles and other small geometry, also they pull you down too much to the
 street. lets make an optional second set for arcady webs where they don't

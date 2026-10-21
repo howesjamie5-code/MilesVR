@@ -1,3 +1,4 @@
+#include "spidy/launcher_profile.hpp"
 #include "spidy/launcher_text.hpp"
 #include "spidy/launcher_update.hpp"
 #include <functional>
@@ -183,13 +184,15 @@ int main() {
         options.snapTurn = 45;
         options.smoothTurn = 120;
         options.haptics = 0;
+        options.bodyHaptics = 50;
         options.screenSize = 7;
         options.weight = 150;
         args = sessionArguments(options, L"r.json", L"", L"");
         const std::vector<std::wstring> settings{L"--auto-launch", L"--seconds", L"0", L"--swing-speed", L"32",
                                                  L"--output", L"r.json", L"--render-scale", L"125", L"--snap-turn",
                                                  L"45", L"--smooth-turn", L"120", L"--haptics", L"0",
-                                                 L"--screen-size", L"2", L"--weight", L"150"};
+                                                 L"--body-haptics", L"50", L"--screen-size", L"2", L"--weight",
+                                                 L"150"};
         check(args == settings, "the VR settings, the screen size capped at large");
         options = {};
         options.renderScale = 10;
@@ -321,13 +324,14 @@ int main() {
         check(headsetSettings("VR settings from the headset: aim_markers=0 web_grab=1 air_webs=0 web_shooter=0 "
                               "punch=0 body=1 swing_speed=48 weight=150 snap_turn=45 smooth_turn=90 haptics=50 "
                               "flips=1 flip_speed=300 trigger_webs=1 hud=0 stand_on_walls=0 screen_depth=3 "
-                              "arcade_webs=1 screen_size=2\r",
+                              "arcade_webs=1 body_haptics=25 screen_size=2\r",
                               options),
               "the line changed nothing");
         check(!options.aimMarkers && !options.airWebs && options.swingSpeed == 48 && options.weight == 150 &&
                   options.snapTurn == 45 && options.smoothTurn == 90 && options.haptics == 50 && options.flips &&
                   options.flipSpeed == 300 && options.triggerWebs && options.hud == 0 &&
-                  options.screenDepth == 3 && options.arcadeWebs && options.screenSize == 2,
+                  options.screenDepth == 3 && options.arcadeWebs && options.bodyHaptics == 25 &&
+                  options.screenSize == 2,
               "every value, the last one before a carriage return");
         // ... and `stand_on_walls` in that line is no longer one of them.
         check(options.standOnWalls, "the view on walls was taken from a headset line");
@@ -345,10 +349,11 @@ int main() {
               "web grab, the web shooter, punching and the body are no options");
         check(!headsetSettings("Game closed. Session report: r.json", options) && options == kept, "another line");
         check(headsetSettings("VR settings from the headset: swing_speed=99 snap_turn=x smooth_turn=999 haptics=-4 "
-                              "weight=7 hud=8 flip_speed=5000 colour=3",
+                              "weight=7 hud=8 flip_speed=5000 body_haptics=400 colour=3",
                               options) &&
                   options.swingSpeed == 65 && options.snapTurn == 45 && options.smoothTurn == 360 &&
-                  options.haptics == 0 && options.weight == 40 && options.hud == 3 && options.flipSpeed == 480,
+                  options.haptics == 0 && options.weight == 40 && options.hud == 3 && options.flipSpeed == 480 &&
+                  options.bodyHaptics == 100,
               "values outside their ranges, unreadable ones and unknown keys");
     });
     test("a T-pose calibration in the headset sizes every next session, until Redo", [] {
@@ -557,6 +562,215 @@ int main() {
                                                         L"build/windows-ninja/spidy_gone.dll"},
               "stale files in the package's folders; the player's files beside the launcher, subfolders the "
               "package has no files in, reports and other folders stay");
+    });
+    using spidy::vr_settings::Item;
+    const auto begin = std::begin(profileSettings), end = std::end(profileSettings);
+    // A setting's place in a profile's values.
+    const auto at = [&](std::string_view key) {
+        const auto found = std::find_if(begin, end, [&](const ProfileSetting& s) { return s.key == key; });
+        return static_cast<size_t>(found - begin);
+    };
+    test("a profile holds every setting of the SPIDY VR tab, the tab's own ones by spidy_vr.ini's keys", [&] {
+        // Not VR VIEW (each session starts in VR), CALIBRATE BODY (a request) or RECORDING FOV (the
+        // monitor's, which suits one PC, as the graphics options do).
+        for (const auto& row : spidy::vr_settings::rows()) {
+            if (row.item == Item::none)
+                continue;
+            const bool leftOut =
+                row.item == Item::view || row.item == Item::calibrate || row.item == Item::recordingFov ||
+                row.item == Item::venomButton; // MilesVR: always the button the web button is not
+            check(std::count_if(begin, end, [&](const ProfileSetting& s) { return s.item == row.item; }) ==
+                      (leftOut ? 0 : 1),
+                  row.title);
+        }
+        // spidy_vr.ini's lines, the game module's (tabOnlyText): each a setting of the tab's own.
+        const std::string tabOnly = spidy::vr_settings::tabOnlyText({});
+        size_t lines = 0;
+        for (size_t line = 0; line < tabOnly.size(); line = tabOnly.find('\n', line) + 1) {
+            const std::string key = tabOnly.substr(line, tabOnly.find('=', line) - line);
+            if (key == "recording_fov")
+                continue;
+            ++lines;
+            check(at(key) < std::size(profileSettings) &&
+                      (profileSettings[at(key)].flag || profileSettings[at(key)].number),
+                  key.c_str());
+        }
+        const auto tabs = [](const ProfileSetting& s) { return s.flag || s.number; };
+        check(lines == static_cast<size_t>(std::count_if(begin, end, tabs)),
+              "a setting kept with the tab's own that spidy_vr.ini lacks");
+        // Of the launcher's own options, wall running alone: no graphics option, no body calibration.
+        check(std::count_if(begin, end, [](const ProfileSetting& s) { return s.item == Item::none; }) == 1 &&
+                  profileSettings[at("wall_run")].item == Item::none,
+              "the launcher's options in a profile");
+        for (const auto& a : profileSettings)
+            check(std::count_if(begin, end, [&](const ProfileSetting& b) { return a.key == b.key; }) == 1,
+                  "a key twice");
+        // The ranges the game module takes the tab's own settings to (vr_settings::sanitized).
+        for (const auto& s : profileSettings)
+            if (s.number) {
+                spidy::vr_settings::Values v;
+                v.*s.number = s.low - 1000;
+                check(spidy::vr_settings::sanitized(v).*s.number == s.low, std::string(s.key).c_str());
+                v.*s.number = s.high + 1000;
+                check(spidy::vr_settings::sanitized(v).*s.number == s.high, std::string(s.key).c_str());
+            }
+    });
+    // Every setting a profile holds away from its default.
+    PlaySettings mine;
+    {
+        auto& o = mine.options;
+        o.arcadeWebs = o.triggerWebs = o.flips = o.venomLeftHand = true;
+        o.aimMarkers = o.airWebs = o.wallRun = false;
+        o.swingSpeed = 47;
+        o.weight = 125;
+        o.snapTurn = 45;
+        o.smoothTurn = 120;
+        o.haptics = 50;
+        o.bodyHaptics = 25;
+        o.screenSize = 2;
+        o.screenDepth = 3;
+        o.hud = 0;
+        o.flipSpeed = 300;
+        auto& t = mine.tab;
+        t.hapticWebs = t.hapticWind = t.hapticCombat = t.hapticMovement = false;
+        t.automaticReleaseFlip = t.automaticAirBrake = false;
+        t.handClimb = t.realisticFlips = true;
+        t.uiStyle = 1;
+        t.nearClipMm = 10;
+        t.wallDistance = 60;
+        t.automaticStrength = 75;
+        t.automaticSpeed = 360;
+        t.automaticMinimumSpeed = 8;
+        t.automaticResponse = 200;
+        t.automaticHandStrength = 150;
+        t.automaticFalloff = 1000;
+        t.automaticHandThreshold = 200;
+    }
+    test("a profile's text: what it is, its name, its Spidy, then each setting in the tab's order", [&] {
+        check(profileText(profileOf(PlaySettings{}, "Spidy's own"), "0.4.1") ==
+                  "# Spidy settings profile. To use it, in the Spidy launcher: Profile > Paste a profile, "
+                  "or Import a file.\nname=Spidy's own\nspidy=0.4.1\narcade_webs=0\ntrigger_webs=0\n"
+                  "aim_markers=1\nair_webs=1\nswing_speed=32\nweight=100\nvenom_left_hand=0\nwall_run=1\nsnap_turn=30\n"
+                  "smooth_turn=0\nhaptics=100\nbody_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\n"
+                  "body_haptics_combat=1\nbody_haptics_movement=1\nscreen_size=1\nscreen_depth=2\nhud=2\n"
+                  "ui_style=0\nnear_clip_mm=20\nflips=0\nflip_speed=180\nhand_climb=0\nwall_distance_cm=40\n"
+                  "realistic_flips=0\nrotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
+                  "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\nangular_drag_ms=3000\n"
+                  "hand_speed_min_cm=100\nair_rotation_brake=1\n",
+              "the defaults' text: a key shared once keeps its name");
+        const std::string message = profileMessage(profileOf(mine), "0.4.1");
+        check(message.rfind("```ini\n# Spidy settings profile.", 0) == 0 && message.ends_with("\n```") &&
+                  message.find("name=") == std::string::npos,
+              "a Discord message: a code block, no name for settings no profile holds");
+    });
+    test("a profile's text gives its settings back and leaves graphics and the body as they are", [&] {
+        const PlaySettings defaults;
+        for (const auto& s : profileSettings)
+            check(profileValue(s, mine) != profileValue(s, defaults), std::string(s.key).c_str());
+        const auto read = readProfile(profileText(profileOf(mine, "Arcade swing"), "0.4.1"));
+        check(read && read->name == "Arcade swing" && read->madeWith == "0.4.1" && read->complete(),
+              "read back");
+        PlaySettings other;
+        auto& o = other.options;
+        o.renderScale = 150;
+        o.upscale = 50;
+        o.monitorRate = 60;
+        o.smallWindow = o.stockMonitorView = false;
+        o.gameDepthOfField = o.gameSharpening = true;
+        o.eyeHeightMm = 1630;
+        o.armLengthMm = 590;
+        o.calibrationPrompt = false;
+        const PlaySettings before = other;
+        check(!profileMatches(*read, other), "the defaults are the profile's");
+        applyProfile(*read, other);
+        for (const auto& s : profileSettings)
+            check(profileValue(s, other) == profileValue(s, mine), std::string(s.key).c_str());
+        check(profileMatches(*read, other) && profileChanges(*read, other).empty(),
+              "the settings are not its");
+        check(o.renderScale == 150 && o.upscale == 50 && o.monitorRate == 60 && !o.smallWindow &&
+                  !o.stockMonitorView && o.gameDepthOfField && o.gameSharpening && o.eyeHeightMm == 1630 &&
+                  o.armLengthMm == 590 && !o.calibrationPrompt,
+              "graphics or the calibration changed");
+        check(o.standOnWalls == before.options.standOnWalls &&
+                  other.tab.swingSpeed == before.tab.swingSpeed &&
+                  other.tab.flatScreen == before.tab.flatScreen,
+              "what no profile holds changed");
+    });
+    test("a profile is read from a Discord message, a session's line, launcher.ini or by hand", [&] {
+        const auto message = readProfile("Here are mine:\r\n```ini\r\n# Spidy settings profile.\r\n"
+                                         "> name = Seated  \r\nspidy=0.4.1\r\nsnap_turn = 45\r\n"
+                                         "> smooth_turn=90\r\nhand_climb=on\r\nflips: yes\r\n```\r\n"
+                                         "have fun");
+        check(message && message->name == "Seated" && message->madeWith == "0.4.1" && message->count() == 3,
+              "a message, quoted lines too: its name, its version and three settings");
+        PlaySettings settings;
+        applyProfile(*message, settings);
+        check(settings.options.snapTurn == 45 && settings.options.smoothTurn == 90 &&
+                  settings.tab.handClimb && !settings.options.flips,
+              "the message's settings");
+        PlaySettings untouched;
+        untouched.options.snapTurn = 45;
+        untouched.options.smoothTurn = 90;
+        untouched.tab.handClimb = true;
+        check(profileText(profileOf(settings), "x") == profileText(profileOf(untouched), "x"),
+              "a setting the message lacks changed");
+        const auto line = readProfile("VR settings from the headset: aim_markers=0 web_grab=1 air_webs=0 "
+                                      "swing_speed=48 weight=150 stand_on_walls=0 eye_height_mm=1700");
+        check(line && line->count() == 4 && line->name.empty() && line->madeWith.empty(),
+              "a session's line: the profile's four, not web grab, the wall view or the body");
+        const auto ini = readProfile("\xEF\xBB\xBFgame=C:\\Games\\Spider-Man.exe\ngravity_percent=80\n"
+                                     "render_scale=150\neye_height_mm=1700\nupdate_check=0\n");
+        check(ini && ini->count() == 1 && ini->values[at("weight")] == 80, "launcher.ini: the weight alone");
+        const auto words = readProfile("aim_markers=OFF, air_webs=True; `flips=yes` wall_run=no hud=2.5");
+        check(words && words->count() == 4 && words->values[at("aim_markers")] == 0 &&
+                  words->values[at("air_webs")] == 1 && words->values[at("flips")] == 1 &&
+                  words->values[at("wall_run")] == 0,
+              "switches by name, words apart by commas and code marks; a fraction is no whole number");
+        const auto ranges = readProfile("swing_speed=500\nweight=-7\nnear_clip_mm=1\n"
+                                        "flip_speed=99999999999\n");
+        check(ranges && ranges->values[at("swing_speed")] == 65 && ranges->values[at("weight")] == 40 &&
+                  ranges->values[at("near_clip_mm")] == 10 && !ranges->values[at("flip_speed")],
+              "values taken to their ranges; one too large for a number passed over");
+        check(!readProfile("hello\nname=Only a name\nrender_scale=150\nswing_speed=fast\nsnap_turn=\n"),
+              "a text without a setting");
+        check(!readProfile(""), "nothing");
+        const auto named = readProfile("name=\x01Seated,\t for the long sessions on a sofa  at home\nhud=1");
+        check(named && named->name == "Seated, for the long sessions on a sofa",
+              "the name: control characters out, 40 characters, no space at its end");
+    });
+    test("using a profile lists what it changes as the SPIDY VR tab shows it", [&] {
+        PlaySettings change;
+        change.options.arcadeWebs = true;
+        change.options.swingSpeed = 47;
+        change.options.wallRun = false;
+        change.options.smoothTurn = 90;
+        change.tab.hapticWebs = false;
+        change.tab.uiStyle = 1;
+        change.tab.nearClipMm = 10;
+        change.tab.automaticFalloff = 1000;
+        const std::vector<ProfileChange> expected{
+            {"WEB STYLE", "REALISTIC", "ARCADE"},          {"SWING SPEED LIMIT", "32 M/S", "47 M/S"},
+            {"WALL RUNNING", "ON", "OFF"},                 {"SMOOTH TURN", "OFF", "90\xC2\xB0/S"},
+            {"WEB HAPTICS", "ON", "OFF"},                  {"UI STYLE", "COMIC", "TECH"},
+            {"NEAR CLIP", "2 CM", "1 CM"},                 {"ANGULAR DRAG", "VERY SLOW", "QUICK"}};
+        check(profileChanges(profileOf(change), PlaySettings{}) == expected,
+              "the changes, in the tab's order");
+        check(profileChanges(profileOf(mine), PlaySettings{}).size() == std::size(profileSettings),
+              "all of them");
+    });
+    test("a profile's file is its name without what Windows refuses in a file name", [] {
+        check(profileFileName("Arcade swing") == "Arcade swing", "a plain name");
+        check(profileFileName("  a/b\\c:d*e?f\"g<h>i|j. . ") == "abcdefghij",
+              "refused characters, the end's dots");
+        check(profileFileName("con") == "con_" && profileFileName("COM1.old") == "COM1_.old" &&
+                  profileFileName("Lpt9") == "Lpt9_" && profileFileName("Console") == "Console" &&
+                  profileFileName("COM0") == "COM0",
+              "the devices' names");
+        check(profileFileName("???").empty() && profileFileName(" . ").empty() && profileFileName("").empty(),
+              "nothing left");
+        check(profileFileName("Ilya's \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xF0\x9F\x95\xB8") ==
+                  "Ilya's \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xF0\x9F\x95\xB8",
+              "letters of any language, and a spider web");
     });
     std::cout << (total - failed) << '/' << total << " launcher checks passed\n";
     return failed ? 1 : 0;

@@ -87,6 +87,20 @@ void bar(std::vector<Vertex>& out, Vec3 p, Vec3 q, Vec3 normal, float half, Vec3
         d{p - along + side, color};
     out.insert(out.end(), {a, b, c, a, c, d});
 }
+// The same bar with its sides fading out across `soft`.
+void softBar(std::vector<Vertex>& out, Vec3 p, Vec3 q, Vec3 normal, float half, Vec3 color, float soft) {
+    const Vec3 along = normalized(q - p) * half, side = normalized(cross(normal, q - p));
+    if (length(along) < half * .5f)
+        return;
+    const float across[4] = {-half - soft, -half, half, half + soft}, alpha[4] = {0, 1, 1, 0};
+    for (int i = 0; i < 3; ++i) {
+        const Vertex a{p - along + side * across[i], color, alpha[i]};
+        const Vertex b{q + along + side * across[i], color, alpha[i]};
+        const Vertex c{q + along + side * across[i + 1], color, alpha[i + 1]};
+        const Vertex d{p - along + side * across[i + 1], color, alpha[i + 1]};
+        out.insert(out.end(), {a, b, c, a, c, d});
+    }
+}
 // A round stroke's two parts. Its length from p to q, with no ends of its
 // own, fading out across `soft` at either side...
 void stroke(std::vector<Vertex>& out, Vec3 p, Vec3 q, Vec3 normal, float half, Vec3 color, float soft) {
@@ -161,7 +175,10 @@ void appendText(std::vector<Vertex>& out, std::string_view text, Vec3 origin, Ve
                     continue;
                 }
                 for (const char* p = run; p + 3 < end; p += 2)
-                    bar(out, at(p), at(p + 2), normal, half, style.color);
+                    if (style.soft > 0)
+                        softBar(out, at(p), at(p + 2), normal, half, style.color, style.soft);
+                    else
+                        bar(out, at(p), at(p + 2), normal, half, style.color);
                 run = *end ? end + 1 : end;
             }
         }

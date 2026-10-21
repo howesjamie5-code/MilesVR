@@ -88,12 +88,15 @@ static_assert(sizeof(Trace) == 48 + traceEntries * traceChars && sizeof(Rule) ==
 // buttons out ("LB + RB (Hold) Throw") and carries their icon ids, and the
 // calls say when a prompt is up and when it is gone, so a demand cannot
 // outlive its prompt. A session that reads nothing is no worse off than
-// before: reading only lets the interact button send what is asked for
-// (game_pad::ContextPress) and the prompt's own text name the VR control.
+// before: reading only lets the controls of the names the game shows send
+// those buttons (game_pad::NamedPress).
 //
 // A demand stays live for this long after the last text that named it or
-// call that raised it; its manager's Hide or Clear ends it at once.
-constexpr uint32_t liveMs = 2000;
+// call that raised it; its manager's Hide or Clear ends it at once. A text
+// shown on a channel of its own (ShowText: help lines, subtitles) is the
+// exception: what it names stands until HideText of that channel or another
+// text on it (prompt_buttons::LiveDemands, which keeps both).
+constexpr uint32_t liveMs = static_cast<uint32_t>(prompt_buttons::LiveDemands::liveMs);
 // Whether this session reads the prompts at all (the launcher's
 // --no-prompt-help turns it off). Reading is NOT limited to VR play: the game
 // looks a prompt's text up when its UI builds it, which happens while it owns
@@ -102,7 +105,8 @@ constexpr uint32_t liveMs = 2000;
 // question gets answered: if `named` stays 0 the localized lookup is not the
 // route a prompt's text takes, as the markup resolver was not on October 11.
 // Whether the UI's calls are looked at at all (the census, the timeline and a
-// prompt call's text). A session leaves this off: see the note in game_xr.
+// prompt call's text). Every session since October 20, unless the launcher's
+// --no-prompt-help says otherwise: see the note in game_xr.
 void setObserving(bool);
 void setReading(bool);
 // Whether a text may be rewritten with the VR controls. Only in VR play: on

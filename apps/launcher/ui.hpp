@@ -129,6 +129,8 @@ private:
     VideoPlayer video_;
     bool wantTutorial_{};
     std::string tutorialName_, tutorialText_, tutorialError_;
+    // The MILES VR tab's settings launcher.ini has no key for (spidy_vr.ini), as the Options card shows them.
+    spidy::vr_settings::Values tabOnly_;
 };
 
 } // namespace launcher

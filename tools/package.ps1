@@ -8,7 +8,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $version = (Select-String -LiteralPath (Join-Path $root 'CMakeLists.txt') -Pattern 'project\(Spidy VERSION ([0-9.]+)').Matches[0].Groups[1].Value
 $bin = Join-Path $root 'build\windows-ninja'
 $modules = @('spidy_headset_probe.exe', 'spidy_bridge.dll', 'spidy_render_probe.dll', 'spidy_ray_bridge.dll',
-             'spidy_movement_bridge.dll', 'spidy_stereo_probe.dll', 'spidy_render_memory.dll')
+             'spidy_movement_bridge.dll', 'spidy_stereo_probe.dll', 'spidy_render_memory.dll',
+             # Body haptics: bHaptics' own library, as it comes (a bHaptics Redistributable), and the test tool.
+             'bhaptics_library.dll', 'spidy_haptics_test.exe')
 foreach ($name in $modules + 'spidy_launcher.exe') {
     if (-not (Test-Path -LiteralPath (Join-Path $bin $name))) {
         throw "Missing build\windows-ninja\$name. Run tools\bootstrap.ps1 -Observer, then tools\build.ps1 -Observer."
@@ -67,6 +69,9 @@ Copy-Item -Path (Join-Path $root 'Tutorials\*.mp4') -Destination (Join-Path $sta
 # An empty Music folder for the phone's songs. Keep it EMPTY: no songs, and no file in it at all - the updater
 # retires files the package lacks from every folder the package has files in, which would take the player's songs.
 New-Item -ItemType Directory -Force (Join-Path $stage 'Music') | Out-Null
+# The bHaptics SDK agreement says its notices travel with the library.
+Copy-Item -LiteralPath (Join-Path $root 'third_party\tact-cpp2\sdk\THIRD_PARTY_NOTICES.txt') -Destination (Join-Path $stage 'docs\licenses\bHaptics-THIRD_PARTY_NOTICES.txt')
+Copy-Item -LiteralPath (Join-Path $root 'third_party\tact-cpp2\LICENSE') -Destination (Join-Path $stage 'docs\licenses\bHaptics-LICENSE.txt')
 
 # The packaged Python must find every module a session imports.
 $check = & (Join-Path $stage 'python\python.exe') -B -X utf8 -c 'import run_game_vr, xr_runtime, probe_game_grab; print(7*6)'

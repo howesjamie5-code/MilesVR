@@ -1,6 +1,117 @@
-# Validation — 2026-10-18
+# Validation — 2026-10-21
 
-## Spider-Sense and the counter (latest build)
+## Every SPIDY VR setting in the launcher (latest build)
+
+The user: "why doesnt the new launcher include all the realstic flips stuff?",
+then "yeah lets add all". `apps/launcher/ui.cpp` (`options()`: `tabCombo`,
+`tabToggle`, the Walls and Flips cards, Reset options).
+
+| | |
+| --- | --- |
+| Build | The launcher and its tests in a scratch folder (subst drive, `-DSPIDY_BUILD_XR=OFF -DSPIDY_BUILD_LAUNCHER=ON`): no warnings. `build\windows-ninja` not rebuilt. |
+| Launcher tests | 30 passed. |
+| Looked at | PrintWindow shots at 150 % of a scratch copy beside the user's own launcher (lock and window class renamed, off the screen's edge but one column): the Options tab top to bottom; each new row showing the user's `spidy_vr.ini` (hand wall climbing on, 40 cm, near clip 2 cm, UI style Comic, swing momentum off, hand momentum 75 %, angular drag Very slow, minimum hand speed 3 m/s); the haptics switches indented under Body haptics. |
+| Writes | Realistic flips switched on: `realistic_flips=1` in `spidy_vr.ini` and its nine rows under it. Angular drag's list showed Fast, Quick, Medium, Slow, Very slow; Medium wrote `angular_drag_ms=1500`. Reset options wrote every `spidy_vr.ini` key's default. |
+| Settings | launcher.ini and `spidy_vr.ini` hash-identical to before after each run; no profile written. |
+| Not run | A VR session started after changing them in the launcher; another Windows scaling than 150 %. |
+
+## Launcher facelift (the build before)
+
+The user: "lets give the launcher a facelift with out style, better layout and
+UX", "we have a control map visual, maybe use it?", "i feel like the ui is a
+bit much with the colors and contrast". `apps/launcher` (`ui.cpp` drawn anew,
+fonts and the controls picture compiled in).
+
+| | |
+| --- | --- |
+| Build | The launcher and its tests in a scratch folder (subst drive, `-DSPIDY_BUILD_XR=OFF -DSPIDY_BUILD_LAUNCHER=ON`): `/W4` clean. `build\windows-ninja` not rebuilt. |
+| Launcher tests | 30 passed, with the UI STYLE row of the build before. |
+| Looked at | PrintWindow shots at 150 % of a scratch copy run beside the user's own launcher (its single-instance lock and window class renamed in the copy; the window off the screen's edge but one column, so it renders and covers nothing): Play, Options with the profile menu open and the Save as a profile dialog, Controls (the picture drawn pixel for pixel), About; the smallest window (980 x 700) with the shortcut bar. |
+| States | A scratch copy of `ui.cpp` with the session faked from an environment variable (not in the tree): in VR, stopping with Force stop, ended, failed with code 3, needs administrator, close the game first, could not start, not ready, checking, the update offer. In the smallest window a failure shows its error, its offers and START VR, without the steps. |
+| Picture | `docs/images/readme/controls-quest3.jpg` re-shot from its page at 3840 x 2160 and scaled to 1920: issue box PC VR, the red box "Press that one. Its LT, LB, RT, RB: your triggers." Every other binding on it checked against PLAYERS.md. |
+| Glyphs | Barlow and Comic Neue hold every character the launcher prints but the arrow of a profile's changes, which Segoe UI (merged) draws. |
+| Settings | launcher.ini and `spidy_vr.ini` hash-identical before and after; no profile written. |
+| Not run | A VR session; Windows scaling other than 150 %; Windows 10 (Segoe MDL2's icons); a real update; tooltips and hovers (posted mouse moves cannot hold a hover). |
+
+## Tech UI style
+
+The user: "lets make an optional alternative set of our custom ingame vr ui in
+more scifi techy style like the based game ui". UI STYLE in SPIDY VR (COMIC or
+TECH); the marks in `src/tech_marks.cpp`.
+
+| | |
+| --- | --- |
+| Core tests | 426 (4 new): every mark (aim marker, meter, blow, call, knockout, Spider-Sense and its sightline, wheel, panel) draws as before with no style, the same as COMIC, and anew as TECH; tech blows white, amber, red with amber, called cyan, the count's callout with COMBO in cyan, springing out and no pose held, faded by 0.72 s and gone at 0.76; the call's ring of 24 segments running down a segment at a time, its chevrons from outside the ring on the fist's side to his middle for all four ways, the finisher amber in red and larger, snapping on from wider; the knockout red with KO and its amber bar, 5-30 cm at 1.2 m, gone by its time; Spider-Sense cyan, red, amber, over his head, its ring closing, amber only at the last notch, waving, flickering on, a counter throwing it out, 4-12 degrees across at 1.5-9 m; the sightline mark 14-21 degrees off the look, the rim's arcs to 38-45, right of the view, upward for an attacker above; the wheel within 30 cm, a cyan wedge and the name in the middle when lit, the equipped one amber, at most 60,000 vertices fully charged; the meter's cyan segments, red on a refusal, a sweep in slow motion, nothing hidden, over the wrist; the panel translucent blue, nothing behind it, the hint amber, the hold cyan. The aim markers' test runs for both styles (size on screen, squeeze, shadows first, edges fading, each hand's colour, fading, a round target ring closing in, the right hand's wider). The tab's sections test with UI STYLE after the HUD; `ui_style` in `spidy_vr.ini`, read back and clamped; the choice round trip. |
+| Launcher tests | 30: profiles hold `ui_style` (tab-only, 0-1), the defaults' text with `ui_style=0` after `hud=2`, the change list's "UI STYLE COMIC → TECH". |
+| Protocol suites | Display permission, game VR, launcher, observer, runtime, stereo: all OK. No protocol change. |
+| GPU | `spidy_graphics_test` at 1536x1536: all passes, D3D12 debug layer clean. |
+| Build | Scratch build (subst drive) of every target but the launcher, whose `ui.cpp` was mid-change in a peer session; `/W4` clean in the new code. |
+| Cost | Vertices and build time per mark, comic → tech: wheel 45,582 → 22,020 (137 → 67 µs), blow with count 6,210 → 2,664, knockout 9,054 → 2,688, target ring 2,436 → 5,517, Spider-Sense 6,804 → 9,936, meter 3,504 → 7,686, calibration panel 3,996 → 24,168 (21 → 74 µs). |
+| Looked at | `tools\preview-marks.ps1 -Style Tech` and `-Style Comic` over the October 20 session's captures 0011 (street, 6 m) and 0076 (rooftops, 0.75 m): every sheet (marks, blows, sense, sense-eye, aim, wheel, meter, panel). |
+| Not run | The game and a headset; `tools/probe_menu.py` (one more Down for the new row). |
+
+## Settings profiles
+
+The user: "lets add spidy settings profiles so people can easily import and
+export and share them". The launcher's Profile row; the format in
+`launcher_profile.hpp`.
+
+| | |
+| --- | --- |
+| Launcher tests | 30 (new 6): every SPIDY VR row but VR VIEW and CALIBRATE BODY held once, `spidy_vr.ini`'s 17 keys all held and nothing else of the tab's own, wall running the one launcher option, keys unique, the tab-only ranges `vr_settings::sanitized`'s; the defaults' exact text (33 settings, in the tab's order); every setting away from its default read back, graphics and calibration untouched; a Discord message with a quoted name, `key = value`, a quoted line, `hand_climb=on` and a `flips: yes` passed over (3 settings, the rest unchanged), a session's line (4 of its 7), launcher.ini with a BOM (`gravity_percent` alone), switch words and words apart by `,` `;` and code marks, `hud=2.5` passed over, clamping, an out-of-range number passed over, texts with no setting, a 40-character name; the change list in the tab's titles and choices (`90°/S`, `1 CM`, `QUICK`); file names (refused characters, CON/COM1/LPT9, Hebrew and an emoji kept) |
+| Planted bugs | Built from a copy of `include/`, one at a time: two keys swapped, a quote's `>` kept, no clamping, device names allowed, HAND WALL CLIMBING left out, WALL CAMERA DISTANCE's range cut to 75, the nearest choice broken. Each failed at least one test (the quote only after the test's name line was quoted) |
+| The launcher, driven | `build\windows-ninja\spidy_launcher.exe` on this PC (PrintWindow shots, posted clicks and keys), launcher.ini and `spidy_vr.ini` backed up first. Save as a profile ("Claude test: mine" saved as `Claude test mine.spidy`, its `hud=1`, `hand_climb=1`, `hand_momentum=75` the player's own); Aim markers switched: the row "Claude test mine*" and "Changed since you used..."; the profile's tooltip "AIM MARKERS OFF → ON"; Copy to share: the clipboard held the code block, `aim_markers=0`, no name; Paste of an 8-setting Discord message: the preview listed the 8 and "It has 8 of the 33"; Save and use: launcher.ini changed in those (`arcade_webs=1`, `swing_speed=56`, `gravity_percent=150`, `snap_turn=0`, `smooth_turn=90`), `spidy_vr.ini` in `near_clip_mm`, `realistic_flips`, `rotation_strength` only, `Previous settings.spidy` written; a posted WM_DROPFILES of `Seated comfort.spidy` (no name line, `wall_run=off`) opened the preview named after the file; Save only left launcher.ini's hash the same; Previous settings swapped back and forth (after a fix: "Back to your previous settings...", no `*`); Export and Import through Windows' dialogs (a `.txt` holding the message, "You have a profile of that name"); Delete: in the Recycle Bin; a clipboard with no profile: "The clipboard holds no Spidy profile." in amber |
+| Put back | launcher.ini and `spidy_vr.ini` from the backup, SHA-256 `E00279B7...` and `6156FCE4...` as before; the profiles folder (new) removed, the deleted test profile out of the Recycle Bin, the clipboard's text restored |
+| Other suites | Core 422, realistic flips, all six Python suites (138). No struct changed |
+
+**Not checked.** A VR session that starts after a profile was used, its
+stereo module reading the `spidy_vr.ini` the launcher wrote. The text is
+`vr_settings::tabOnlyText`, the module's own writer, and core tests read it
+back.
+
+## The game's prompts read again, and pressed by name
+
+The user, about a helper's 50-item playthrough (October 14-19): "try to come
+up with a unified immersive fix", then "build it". Its first part: the
+buttons the game names reach it from the VR controls of the same names, and
+the prompt reading that names them is on again.
+
+| | |
+| --- | --- |
+| The reading's death, from the code | `keepLine` stamped each prompt call's line (`formatCall`, up to `callChars` - 1 = 127 characters, a text cut where the line ends) with `sprintf_s("%6llu %s")` into a buffer of `callChars`: a line of 121 characters or more overflowed it, and `sprintf_s` ends the process for that (the CRT's invalid-parameter handler), with no exception for a guard to catch and no crash dump. Fixed with `_snprintf_s(..., _TRUNCATE)` straight into the ring. `read` now asks `VirtualQuery` (`readable`) before it touches the game's memory |
+| The control, in the game | 0.4.0's `spidy_stereo_probe.dll` (the play folder's), the reading on from the title (`SpidyMenuStart` + `SpidyPromptsWatch`), A every 2 s: dead right after CONTINUE, twice. Run 2: the reading on at 28.4 s, the process gone at 64.5 s; the last reading a second before held 12 UI calls of the title and no prompt call; the game's log ends `[Save] Request load save type 0` (08:12:20), `[Save] Request save type 2` (08:12:22). Run 1 the same, its log ending 08:10:20 / 08:10:22. Steam had refused the first launch (`WaitingPrevProcess`, `AppError_16`): it was still holding the previous day's game |
+| This build, in the game | The same run: the reading on at 26.0 s, the player at 68.1 s, free roam watched to 188.5 s, the game alive. 38 UI calls, 7 prompt calls (`ShowText` 3, `HideText` 4). The ring's lines: `ShowText(7, 'Press [STICK_LEFT_PRESS] to <span class='emphasis'>dive</span> and ...` 93 ms after the load (127 characters, cut at the ring's width), then `HideText(7, 0)` at 6453 ms, and two police dispatch lines on channel 1 (123 and 112 characters) |
+| Saves | The save folder backed up before, compared after: all 17 files byte-identical |
+| Core tests | 365 (new 5): `NamedPress` sends each named button from the control of its name and keeps it until let go; a press begun before the prompt stays the player's; the web-ball buttons as LT or LB and RT or RB, their travel, a gesture's trigger; the right stick's ways, decisive only; out of play nothing; bad readings press nothing. Fists: a thrown fist is X, a hold's held, X + A thrown down in the air both, a level throw in the air neither; not with nothing named, not from a hand on its web, not pulled back, not slow, once a blow. Every button the game can name is sent in VR play. The help lines as measured (the dive's `[STICK_LEFT_PRESS]`, a subtitle naming nothing, the leaks, the vaccine, the camera, the vent takedown, the Ground Strike, the gadget select). What stays live: a call's demand 2 s after its last call or until its clear, a channel's text until its own HideText (not another channel's), replaced by the next text, 60 s at most |
+| Planted bugs | X sending Y, the recoil's sign flipped and `[STICK_LEFT_PRESS]` removed, together: 4 tests failed, each on its own message; the files restored and checked by hash |
+| Protocol | All six Python suites; no struct changed |
+
+**A third run, the final build** (the user: "run however many times you
+need"): alive again through CONTINUE (the player at 69.6 s) and two minutes
+of free roam. The load's help line was another this time, `ShowText(7,
+'While in the air, <span class='emphasis'>hold</span> [ACTION_WEB_YANK_BOT]
+to yank enemies up to you. ...')`: a third kind of word, an action of the
+game's own binding configs (the exe holds their names - HeroUsabilityBindings
+Config's Fire, Swing, WebZip, WebYankBot, WebStrike, AimMode, UseGadget,
+Heal and the rest - not their buttons). It named nothing (`named` 0), as it
+should until the configs are read. Game and Steam closed after each run.
+
+**A help line read live** (the final build with `LiveDemands`, a fresh game
+until a load's tip was in words Spidy reads; the first was): `ShowText(7,
+'Press [BTN_X] then [BTN_B] to perform the <span class='emphasis'>Dodge
+Under</span> move on enemies with sh...')` 94 ms into the ring, `HideText(7,
+0)` at 6579 ms. Polled every second, the live demand read `0x6000` - the
+pad's X and B - from 64.0 s to 69.6 s and 0 from 71.0 s on: live for as long
+as the line was shown, where the old rule kept it 2 s. `named` 1,
+`beyond_play` 1 (X is no button VR play had). The player at 71.0 s, free
+roam to 161.3 s, alive; game closed, Steam shut down, the 17 save files
+identical.
+
+**Not checked.** Everything a headset needs: `NamedPress` runs in the XR
+worker, so the presses, the fists and the swing letting the game have its
+move (AirYield) on a named press in flight have not run.
+
+## Spider-Sense and the counter (October 18 evening build)
 
 The user: "design a vr version of the alert/spidey senses for combat (make it
 arkham shadow style)". Arkham Shadow, as its coverage tells it: a blue icon

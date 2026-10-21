@@ -30,6 +30,8 @@ INSTALL
 3. The launcher finds the game and your VR runtime and checks this PC. Fix
    anything marked red. It can install Microsoft's Visual C++ runtime for you,
    and "Add shortcuts" puts Spidy VR on your desktop and in the Start menu.
+   Its tabs: Play (START VR, what this PC has, the session log), Options,
+   Controls (a picture of them, then each in words) and About.
 
 Spidy changes nothing in the game's folder. Some antivirus programs dislike
 tools that attach to a running game; if files go missing after extracting,
@@ -39,7 +41,7 @@ allow the Spidy folder and extract it again.
 UPDATES
 -------
 When it starts, the launcher asks GitHub whether a newer Spidy is out. If one
-is, a blue bar above the Play tab offers it. "Update now" downloads it, checks
+is, a bar at the top of the Play tab offers it. "Update now" downloads it, checks
 it, puts its files in this folder and starts the new launcher, all in a few
 seconds. Your settings and the reports folder stay. Stop VR and close the
 game first. "Later" asks again at the next start. About > UPDATES checks
@@ -60,8 +62,8 @@ PLAY
    ahead, stretch both arms straight out to the sides (a T-pose) and hold
    both triggers until the bar fills, about a second and a half. Spider-Man
    then has your height and arm length, so his hands sit on your
-   controllers. B skips it. The launcher remembers it; "Redo" under its
-   options, or CALIBRATE BODY in SPIDY VR (below), does it again.
+   controllers. B skips it. The launcher remembers it; "Redo" on its Options
+   tab, or CALIBRATE BODY in SPIDY VR (below), does it again.
 
 Keep the game window in front on the desktop: the game pauses while another
 window is in front of it, the launcher included. If the headset shows a still
@@ -104,7 +106,11 @@ aim markers, the focus meter), 30 pictures a second: every picture sent to
 the monitor costs the graphics card time the headset could have. "Monitor
 frame rate" in the launcher's options chooses Every frame, 60, 30, 15 or 5 a
 second; 60 makes a smoother recording of the window. On menus, cutscenes
-and the flat screen the window shows the game as usual.
+and the flat screen the window shows the game as usual. For a wider view
+to record, pick an angle for RECORDING FOV (the SPIDY VR tab, DISPLAY): the
+window then shows the game's own view, at least that wide across, with none
+of Spidy's marks, every frame whatever the monitor frame rate, and it costs
+frame rate in the headset.
 
 The picture in each eye is anti-aliased and upscaled by the game itself:
 the scene is rendered smaller and built up to the eye's full size from the
@@ -379,7 +385,9 @@ Moving
   Hold both sticks in .. pause too, after a moment (both hands buzz). Under
                          SteamVR the Quest's menu button is SteamVR's own:
                          it opens SteamVR's dashboard, not the game's pause
-  X .................... game menu (map, suits, skills)
+  X .................... game menu (map, suits, skills); while the game asks
+                         for its X, that X (WHEN THE GAME ASKS FOR A
+                         BUTTON, below)
   Hold X ............... the gadget wheel, in front of that hand (the
                          right one on a Steam Frame): move the hand toward
                          a gadget to light it (it turns red, its name in
@@ -400,25 +408,35 @@ Moving
                          or just stop pressing anything for 20 seconds.
                          Your webs are off while it is on, so it does not
                          latch while a web is carrying you
-  A, B and Y are the game's own A, B and Y: where the game shows one of
-  them on screen, press that button. Your grips shoot webs, so they are
-  not the game's LB and RB in VR: the right stick's click is both. The
-  controllers have no D-pad, and the triggers are webs too: the right
-  stick pushed down is the game's D-pad down, pushed up its LT + RT. A
-  push counts from the stick at rest, straight down or up: turning, a
-  diagonal and a quick flick do neither.
+  A, B and Y are the game's own A, B and Y, and X too while the game shows
+  it: where the game shows one of them on screen, press that button. Your
+  grips shoot webs, so they are not the game's LB and RB in VR: the right
+  stick's click is both, and where the game shows a bumper or a trigger on
+  its own, your triggers are those (below). The controllers have no D-pad:
+  the right stick pushed down is the game's D-pad down, pushed up its
+  LT + RT. A push counts from the stick at rest, straight down or up:
+  turning, a diagonal and a quick flick do neither.
 
   WHEN THE GAME ASKS FOR A BUTTON
-  Where the game puts a button on screen - a door to tear off, a vent, a
-  tutorial, "tap X", a boss - Y does whatever it is asking for, whichever
-  button that is. You do not have to work out which VR control stands for
-  it: look at the thing and press Y. A pull with both webs does the same
-  where you can reach the thing with them.
-
-  Spidy also writes the VR control into the game's own prompt where the
-  prompt spells the button out, so "LB + RB (Hold) Throw" reads "RIGHT
-  STICK CLICK (Hold) Throw". Where there is no VR control of its own the
-  prompt says "Y".
+  Press the button of the name it shows. The game's prompts name an Xbox
+  controller's buttons, and while one is on screen your controllers send
+  them under those names:
+    A, B, X, Y ......... the button of that letter. X is then the game's
+                         X, not the menu or the wheel
+    LT or LB ........... your left trigger
+    RT or RB ........... your right trigger
+    L3, R3 ............. a click of the left or the right stick
+    D-pad up, left,
+    right .............. the right stick pushed that way (down heals, as
+                         always)
+  With WEB BUTTON set to TRIGGER the grips stand in for the triggers here.
+  "Hold LT and tap RB to fire webs and seal the leaks": hold the left
+  trigger and pull the right one. "Press X for Vent Takedown": press X.
+  While the game asks for its X, a punch you throw is that X (an uppercut
+  for the Air Launch it holds), and with X and A asked for in the air, a
+  fist thrown down is both: the Ground Strike. A button you were already
+  holding as the prompt came up goes on doing what it did, and the grips
+  stay your webs, so you can still swing.
 
   The pad layer above is the way out if a moment still asks for something
   none of this reaches.
@@ -513,6 +531,45 @@ in the launcher's options)
                          at full tilt unless you change it (90 to 480;
                          Settings > SPIDY VR or "Flip speed" in the launcher)
 
+Realistic flips (experimental, off until you switch REALISTIC FLIPS on in
+Settings > SPIDY VR or "Realistic flips" in the launcher's options, where
+its nine settings show under it; while it is on it takes the place of the
+flips above)
+  On a web ............. moving faster than MINIMUM FLIGHT SPEED (3 m/s), your
+                         body turns toward the web's pull, as hard as
+                         ROTATION STRENGTH says; where you face stays yours
+  Let go of the web .... the swing's spin goes on (SWING MOMENTUM) and dies
+                         away as ANGULAR DRAG says
+  Swing your arms ...... in the air, faster than MINIMUM HAND SPEED, and you
+                         turn with them, as much as HAND MOMENTUM says; swing
+                         them back the other way to slow down. A spin can go
+                         past a whole turn
+  A in the air ......... stops the spin and brings you upright (AIR ROTATION
+                         BRAKE); landing does too
+  Left stick in the air  with FLIPS on as well: let go of it once in the air,
+                         then it steers the turn
+  MAX ROTATION SPEED and ROTATION RESPONSE set how fast you can turn and how
+  soon a turn gets there.
+
+Hand wall climbing (experimental, off until you switch HAND WALL CLIMBING on
+in Settings > SPIDY VR or "Hand wall climbing" in the launcher's options)
+  On a wall ............ with the left stick at rest you stay upright beside
+                         the wall, a little crouched, your eyes 40 cm from
+                         it (WALL CAMERA DISTANCE: 20 to 100 cm)
+  Squeeze a grip ....... with that hand within about 18 cm of the wall: the
+                         palm holds on, open, with a short buzz. Pull it down
+                         to climb, sideways to go along, up to go down; two
+                         hands share the pull. Let go and squeeze again for
+                         a new hold. The grips do this whichever WEB BUTTON
+                         you chose
+  Both grips held ...... roll both controllers the same way to turn your
+                         view along the wall, up to 90 degrees a second; they
+                         shoot no webs until you let go
+  Left stick ........... runs along the wall, steered by turning your head
+                         left or right; let go to climb again
+  A .................... jumps off the wall
+  Round a corner ....... your view turns onto the building's next side
+
 Menus and cutscenes show on a screen in the headset. There the controllers act
 as an Xbox controller: left stick moves, A selects, B goes back, grips switch
 tabs, the menu button is Start.
@@ -547,17 +604,40 @@ VR settings
                    webs holding in open air (a web that meets nothing
                    within 100 m holds there; off, it misses).
   SWINGING ....... the swing speed limit and your weight.
-  COMFORT ........ snap turn, smooth turn and controller vibration.
+  COMFORT ........ snap turn and smooth turn.
+  HAPTICS ........ controller vibration; BODY HAPTICS (a bHaptics vest,
+                   sleeves and visor, below) and its four switches: WEB,
+                   WIND, COMBAT and MOVEMENT HAPTICS.
   DISPLAY ........ the game screen's size, its 3D depth and the HUD's size
-                   (OFF hides it in VR).
+                   (OFF hides it in VR). UI STYLE: how Spidy's own marks,
+                   gadget wheel and meters look: COMIC, printed as Spidy's
+                   videos are, or TECH, thin lines and translucent blue
+                   panels like the game's own HUD. NEAR CLIP: how near
+                   your eyes things still show, 2 cm unless you change it
+                   (1 to 10 cm; the game's own camera keeps 10 cm, which
+                   hid hands held up before your face). RECORDING FOV (OFF
+                   unless you pick 130, 140 or 150 degrees): the game window
+                   on your monitor shows a wider view to record, at least
+                   that wide across, instead of your left eye. It costs
+                   frame rate (about 3 ms a frame on its author's PC), and
+                   what Spidy draws itself (its gloves and webs, the aim
+                   markers, the combat marks) is only in the headset then.
   BODY ........... CALIBRATE BODY: set it to ON RESUME and resume, and the
                    T-pose panel asks for your measurements again.
   EXPERIMENTAL ... FLIPS (off until you switch it on) lets the left stick
                    and A in the air flip you, and FLIP SPEED sets how fast.
+                   HAND WALL CLIMBING (off until you switch it on, above)
+                   and its WALL CAMERA DISTANCE. REALISTIC FLIPS (off until
+                   you switch it on, above) and the nine rows that tune it.
   Changes apply at once. The launcher starts your next session with them;
-  its options show them too. Playing the game on its screen instead of VR
-  is on the pause menu itself: SWITCH TO GAME SCREEN, under RESUME (each
-  session starts in VR).
+  its options show every one of them but VR VIEW too.
+  NEAR CLIP, RECORDING FOV, UI STYLE, the four body haptics switches and the
+  EXPERIMENTAL rows below FLIP SPEED Spidy keeps in
+  %APPDATA%\Spidy\spidy_vr.ini, beside the launcher's own settings; the
+  launcher shows realistic flips' nine rows while it is on, and the body
+  haptics switches while it plays. Playing
+  the game on its screen instead of VR is on the pause menu itself: SWITCH
+  TO GAME SCREEN, under RESUME (each session starts in VR).
   WEB STYLE: REALISTIC webs are ropes. They bend round whatever comes
   between you and where they stick, lamp posts and signs too, and a swing
   can take you down to just over the street. ARCADE webs go through lamp
@@ -569,6 +649,54 @@ VR settings
   always on.
   The title screen's Options have no SPIDY VR tab: load your save first, or
   set them in the launcher.
+
+Settings profiles (share your settings, or try someone else's)
+  "Profile", at the top of the launcher's Options tab, keeps sets of settings
+  and switches between them. A profile holds every setting of the SPIDY VR
+  tab but RECORDING FOV, the ones in spidy_vr.ini too (NEAR CLIP, UI STYLE,
+  the body haptics switches, the EXPERIMENTAL rows), and "Wall running". Not
+  your graphics options (render resolution, upscaling, the game window, the
+  monitor and its RECORDING FOV, the game's depth of field and sharpening),
+  which suit your own PC, and not your body calibration: a profile leaves
+  those as they are.
+  Save as a profile ... keeps your settings under a name. Pick a profile in
+                        the list to use it; after you change a setting,
+                        Save changes puts it in that profile.
+  Copy to share ....... copies your settings as text: paste it into a
+                        Discord message.
+  Export a file ....... saves them as a .spidy file to send.
+  Paste a profile ..... takes one someone copied (from a Discord message,
+                        say); Import a file takes a .spidy file, and so does
+                        dropping one on the launcher's window. You see what
+                        it would change first; then Save and use, or Save
+                        only.
+  Before a profile changes settings that no profile holds, the launcher
+  keeps them as "Previous settings": pick that to go back. Profiles are
+  files in %APPDATA%\Spidy\profiles; Delete a profile moves one to the
+  Recycle Bin. A profile from an older Spidy, or one with only a few
+  settings in it, changes those and leaves the rest. Profiles apply to the
+  next VR session: change them while VR is stopped.
+
+bHaptics vest, sleeves and visor
+  With a bHaptics TactSuit, TactSleeves or a TactVisor you feel the game on
+  your body: a web taking hold and its pull in your arm and shoulder,
+  growing through the bottom of a swing; the wind when you fly or fall free
+  of webs and walls; landings and walls; the blows you land, and the ones
+  you take on a spot on the side they came from; and Spider-Sense tingling
+  in the visor and at your shoulders toward the attack. The vest faces
+  where your body does: a look over your shoulder does not turn it. Install
+  the bHaptics Player (bhaptics.com/software/player), pair your devices in
+  it, and start it before VR: Spidy finds it by itself, and the headset says
+  which devices are on. BODY HAPTICS under HAPTICS (or "Body haptics" in the
+  launcher's options) sets how strongly they play; OFF stops them. Below it
+  (in the launcher too, while it plays) WEB HAPTICS (shots, holds, the swing's pull, zips, grabs), WIND HAPTICS,
+  COMBAT HAPTICS (punches, hits, Spider-Sense, dodges, heals, slow motion)
+  and MOVEMENT HAPTICS (landings, walls, wall climbing, leaps) each switch
+  their group off. Without the Player nothing changes. To feel each pattern
+  without the game, run
+  build\windows-ninja\spidy_haptics_test.exe: it checks the Player and the
+  devices, buzzes each part of each device in turn, then plays every
+  pattern and says what it should feel like.
 
 
 IF SOMETHING IS WRONG
@@ -689,6 +817,13 @@ IF SOMETHING IS WRONG
   launcher's options). The grip then reels in and shoots web balls.
 - Snap turning makes you uneasy, or the vibration is too strong: Settings >
   SPIDY VR has both.
+- Your bHaptics devices stay still: start the bHaptics Player before VR and
+  check that it shows them connected; the headset says "Body haptics on:"
+  and names them once Spidy has them. BODY HAPTICS (Settings > SPIDY VR >
+  HAPTICS) must not be OFF, nor the switch of what you expect to feel. Too
+  much: turn BODY HAPTICS down, or switch a group off (the wind is WIND
+  HAPTICS). A part that plays on the wrong side of you: tell us which
+  (spidy_haptics_test.exe map shows each part in turn).
 - Swinging feels floaty, or falls too hard: WEIGHT in Settings > SPIDY VR
   (or "Weight" in the launcher's options) sets how heavy you are while
   swinging and after letting go, until you land: 100% is real gravity and
@@ -732,17 +867,19 @@ IF SOMETHING IS WRONG
   depth: HIGH.
 - The HUD is too small, too large or in the way: HUD in Settings > SPIDY VR
   (or "HUD" in the launcher's options): SMALL, MEDIUM, LARGE, or OFF.
-- The game asks for a button and nothing you press does it: press Y. Since
-  October 13 Y sends whatever the game is asking for, so one button answers
-  every prompt - the LB + RB door, the vent's LT + RT, the heal, "tap X",
-  the Shocker fight's throw. Pulling with both webs at the thing does the
-  same. If a moment still asks for something neither reaches, click both
-  thumbsticks for the pad layer, where your grips are the game's LB and RB,
-  your triggers its LT and RT, X its X and the right stick its D-pad; click
-  both again to leave it.
-  Up to 0.3.4 each of those moments needed its own VR control, and the ones
-  nobody had found yet stopped you: the game's X, its L3, a single bumper
-  or trigger, and three ways of its D-pad could not be sent at all.
+- You would like Spidy's marks, gadget wheel and meters to look like the
+  game's own HUD rather than a comic: UI STYLE in Settings > SPIDY VR, TECH.
+- The game asks for a button and nothing you press does it: press the
+  button of the name it shows (WHEN THE GAME ASKS FOR A BUTTON, above). X is
+  the game's X while it asks for X, your triggers its LT, LB, RT and RB,
+  your stick clicks its L3 and R3, the right stick its D-pad. Up to 0.4.0
+  Spidy read none of the game's prompts (the reading closed the game as a
+  save loaded, and was off from October 13): "press X" opened the map, and
+  the Oscorp stations' leaks, vaccine and camera could only be done on the
+  game screen. If a moment still asks for something none of this reaches,
+  click both thumbsticks for the pad layer, where your grips are the game's
+  LB and RB, your triggers its LT and RT, X its X and the right stick its
+  D-pad; click both again to leave it.
 - A prompt shows keyboard keys ("click F to decipher") and no button works:
   the game shows the icons of the device it last saw. Press something on
   the controllers so it sees the pad again, then Y. If it keeps happening,

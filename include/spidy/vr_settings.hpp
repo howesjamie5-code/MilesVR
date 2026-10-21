@@ -2,12 +2,16 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 
 // Spidy's VR settings. The launcher (or the command line) gives a session
 // the values it starts with; during play the game's own Settings change
 // them: pause, Settings, then MILES VR after the game's last tab (game_menu).
 // The session reports the last ones, and the launcher starts the next
-// session with them.
+// session with them. The few no launcher.ini key carries the game module
+// keeps in a file of its own (tabOnlyText), which the launcher's options
+// change too.
 namespace spidy::vr_settings {
 struct Values {
     bool aimMarkers = true;
@@ -58,6 +62,13 @@ struct Values {
     // your floor (the tab's STAND ON WALLS; GameTrackingRig::standOnWalls);
     // off, you stay upright beside it.
     bool standOnWalls = true;
+    // Hand wall climbing, experimental (the tab's HAND WALL CLIMBING;
+    // Swing::allowHandClimb, GameTrackingRig::handClimb): on a wall with the
+    // left stick at rest, a grip squeezed near the wall holds it and pulls you
+    // along; both grips held roll the view. And how far the eyes keep from
+    // the wall meanwhile, centimetres (WALL CAMERA DISTANCE, wallDistances).
+    bool handClimb = false;
+    int wallDistance = 40;
     // Scenes the game plays on the game screen (cutscenes, finishers) have
     // depth there (the tab's GAME SCREEN 3D): 0 off, the game's flat frame; 1
     // low, 2 medium, 3 high (screenDepths).
@@ -78,6 +89,35 @@ struct Values {
     // swings stay above the street. Off, REALISTIC: webs are ropes that bend
     // round whatever comes between you and where they stick.
     bool arcadeWebs = false;
+    // How near the eyes the headset still shows things, millimetres (the
+    // tab's NEAR CLIP, nearClips; near_clip.hpp). The game's own camera clips
+    // at 100, which cut off hands held up before the face.
+    int nearClipMm = 20;
+    // The monitor's view in immersive VR, degrees across (the tab's RECORDING
+    // FOV; recording_fov.hpp), 0 for off: the window then mirrors the left
+    // eye. An angle renders the game's own view again for the window, which
+    // costs frame time and leaves Spidy's drawings out of the window.
+    int recordingFov = 0;
+    // Realistic flips, experimental (the tab's REALISTIC FLIPS and the nine
+    // rows under it; RealisticFlipSettings, which holds what each means): the
+    // swing's flight and the arms turn the player in the air, and A there
+    // rights them.
+    bool realisticFlips = false, automaticReleaseFlip = true;
+    int automaticStrength = 50, automaticSpeed = 240, automaticMinimumSpeed = 3;
+    int automaticResponse = 500, automaticHandStrength = 100, automaticFalloff = 3000;
+    int automaticHandThreshold = 100;
+    bool automaticAirBrake = true;
+    // How strongly a bHaptics vest, sleeves and visor play (the tab's BODY
+    // HAPTICS; body_haptics.hpp), percent; 0 off. And which of its groups
+    // play (the tab's WEB, WIND, COMBAT and MOVEMENT HAPTICS switches;
+    // body_haptics::Group): the player, October 20, after the first session
+    // on the devkit, asked for "one switch per effect group".
+    int bodyHaptics = 100;
+    bool hapticWebs = true, hapticWind = true, hapticCombat = true, hapticMovement = true;
+    // How Spidy's own marks in the headset look (the tab's UI STYLE;
+    // ui_style.hpp's UiStyle): 0 comic, printed as Spidy's videos are; 1
+    // tech, as the game's own HUD and menus are.
+    int uiStyle = 0;
     bool operator==(const Values&) const = default;
 };
 // The steps the game's Settings offer. The launcher's slider sets any swing
@@ -88,6 +128,10 @@ inline constexpr int smoothTurns[] = {0, 60, 90, 120, 180, 240};
 inline constexpr int hapticLevels[] = {0, 25, 50, 75, 100};
 inline constexpr int weights[] = {40, 60, 80, 100, 125, 150, 200, 250, 300};
 inline constexpr int flipSpeeds[] = {90, 120, 150, 180, 240, 300, 360, 480};
+inline constexpr int nearClips[] = {10, 15, 20, 30, 50, 75, 100};
+// Nearer than 20 cm would do nothing: the eyes keep that far from any surface
+// (HeadClearance::margin).
+inline constexpr int wallDistances[] = {20, 25, 30, 40, 50, 60, 75, 100};
 // Real gravity, m/s^2: a weight of 100% falls at it.
 inline constexpr float realGravity = 9.81f;
 // The swing's gravity for a weight, m/s^2.
@@ -113,8 +157,9 @@ inline float screenDepth(int choice) {
 }
 // The values within the session's ranges: swing speed 1-65 m/s (what
 // run_game_vr.py accepts), snap turn 0-90 degrees, smooth turn 0-360 degrees
-// a second, vibration 0-100%, weight 40-300%, HUD 0-3, flip speed 90-480
-// degrees a second, the game screen's depth 0-3.
+// a second, vibration and body haptics 0-100%, weight 40-300%, HUD 0-3, flip
+// speed 90-480 degrees a second, the game screen's depth 0-3, near clip
+// 10-100 mm, recording FOV 0 (off) or 130-150 degrees, UI style 0-1.
 Values sanitized(Values);
 
 enum class Item : uint8_t {
@@ -138,12 +183,33 @@ enum class Item : uint8_t {
     venomHand,
     webStyle,
     venomButton,
+    handClimb,
+    wallDistance,
+    nearClip,
+    realisticFlips,
+    automaticStrength,
+    automaticSpeed,
+    automaticMinimumSpeed,
+    automaticReleaseFlip,
+    automaticResponse,
+    automaticHandStrength,
+    automaticFalloff,
+    automaticHandThreshold,
+    automaticAirBrake,
+    bodyHaptics,
+    hapticWebs,
+    hapticWind,
+    hapticCombat,
+    hapticMovement,
+    recordingFov,
+    uiStyle,
 };
-inline constexpr Item lastItem = Item::venomButton;
+inline constexpr Item lastItem = Item::uiStyle;
 // The MILES VR tab, top to bottom: a section's heading (item none) or a
-// setting. The sections: WEBS, SWINGING, VENOM, COMFORT, DISPLAY, BODY and
+// setting. The sections: WEBS, SWINGING, VENOM, COMFORT, HAPTICS, DISPLAY, BODY and
 // EXPERIMENTAL (the player, October 19: "sort the options in spidy vr
-// settings ingame into nice sections"). A setting without choices is an ON/OFF switch, the game's own;
+// settings ingame into nice sections"; HAPTICS since October 20, the
+// controllers' vibration and the bHaptics rows together). A setting without choices is an ON/OFF switch, the game's own;
 // one with choices steps through them. Titles are upper case, as the game's
 // own rows are; the help shows beside the rows while the setting is selected.
 struct Row {
@@ -156,7 +222,13 @@ struct Row {
     // menu (the one with resume)").
     bool page{};
 };
-const std::array<Row, 25>& rows();
+const std::array<Row, 46>& rows();
+// The most choices a row shows (game_menu's buffers): a row with more would
+// lose its last ones.
+inline constexpr size_t maxChoices = 9;
+// The values a list setting's choices stand for, in their order; none for a
+// switch.
+std::span<const int> steps(Item);
 // The choice a setting shows for these values: a switch 0 (off) or 1 (on), a
 // list its step nearest to the value (a launcher value between two steps
 // shows the nearer one, the lower on a tie).
@@ -165,4 +237,14 @@ int choice(Item, const Values&);
 bool choose(Item, int choice, Values&);
 // What the game's RESET puts back: the choice for Spidy's defaults (Values{}).
 int defaultChoice(Item);
+// The settings no launcher.ini key or XrConfig field carries: NEAR CLIP,
+// RECORDING FOV, UI STYLE, HAND WALL CLIMBING, WALL CAMERA DISTANCE, the
+// realistic flips' ten rows and the body haptics' four groups. The game
+// module keeps them as these key=value lines in a file of their own, beside
+// the launcher's settings (game_xr.cpp, tabOnlyPath), and reads them back
+// when VR starts; the launcher's options read and write the same file.
+std::string tabOnlyText(const Values&);
+// The values with what such text holds, sanitized. A line with an unknown
+// key, or whose value is no whole number, is passed over.
+Values withTabOnly(Values, std::string_view text);
 } // namespace spidy::vr_settings

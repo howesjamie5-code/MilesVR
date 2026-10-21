@@ -90,6 +90,18 @@ constexpr const char* kFlipSpeeds[] = {"90\xC2\xB0/s",  "120\xC2\xB0/s", "150\xC
                                        "240\xC2\xB0/s", "300\xC2\xB0/s", "360\xC2\xB0/s", "480\xC2\xB0/s"};
 constexpr int kFlipSpeedValues[] = {90, 120, 150, 180, 240, 300, 360, 480};
 
+// A choice of the MILES VR tab as the launcher writes its own: "VERY SLOW", "20 CM", "90°/S" as "Very slow",
+// "20 cm", "90°/s" (Spidy 0.4.1).
+std::string launcherCase(std::string_view choice) {
+    std::string text(choice);
+    for (char& c : text)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    if (!text.empty() && text[0] >= 'a' && text[0] <= 'z')
+        text[0] = static_cast<char>(text[0] - 'a' + 'A');
+    return text;
+}
+
 } // namespace
 
 void theme(ImGuiStyle& style) {
@@ -140,7 +152,7 @@ void theme(ImGuiStyle& style) {
 
 App::App(HWND window, ID3D11Device* device, Fonts fonts, std::string updatedFrom)
     : window_(window), fonts_(fonts), settings_(loadSettings()), installFolder_(installFolder()),
-      updatedFrom_(std::move(updatedFrom)), video_(device) {
+      updatedFrom_(std::move(updatedFrom)), video_(device), tabOnly_(loadTabOnly()) {
     scanner_.start(settings_);
     // A player's copy asks GitHub for a newer MilesVR as it starts (update.cpp's kLatestUrl: MilesVR's own
     // releases, never Spidy's), unless the player turned that off.
@@ -1113,6 +1125,30 @@ void App::optionsCard(ImVec2 size) {
         }
         ImGui::PopFont();
     };
+    // The settings no launcher.ini key carries, which the game module keeps in spidy_vr.ini (tabOnly_): the
+    // MILES VR tab's own choices, so the two always offer the same steps (Spidy 0.4.1).
+    using spidy::vr_settings::Item;
+    bool tabChanged = false;
+    const auto tabCombo = [&](const char* id, Item item) {
+        std::vector<std::string> labels;
+        for (const auto& row : spidy::vr_settings::rows())
+            if (row.item == item)
+                for (const char* choice : row.choices)
+                    labels.push_back(launcherCase(choice));
+        std::vector<const char*> texts;
+        for (const auto& label : labels)
+            texts.push_back(label.c_str());
+        int index = spidy::vr_settings::choice(item, tabOnly_);
+        ImGui::PushFont(fonts_.semibold, 13.5f);
+        if (ImGui::Combo(id, &index, texts.data(), static_cast<int>(texts.size())))
+            tabChanged |= spidy::vr_settings::choose(item, index, tabOnly_);
+        ImGui::PopFont();
+    };
+    const auto tabToggle = [&](const char* id, Item item) {
+        bool on = spidy::vr_settings::choice(item, tabOnly_) != 0;
+        if (toggle(id, &on))
+            tabChanged |= spidy::vr_settings::choose(item, on ? 1 : 0, tabOnly_);
+    };
     option("Web style", "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.",
            S(150), [&] {
                static constexpr int styles[] = {0, 1};
@@ -1241,6 +1277,25 @@ void App::optionsCard(ImVec2 size) {
     option("Controller vibration", "How strongly webs and punches buzz.", S(150), [&] {
         stepCombo("##haptics", kHaptics, kHapticValues, static_cast<int>(std::size(kHapticValues)), &o.haptics);
     });
+    option("Body haptics", "bHaptics vest, sleeves and visor feel webs, hits, wind and Spider-Sense. Needs the "
+                           "bHaptics Player running.",
+           S(150), [&] {
+               stepCombo("##bodyhaptics", kHaptics, kHapticValues, static_cast<int>(std::size(kHapticValues)),
+                         &o.bodyHaptics);
+           });
+    // Its groups, under it while it plays.
+    if (o.bodyHaptics > 0) {
+        ImGui::Indent(S(16));
+        option("Web haptics", "Shots, holds, swinging, zips and grabs.", S(40),
+               [&] { tabToggle("##hapticwebs", Item::hapticWebs); });
+        option("Wind haptics", "Wind when you fly or fall free.", S(40),
+               [&] { tabToggle("##hapticwind", Item::hapticWind); });
+        option("Combat haptics", "Punches, hits, Spider-Sense, dodges, heals, slow motion.", S(40),
+               [&] { tabToggle("##hapticcombat", Item::hapticCombat); });
+        option("Movement haptics", "Landings, walls, wall climbing, charged leaps.", S(40),
+               [&] { tabToggle("##hapticmovement", Item::hapticMovement); });
+        ImGui::Unindent(S(16));
+    }
     option("Game screen size", "The headset's screen for menus, cutscenes and flat mode.", S(150), [&] {
         static constexpr int sizes[] = {0, 1, 2};
         stepCombo("##screen", kScreenSizes, sizes, 3, &o.screenSize);
@@ -1254,18 +1309,54 @@ void App::optionsCard(ImVec2 size) {
         static constexpr int sizes[] = {0, 1, 2, 3};
         stepCombo("##hud", kHudSizes, sizes, 4, &o.hud);
     });
+    option("UI style", "MilesVR's own marks, gadget wheel and meters: Comic (printed) or Tech (like the game's HUD).",
+           S(150), [&] { tabCombo("##uistyle", Item::uiStyle); });
+    option("Near clip", "How near your eyes things still show. Nearer keeps your hands in view.", S(150),
+           [&] { tabCombo("##nearclip", Item::nearClip); });
     option("Wall running", "On: a wall you swing or fly onto is yours, and you run along it. Stop on any wall "
                            "and the game's own crawl holds you, so its vents, doors and prompts work; push the "
                            "stick up a wall to run up it, the game's own wall run. Off: every wall is the game's "
                            "crawl. Either way you stand upright on the wall and your view turns so the wall is "
                            "your floor.",
            S(40), [&] { changed |= toggle("##wallrun", &o.wallRun); });
+    option("Hand wall climbing (experimental)",
+           "On a wall, stick at rest: squeeze a grip near the wall and pull to climb. Both grips = roll the view.",
+           S(40), [&] { tabToggle("##handclimb", Item::handClimb); });
+    option("Wall camera distance", "How far your eyes stay from the wall while you hand climb.", S(150),
+           [&] { tabCombo("##walldistance", Item::wallDistance); });
     option("Flips (experimental)", "In the air the left stick turns you over; tap A for one flip, hold A to stay.",
            S(40), [&] { changed |= toggle("##flips", &o.flips); });
     option("Flip speed", "How fast a flip turns you over, at full tilt of the left stick.", S(150), [&] {
         stepCombo("##flipspeed", kFlipSpeeds, kFlipSpeedValues, static_cast<int>(std::size(kFlipSpeedValues)),
                   &o.flipSpeed);
     });
+    option("Realistic flips (experimental)",
+           "Webs and arm swings spin you in the air; landing or A brings you upright. With Flips on, the left "
+           "stick steers.",
+           S(40), [&] { tabToggle("##realistic", Item::realisticFlips); });
+    // Its tuning, under it while it is on.
+    if (tabOnly_.realisticFlips) {
+        ImGui::Indent(S(16));
+        option("Rotation strength", "How strongly your body turns toward a web's pull.", S(150),
+               [&] { tabCombo("##strength", Item::automaticStrength); });
+        option("Max rotation speed", "The fastest it turns you.", S(150),
+               [&] { tabCombo("##maxspeed", Item::automaticSpeed); });
+        option("Minimum flight speed", "A web turns you only above this speed.", S(150),
+               [&] { tabCombo("##flightspeed", Item::automaticMinimumSpeed); });
+        option("Swing momentum", "Letting go of a web keeps the swing's spin.", S(40),
+               [&] { tabToggle("##momentum", Item::automaticReleaseFlip); });
+        option("Rotation response", "How soon a turn speeds up and slows. Longer = gentler.", S(150),
+               [&] { tabCombo("##response", Item::automaticResponse); });
+        option("Hand momentum", "How much arm swings turn you in the air.", S(150),
+               [&] { tabCombo("##handmomentum", Item::automaticHandStrength); });
+        option("Angular drag", "How quickly a spin dies away.", S(150),
+               [&] { tabCombo("##drag", Item::automaticFalloff); });
+        option("Minimum hand speed", "Arm swings slower than this don't turn you.", S(150),
+               [&] { tabCombo("##handspeed", Item::automaticHandThreshold); });
+        option("Air rotation brake", "A in the air stops the spin and brings you upright.", S(40),
+               [&] { tabToggle("##brake", Item::automaticAirBrake); });
+        ImGui::Unindent(S(16));
+    }
     option("Small game window", "Saves GPU time while you play in VR.", S(40),
            [&] { changed |= toggle("##small", &o.smallWindow); });
     option("Game's depth of field",
@@ -1284,6 +1375,9 @@ void App::optionsCard(ImVec2 size) {
                stepCombo("##monitor", kMonitorRates, kMonitorRateValues,
                          static_cast<int>(std::size(kMonitorRateValues)), &o.monitorRate);
            });
+    option("Recording FOV", "A wider view on the monitor to record. Off = your left eye. Costs frame rate; "
+                            "MilesVR's marks stay in the headset.",
+           S(150), [&] { tabCombo("##recordingfov", Item::recordingFov); });
     if (link("Reset options")) {
         // Your body's measurements are not options: they stay.
         const SessionOptions kept = o;
@@ -1292,6 +1386,9 @@ void App::optionsCard(ImVec2 size) {
         o.armLengthMm = kept.armLengthMm;
         o.calibrationPrompt = kept.calibrationPrompt;
         changed = true;
+        // And those spidy_vr.ini keeps.
+        tabOnly_ = {};
+        tabChanged = true;
     }
     ImGui::EndDisabled();
     if (running) {
@@ -1303,6 +1400,8 @@ void App::optionsCard(ImVec2 size) {
     }
     if (changed)
         save();
+    if (tabChanged)
+        saveTabOnly(tabOnly_);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     endCard();
@@ -1573,6 +1672,15 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Blue Spider-Sense lines", "Throw a fist at him: the counter breaks his attack"},
           {"Red / yellow lines", "Dodge (B) / jump (A)"},
           {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"}}},
+        {"GADGETS",
+         {{"Hold X", "The gadget wheel opens in front of that hand. Move the hand to a gadget, let go = equip it"},
+          {"The wheel", "Web Shooter top, Remote Mine right, Gravity Well bottom, Holo Drone left (the ones you "
+                        "have unlocked)"},
+          {"Other button, no web", "Fires the gadget you equipped. Pick Web Shooter for web balls again"}}},
+        {"EXPERIMENTAL (OPTIONS)",
+         {{"Hand wall climbing: grip near a wall", "Hold on and pull to climb. Both grips held and rolled = turn the "
+                                                   "view. A = jump off"},
+          {"Realistic flips: arms in the air", "Swing your arms to spin. A in the air = stop and come upright"}}},
         {"PHONE",
          {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
                                                     "keep squeezing and bring it up in front of you",

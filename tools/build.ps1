@@ -23,8 +23,10 @@ if ($LASTEXITCODE) { throw 'Build or tests failed' }
 # signature valid after the certificate expires).
 if (-not $CoreOnly -and ($env:SPIDY_SIGN_THUMBPRINT -or $env:SPIDY_SIGN_PFX -or $env:SPIDY_SIGN_ARGS)) {
     $bin = Join-Path (Split-Path -Parent $PSScriptRoot) "build\$build"
+    # bhaptics_library.dll is bHaptics' and ships unmodified: it is not signed here.
     $names = @('spidy_launcher.exe', 'spidy_headset_probe.exe', 'spidy_bridge.dll', 'spidy_render_probe.dll',
-               'spidy_ray_bridge.dll', 'spidy_movement_bridge.dll', 'spidy_stereo_probe.dll', 'spidy_render_memory.dll')
+               'spidy_ray_bridge.dll', 'spidy_movement_bridge.dll', 'spidy_stereo_probe.dll', 'spidy_render_memory.dll',
+               'spidy_haptics_test.exe')
     $files = foreach ($n in $names) { $p = Join-Path $bin $n; if (Test-Path -LiteralPath $p) { $p } }
     if (-not $files) { throw "Signing was requested but no built binaries were found in $bin." }
 

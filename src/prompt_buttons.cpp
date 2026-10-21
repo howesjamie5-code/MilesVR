@@ -132,7 +132,24 @@ constexpr Named stickIds[] = {
 // is whatever the screen it belongs to calls cancel (it stands beside
 // HeroStateDialog and ConfirmRadioTower in the exe), the second a map
 // action, and sending a guess for either would press the wrong thing.
+//
+// Not the whole vocabulary after all: the help line the game shows as a save
+// loads - ShowText(7, 'Press [STICK_LEFT_PRESS] to <span class='emphasis'>
+// dive</span> and ...') in the game on October 20 - names its dive with a
+// token the exe does not hold, so the texts' own data has words of its own.
+// The sticks' presses are taken for both sticks, and [FUNC_MELEE], which the
+// exe does hold, is the melee's button: the pad's X. A session report keeps
+// each prompt call's text, which is where the next unknown word shows.
+// Another load that day brought "While in the air, hold [ACTION_WEB_YANK_BOT]
+// to yank enemies up to you": an action of the game's own binding configs
+// (HeroUsabilityBindingsConfig's Fire, Swing, WebZip, WebYankBot, WebStrike,
+// AimMode, UseGadget, Heal and the rest), whose buttons the configs hold and
+// the exe does not. Those stay unread until the configs are: a guess would
+// press the wrong thing.
 constexpr Named tokens[] = {
+    {"[STICK_LEFT_PRESS]", held(padLeftThumb)},
+    {"[STICK_RIGHT_PRESS]", held(padRightThumb)},
+    {"[FUNC_MELEE]", held(padX)},
     {"[BTN_A]", held(padA)},
     {"[BTN_B]", held(padB)},
     {"[BTN_X]", held(padX)},
@@ -323,7 +340,8 @@ bool mayName(std::string_view text) {
     if (text.find("[BTN_") != std::string_view::npos || text.find("Button") != std::string_view::npos ||
         text.find("Stick") != std::string_view::npos || text.find("Mkb") != std::string_view::npos ||
         text.find("[DPAD_") != std::string_view::npos || text.find("[MKB_") != std::string_view::npos ||
-        text.find("[LS]") != std::string_view::npos || text.find("[RS]") != std::string_view::npos)
+        text.find("[LS]") != std::string_view::npos || text.find("[RS]") != std::string_view::npos ||
+        text.find("[STICK_") != std::string_view::npos || text.find("[FUNC_") != std::string_view::npos)
         return true;
     for (const auto& s : spellings)
         if (text.find(s.name) != std::string_view::npos)
