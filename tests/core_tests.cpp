@@ -4489,19 +4489,29 @@ int main() {
         // The phone upright 40 cm ahead, facing back at the eyes (+z).
         const WheelFrame phone{{0, 1.4f, -.4f}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
         const auto c = phoneAppCorners(phone, 16.f / 9);
-        check(std::abs(c[1].x - c[0].x - phoneAppWidth) < 1e-5f &&
-                  std::abs(c[0].y - c[3].y - phoneAppWidth * 9 / 16) < 1e-5f && c[0].x < c[1].x && c[0].y > c[3].y,
-              "the image's corners: as wide as the glass, 16:9, top left first");
+        const auto size = phoneAppSize(16.f / 9);
+        const float shape = 16.f / 9 * (phoneAppPart[2] - phoneAppPart[0]) / (phoneAppPart[3] - phoneAppPart[1]);
+        check(size.width <= phoneAppWidth + 1e-6f && size.height <= phoneAppTallest + 1e-6f &&
+                  std::abs(size.width / size.height - shape) < 1e-4f &&
+                  (std::abs(size.width - phoneAppWidth) < 1e-5f || std::abs(size.height - phoneAppTallest) < 1e-5f),
+              "the app's part: its own shape, as large as the glass takes");
+        check(std::abs(c[1].x - c[0].x - size.width) < 1e-5f && std::abs(c[0].y - c[3].y - size.height) < 1e-5f &&
+                  c[0].x < c[1].x && c[0].y > c[3].y,
+              "the app's corners: its size, top left first");
+        // A point on the app's part (u, v across and down it), `depth` off the glass.
         const auto at = [&](float u, float v, float depth) {
-            return Vec3{(u - .5f) * phoneAppWidth, 1.4f + (.5f - v) * phoneAppWidth * 9 / 16, -.4f + .002f + depth};
+            return Vec3{(u - .5f) * size.width, 1.4f + phoneAppMiddle + (.5f - v) * size.height,
+                        -.4f + .002f + depth};
         };
+        const auto onPicture = [&](float u) { return phoneAppPart[0] + u * (phoneAppPart[2] - phoneAppPart[0]); };
         PhoneTouch t;
         auto o = t.update(phone, 16.f / 9, at(.25f, .5f, .03f), true);
-        check(o.hover && !o.touching && !o.press && std::abs(o.at[0] - .25f) < 1e-3f, "3 cm off: it only hovers");
+        check(o.hover && !o.touching && !o.press && std::abs(o.at[0] - onPicture(.25f)) < 1e-3f,
+              "3 cm off: it only hovers, over the app's part of the game's picture");
         o = t.update(phone, 16.f / 9, at(.25f, .5f, .004f), true);
         check(o.press && o.touching, "on the glass: it presses");
         o = t.update(phone, 16.f / 9, at(.6f, .4f, .01f), true);
-        check(!o.press && !o.release && o.touching && std::abs(o.at[0] - .6f) < 1e-3f, "a press drags");
+        check(!o.press && !o.release && o.touching && std::abs(o.at[0] - onPicture(.6f)) < 1e-3f, "a press drags");
         o = t.update(phone, 16.f / 9, at(.6f, .4f, .03f), true);
         check(o.release && !o.touching, "lifted off: it lets go");
         o = t.update(phone, 16.f / 9, at(1.5f, .5f, 0), true);

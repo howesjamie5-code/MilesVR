@@ -61,8 +61,9 @@ class D3D12Renderer {
     // `corners` its top left, top right, bottom right and bottom left, in the space target.viewProjection
     // takes, over what the target holds (no depth test, nothing behind it kept). Read as for blit, four
     // samples a pixel so a large image shrunk small does not shimmer. Asynchronous like blit.
+    // `part`: the part of the source drawn, left, top, right, bottom, 0 to 1 across and down.
     void quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool linearSource, const ViewTarget& target,
-              const std::array<Vec3, 4>& corners);
+              const std::array<Vec3, 4>& corners, const std::array<float, 4>& part = {0, 0, 1, 1});
     void waitIdle();
     // Diagnostic RGBA8 readback; target enters and exits in RENDER_TARGET state.
     std::vector<unsigned char> readback(ID3D12Resource* target);

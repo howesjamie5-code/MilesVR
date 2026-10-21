@@ -1022,7 +1022,8 @@ DWORD WINAPI run(void*) {
         static constexpr float venomDashSeconds = 180;
         int venomDashBefore = -1;
         float venomDashLeft{};
-        // MilesVR 0.1.79: seconds the Venom Dash flag has read off with a player in the world. The flag
+        // MilesVR 0.1.79: seconds the Venom Dash flag has read off in play (the game's own camera committing:
+        // a load counts as no play even with a player record). The flag
         // reads off while a save loads, so off-then-on alone re-armed the dash after every load and the
         // venom punch came out as a dash in fights (the user: "sometimes the punch works sometimes the
         // dash triggers"). Only a flag off through real play and then on is the game giving the dash.
@@ -2103,7 +2104,7 @@ DWORD WINAPI run(void*) {
                     // Venom Dash flag turning on while VR plays makes the venom gesture the game's
                     // Venom Dash (its LB + Y, PlayStation's L1 + Triangle) for venomDashSeconds, in a
                     // fight or out of one.
-                    if (venomGame.dash == 0 && player.record)
+                    if (venomGame.dash == 0 && player.record && committed)
                         venomDashOffSeconds += std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
                     if (venomGame.dash >= 0) {
                         if (venomDashBefore == 0 && venomGame.dash == 1 && venomDashOffSeconds >= venomDashOffNeeded) {
@@ -4521,6 +4522,22 @@ DWORD WINAPI run(void*) {
                                                               v.fov.angleUp, .03f, 200.f),
                                                    viewMatrix(pose))};
                         }
+                        // The game's own picture, now and then, for the session report (the eyes'
+                        // folder): where its app sits on it, to measure the phone's part from.
+                        D3D12Renderer::Captured pixels;
+                        if (snapshotTicket && overlay.captured(snapshotTicket, pixels)) {
+                            publishSnapshot(pendingSnapshot, &pixels);
+                            snapshotTicket = 0;
+                        }
+                        if (!snapshotTicket && snapshots.due(GetTickCount64(), 0, false)) {
+                            overlay.blit(app.texture.Get(), app.view, app.linear,
+                                         {targets[0].texture, targets[0].format, targets[0].width,
+                                          targets[0].height, {}});
+                            if ((snapshotTicket = overlay.capture(targets[0].texture)) != 0) {
+                                pendingSnapshot = {};
+                                pendingSnapshot.flatScreen = 1;
+                            }
+                        }
                         std::vector<Vertex> phoneBody, marks;
                         appendPhoneBody(phoneBody, phoneAppDraw.phone);
                         appendPhoneTouch(marks, phoneAppDraw.phone, phoneAppDraw.touch, phoneAppDraw.tip,
@@ -4528,7 +4545,7 @@ DWORD WINAPI run(void*) {
                         overlay.renderViews(views, phoneBody, false, false);
                         const auto corners = phoneAppCorners(phoneAppDraw.phone, aspect);
                         for (const auto& view : views)
-                            overlay.quad(app.texture.Get(), app.view, app.linear, view, corners);
+                            overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
                         if (!marks.empty())
                             overlay.renderViews(views, marks, true, false);
                         copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -

@@ -283,9 +283,21 @@ std::string phoneSongName(const std::string& fileName, int track);
 // shows its app, the phone stays in the hand that opened it, upright, the game's image on its screen,
 // as wide as the screen and as tall as the image's shape makes it (the user chose upright, shrunk to
 // fit), and the other hand's finger taps it.
-constexpr float phoneAppWidth = .075f;
+//
+// The game shows its app as an upright phone screen on the right of its picture, the scene playing on
+// beside it (the user's October 22 capture), so the phone shows that part alone: phoneAppPart, left,
+// top, right, bottom of the picture, 0 to 1 (measured from a headset capture, with room to spare).
+constexpr std::array<float, 4> phoneAppPart{.665f, .07f, .945f, .80f};
+// The most of the glass it takes: its width, and its height under the red bar; and its middle's height
+// on the phone.
+constexpr float phoneAppWidth = .075f, phoneAppTallest = .125f, phoneAppMiddle = -.006f;
+// Its size on the glass for a picture `aspect` wide over high: the part's own shape, as large as fits.
+struct PhoneAppSize {
+    float width{}, height{};
+};
+PhoneAppSize phoneAppSize(float aspect);
 // Its corners on the phone at `phone`: top left, top right, bottom right, bottom left, just above the
-// glass. aspect: the image's width over its height.
+// glass.
 std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect);
 // The phone's body and its dark glass, with nothing on the glass: what holds the game's app.
 void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone);
@@ -297,7 +309,7 @@ class PhoneTouch {
     static constexpr float touch = .008f, untouch = .016f, hover = .05f;
     struct Out {
         bool hover{}, touching{};
-        std::array<float, 2> at{}; // on the image: (0, 0) its top left, (1, 1) its bottom right
+        std::array<float, 2> at{}; // on the game's picture: (0, 0) its top left, (1, 1) its bottom right
         Vec3 point{};              // where on the glass
         bool press{}, release{};
     };

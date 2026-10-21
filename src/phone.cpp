@@ -604,10 +604,19 @@ std::string phoneSongName(const std::string& fileName, int track) {
     return track >= 0 ? "TRACK " + std::to_string(track + 1) : "SONG";
 }
 
-std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect) {
+PhoneAppSize phoneAppSize(float aspect) {
     const float a = std::isfinite(aspect) && aspect > .2f && aspect < 5 ? aspect : 16.f / 9;
-    const float w = phoneAppWidth / 2, h = phoneAppWidth / a / 2;
-    const Vec3 c = phone.centre + phone.out * .002f;
+    const float shape = a * (phoneAppPart[2] - phoneAppPart[0]) / (phoneAppPart[3] - phoneAppPart[1]);
+    PhoneAppSize s{phoneAppWidth, phoneAppWidth / shape};
+    if (s.height > phoneAppTallest)
+        s = {phoneAppTallest * shape, phoneAppTallest};
+    return s;
+}
+
+std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect) {
+    const auto size = phoneAppSize(aspect);
+    const float w = size.width / 2, h = size.height / 2;
+    const Vec3 c = phone.centre + phone.out * .002f + phone.up * phoneAppMiddle;
     return {c - phone.right * w + phone.up * h, c + phone.right * w + phone.up * h, c + phone.right * w - phone.up * h,
             c - phone.right * w - phone.up * h};
 }
@@ -631,16 +640,20 @@ PhoneTouch::Out PhoneTouch::update(const WheelFrame& phone, float aspect, Vec3 t
         o.release = reset();
         return o;
     }
-    const float a = std::isfinite(aspect) && aspect > .2f && aspect < 5 ? aspect : 16.f / 9;
-    const Vec3 local = tip - (phone.centre + phone.out * .002f);
+    const auto size = phoneAppSize(aspect);
+    const Vec3 middle = phone.centre + phone.out * .002f + phone.up * phoneAppMiddle;
+    const Vec3 local = tip - middle;
     const float depth = dot(local, phone.out), x = dot(local, phone.right), y = dot(local, phone.up);
-    const float u = x / phoneAppWidth + .5f, v = .5f - y / (phoneAppWidth / a);
+    const float u = x / size.width + .5f, v = .5f - y / size.height;
     // A press keeps a little room past the image's edges, so a drag to its edge holds.
     const float margin = down_ ? .08f : 0;
     const bool over = u >= -margin && u <= 1 + margin && v >= -margin && v <= 1 + margin;
-    o.at = {std::clamp(u, 0.f, 1.f), std::clamp(v, 0.f, 1.f)};
-    o.point = phone.centre + phone.out * .0025f + phone.right * ((o.at[0] - .5f) * phoneAppWidth) +
-              phone.up * ((.5f - o.at[1]) * phoneAppWidth / a);
+    const float cu = std::clamp(u, 0.f, 1.f), cv = std::clamp(v, 0.f, 1.f);
+    o.point = middle + phone.out * .0005f + phone.right * ((cu - .5f) * size.width) +
+              phone.up * ((.5f - cv) * size.height);
+    // Where that is on the game's whole picture.
+    o.at = {phoneAppPart[0] + cu * (phoneAppPart[2] - phoneAppPart[0]),
+            phoneAppPart[1] + cv * (phoneAppPart[3] - phoneAppPart[1])};
     // From behind the glass (more than 3 cm through it) nothing touches.
     const bool near = depth > -.03f;
     if (down_ && (!over || !near || depth > untouch)) {

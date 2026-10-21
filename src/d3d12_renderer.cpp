@@ -580,7 +580,7 @@ void D3D12Renderer::prepareQuad(DXGI_FORMAT targetFormat) {
         parameters[0].DescriptorTable = {1, &range};
         parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        parameters[1].Constants.Num32BitValues = 36;
+        parameters[1].Constants.Num32BitValues = 40;
         parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         D3D12_STATIC_SAMPLER_DESC sampler{};
         sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -603,6 +603,7 @@ cbuffer Quad : register(b0) {
     row_major float4x4 vp;
     float4 corner0; float4 corner1; float4 corner2; float4 corner3;
     uint linearSource; uint srgbTarget; float2 unused;
+    float4 part;
 };
 struct Out { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 Out vs(uint id : SV_VertexID) {
@@ -611,7 +612,7 @@ Out vs(uint id : SV_VertexID) {
     const float3 p = k == 0 ? corner0.xyz : k == 1 ? corner1.xyz : k == 2 ? corner2.xyz : corner3.xyz;
     Out o;
     o.position = mul(vp, float4(p, 1));
-    o.uv = float2(k == 1 || k == 2 ? 1 : 0, k >= 2 ? 1 : 0);
+    o.uv = lerp(part.xy, part.zw, float2(k == 1 || k == 2 ? 1 : 0, k >= 2 ? 1 : 0));
     return o;
 }
 float3 decode(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
@@ -659,7 +660,7 @@ float4 ps(Out i) : SV_TARGET {
     }
 }
 void D3D12Renderer::quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool linearSource, const ViewTarget& target,
-                         const std::array<Vec3, 4>& corners) {
+                         const std::array<Vec3, 4>& corners, const std::array<float, 4>& part) {
     if (!source || !target.texture || !target.width || !target.height)
         throw std::runtime_error("Quad requires a source and a target");
     waitForSubmission();
@@ -681,7 +682,7 @@ void D3D12Renderer::quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool li
     ID3D12DescriptorHeap* heaps[] = {srv_.Get()};
     list_->SetDescriptorHeaps(1, heaps);
     list_->SetGraphicsRootDescriptorTable(0, srv_->GetGPUDescriptorHandleForHeapStart());
-    std::array<float, 36> constants{};
+    std::array<float, 40> constants{};
     std::copy(target.viewProjection.begin(), target.viewProjection.end(), constants.begin());
     for (size_t i = 0; i < 4; ++i) {
         constants[16 + i * 4] = corners[i].x;
@@ -691,7 +692,8 @@ void D3D12Renderer::quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool li
     }
     constants[32] = std::bit_cast<float>(linearSource ? 1u : 0u);
     constants[33] = std::bit_cast<float>(srgb(target.format) ? 1u : 0u);
-    list_->SetGraphicsRoot32BitConstants(1, 36, constants.data(), 0);
+    std::copy(part.begin(), part.end(), constants.begin() + 36);
+    list_->SetGraphicsRoot32BitConstants(1, 40, constants.data(), 0);
     list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     D3D12_VIEWPORT viewport{0, 0, static_cast<float>(target.width), static_cast<float>(target.height), 0, 1};
     D3D12_RECT rect{0, 0, static_cast<LONG>(target.width), static_cast<LONG>(target.height)};
