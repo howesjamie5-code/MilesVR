@@ -1,22 +1,41 @@
 MilesVR 0.1.78 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
-What changed since 0.1.77: TUTORIAL VIDEOS, NO MORE MENU FLICKER, HAND FIX
+What changed since 0.1.77: SPIDYVR 0.4.1 + MILES'S GADGET WHEEL
 --------------------------------------------------
-Tutorial videos: the launcher's Controls tab has an orange WATCH TUTORIAL
-button on Venom Punch, Venom Jump, Venom Smash and Mega Venom Blast. It
-plays a short video of the power (no sound) right in the launcher.
-Menus: the button prompts no longer flicker between keyboard and
-controller. Pointing a controller at the menu screen does nothing until
-you pull its trigger at it - then it is the mouse (trigger clicks, stick
-scrolls). Any other button gives the menus back to the controller.
-What to try: open WATCH TUTORIAL on each power. In the pause menu, raise
-both controllers to the headset - prompts should stay on the controller
-and B should exit. Point and pull the trigger to click an option.
-Hands: the palm keeps the game's own natural curve under your finger
-poses. Fixes the bulge at the ring finger's base on story-damaged suits
-(Great Responsibility after Roxxon Plaza). Check your hands open, in a
-fist and shooting a web, in that suit and a couple of others.
+New from SpidyVR 0.4.1:
+- GADGET WHEEL: hold X - the new wheel opens in front of your hand with
+  Miles's gadgets: Web Shooter (top), Remote Mine (right), Gravity Well
+  (bottom), Holo Drone (left). Move your hand to one, let go = equipped.
+  The other button (not the web button) fires it.
+- REALISTIC FLIPS (experimental, off): webs and arm swings spin you in the
+  air; A or landing brings you upright. 9 tuning settings.
+- HAND WALL CLIMBING (experimental, off): on a wall, squeeze a grip near
+  it and pull to climb; both grips roll the view; A jumps off.
+- UI STYLE: Comic or Tech (sci-fi, like the game's HUD) for the mod's marks.
+- NEAR CLIP: your hands no longer get cut off near your face.
+- RECORDING FOV (off): a wider view on the monitor for recording.
+- BODY HAPTICS for bHaptics vests/sleeves/visor (needs an app ID to play).
+- The game knows what VR sees: throwable markers should stay, fewer
+  people/cars popping in close.
+- A long game text can no longer close the game.
+All the new settings are in the launcher's Options and in Settings >
+MILES VR. Controls tab: new GADGETS and EXPERIMENTAL sections.
+
+MilesVR's own:
+- Tutorial videos: WATCH TUTORIAL on each venom power in the Controls tab.
+- Prompts name your VR controls ("HOLD VENOM TRIGGER + PUNCH").
+- Venom punch tutorial gesture works on the frozen tutorial screen.
+- Throw on right stick up at a throwable object.
+- Orange sparkly venom fist; FNSM APP on the phone.
+- Venom powers unlock with the story; boss fights take your punches.
+- No more menu flicker between keyboard and controller prompts.
+
+What to try: hold X in free roam - do Remote Mine, Gravity Well and Holo
+Drone show on the wheel? Equip each and fire it with the other button
+(the Remote Mine may need a second press to go off). Turn on Realistic
+flips and Hand wall climbing in Options and swing / climb a wall. Switch
+UI STYLE to TECH. Right stick up at a vent should still enter it.
 
 What changed since 0.1.76: DODGES GIVE VENOM
 --------------------------------------------------
