@@ -604,6 +604,78 @@ std::string phoneSongName(const std::string& fileName, int track) {
     return track >= 0 ? "TRACK " + std::to_string(track + 1) : "SONG";
 }
 
+std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect) {
+    const float a = std::isfinite(aspect) && aspect > .2f && aspect < 5 ? aspect : 16.f / 9;
+    const float w = phoneAppWidth / 2, h = phoneAppWidth / a / 2;
+    const Vec3 c = phone.centre + phone.out * .002f;
+    return {c - phone.right * w + phone.up * h, c + phone.right * w + phone.up * h, c + phone.right * w - phone.up * h,
+            c - phone.right * w - phone.up * h};
+}
+
+void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone) {
+    if (!finite(phone.centre))
+        return;
+    const Plane p{phone};
+    p.rounded(out, 0, 0, width, height, corner, 0, body);
+    p.rounded(out, 0, 0, width - 2 * bezel, height - 2 * bezel, corner - bezel / 2, .001f, screen);
+    // The red bar along the top as the phone's own screens have it, FNSM in it.
+    p.rounded(out, 0, .0695f, width - 2 * bezel, .019f, corner - bezel / 2, .0015f, red);
+    p.text(out, "FNSM", -.031f, .0655f, .0065f, .05f, white, 0);
+    spider(out, p, .027f, .0695f, .006f, white);
+    p.text(out, "TAP WITH YOUR FINGER   B BACK", 0, -.0755f, .0026f, .066f, soft);
+}
+
+PhoneTouch::Out PhoneTouch::update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked) {
+    Out o;
+    if (!tracked || !finite(tip) || !finite(phone.centre)) {
+        o.release = reset();
+        return o;
+    }
+    const float a = std::isfinite(aspect) && aspect > .2f && aspect < 5 ? aspect : 16.f / 9;
+    const Vec3 local = tip - (phone.centre + phone.out * .002f);
+    const float depth = dot(local, phone.out), x = dot(local, phone.right), y = dot(local, phone.up);
+    const float u = x / phoneAppWidth + .5f, v = .5f - y / (phoneAppWidth / a);
+    // A press keeps a little room past the image's edges, so a drag to its edge holds.
+    const float margin = down_ ? .08f : 0;
+    const bool over = u >= -margin && u <= 1 + margin && v >= -margin && v <= 1 + margin;
+    o.at = {std::clamp(u, 0.f, 1.f), std::clamp(v, 0.f, 1.f)};
+    o.point = phone.centre + phone.out * .0025f + phone.right * ((o.at[0] - .5f) * phoneAppWidth) +
+              phone.up * ((.5f - o.at[1]) * phoneAppWidth / a);
+    // From behind the glass (more than 3 cm through it) nothing touches.
+    const bool near = depth > -.03f;
+    if (down_ && (!over || !near || depth > untouch)) {
+        down_ = false;
+        o.release = true;
+    } else if (!down_ && over && near && depth < touch) {
+        down_ = true;
+        o.press = true;
+    }
+    o.touching = down_;
+    o.hover = down_ || (over && near && depth < hover);
+    return o;
+}
+
+void appendPhoneTouch(std::vector<Vertex>& out, const WheelFrame& phone, const PhoneTouch::Out& touch, Vec3 tip,
+                      const Pose& head) {
+    if (finite(tip) && finite(head.position)) {
+        const Vec3 toEyes = head.position - tip;
+        if (length(toEyes) > .05f) {
+            const Vec3 o = normalized(toEyes);
+            Vec3 up = Vec3{0, 1, 0} - o * o.y;
+            if (length(up) > .1f) {
+                up = normalized(up);
+                const Plane marker{{tip, cross(up, o), up, o}};
+                marker.disc(out, 0, 0, .0055f, 0, white);
+                marker.ring(out, 0, 0, .0055f, .0072f, -.0005f, body);
+            }
+        }
+    }
+    if (touch.hover && finite(phone.centre)) {
+        const Plane glass{{touch.point, phone.right, phone.up, phone.out}};
+        glass.ring(out, 0, 0, .0028f, .0042f, .0005f, touch.touching ? red : white);
+    }
+}
+
 void appendPhone(std::vector<Vertex>& out, const PhoneView& view) {
     if (!view.open || !finite(view.frame.centre))
         return;

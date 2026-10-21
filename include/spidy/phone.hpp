@@ -3,6 +3,7 @@
 #include "math.hpp"
 #include "tracking.hpp"
 #include "vertex.hpp"
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -276,4 +277,44 @@ void appendPhone(std::vector<Vertex>& out, const PhoneView& view);
 // the overlay's font draws. A name with nothing of that (a Hebrew, Cyrillic or
 // Japanese one) is TRACK and its number: `track`, from 0.
 std::string phoneSongName(const std::string& fileName, int track);
+
+// MilesVR 0.1.80: the game's own FNSM app on the phone (the user: "the app appearing on the actual phone
+// aswell not a seperate screen where you can actually use your fingers to press on it"). While the game
+// shows its app, the phone stays in the hand that opened it, upright, the game's image on its screen,
+// as wide as the screen and as tall as the image's shape makes it (the user chose upright, shrunk to
+// fit), and the other hand's finger taps it.
+constexpr float phoneAppWidth = .075f;
+// Its corners on the phone at `phone`: top left, top right, bottom right, bottom left, just above the
+// glass. aspect: the image's width over its height.
+std::array<Vec3, 4> phoneAppCorners(const WheelFrame& phone, float aspect);
+// The phone's body and its dark glass, with nothing on the glass: what holds the game's app.
+void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone);
+// A fingertip on the app. Within `touch` of the glass over the image it presses (the game's mouse
+// button down where it is), and it lets go once `untouch` off or off the image; within `hover` it only
+// shows where it would land. Between a press and its release it drags.
+class PhoneTouch {
+  public:
+    static constexpr float touch = .008f, untouch = .016f, hover = .05f;
+    struct Out {
+        bool hover{}, touching{};
+        std::array<float, 2> at{}; // on the image: (0, 0) its top left, (1, 1) its bottom right
+        Vec3 point{};              // where on the glass
+        bool press{}, release{};
+    };
+    // tip: the tapping finger's tip, in the phone's space; tracked: whether that hand is.
+    Out update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked);
+    // A press under way is let go of (the app gone).
+    bool reset() {
+        const bool was = down_;
+        down_ = false;
+        return was;
+    }
+
+  private:
+    bool down_{};
+};
+// The tapping fingertip, a dot facing `head`, and while it hovers a ring where it would land (red while
+// it presses).
+void appendPhoneTouch(std::vector<Vertex>& out, const WheelFrame& phone, const PhoneTouch::Out& touch, Vec3 tip,
+                      const Pose& head);
 } // namespace spidy

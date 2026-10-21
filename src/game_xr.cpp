@@ -982,6 +982,24 @@ DWORD WINAPI run(void*) {
         float fnsmCommittedSeconds{};
         static constexpr uint64_t fnsmAskGapMs = 60000, fnsmSceneMostMs = 600000;
         static constexpr float fnsmSceneEndSeconds = 5;
+        // MilesVR 0.1.80: the game's FNSM app on the phone (phone.hpp's PhoneTouch). From the phone's FNSM APP
+        // until VR has shown play again for phoneAppPlayEnd seconds (after phoneAppLeastMs) or phoneAppMostMs
+        // pass: while the game shows its app (no play), the headset shows the phone in the hand that opened it
+        // with the game's image on its glass, and the other hand's fingertip is the game's mouse there.
+        uint64_t phoneAppAt{};
+        int phoneAppHand = 1;
+        float phoneAppPlaySeconds{};
+        PhoneTouch phoneTouch;
+        struct PhoneAppDraw {
+            bool on{};
+            WheelFrame phone{};
+            PhoneTouch::Out touch{};
+            Vec3 tip{};
+            Pose head{};
+        } phoneAppDraw;
+        uint32_t phoneAppTaps{};
+        static constexpr uint64_t phoneAppLeastMs = 3000, phoneAppMostMs = 600000;
+        static constexpr float phoneAppPlayEnd = 2;
         // MilesVR 0.1.78: a blow on a boss taps the game's X this long (game_punch::Venom::bossBlows).
         float bossTap{}, bossVenomTap{}, bossStrikeTap{};
         bool throwingUp{};
@@ -1649,6 +1667,11 @@ DWORD WINAPI run(void*) {
                         case PhoneAction::fnsm:
                             fnsmHold = 1.f;
                             fnsmSceneDone = true;
+                            phoneAppAt = GetTickCount64();
+                            phoneAppHand = phone.hand() == 0 ? 0 : 1;
+                            phoneAppPlaySeconds = 0;
+                            if (phoneTouch.reset())
+                                mouseEvent(MOUSEEVENTF_LEFTUP);
                             runtime.haptic(1, .3f);
                             message(3, 0, "FNSM app - the game's own opens (its View held)");
                             game_prompts::note("phone: FNSM APP -> the game's View held 1 s");
@@ -2200,6 +2223,50 @@ DWORD WINAPI run(void*) {
                     using CalibrationPhase = body_calibration::Phase;
                     const bool immersive = viewing && motion.active && !flatScreen && controlsVisible;
                     const uint64_t nowMs = GetTickCount64();
+                    bool phoneAppOn = false;
+                    if (phoneAppAt) {
+                        phoneAppPlaySeconds = immersive ? phoneAppPlaySeconds + (std::isfinite(frame.seconds)
+                                                                                     ? std::clamp(frame.seconds, 0.f, .1f)
+                                                                                     : 0.f)
+                                                        : 0;
+                        const uint64_t since = nowMs - phoneAppAt;
+                        if (since > phoneAppMostMs || (since > phoneAppLeastMs && phoneAppPlaySeconds >= phoneAppPlayEnd)) {
+                            phoneAppAt = 0;
+                            game_prompts::note("phone: the game's FNSM app closed - the phone goes away");
+                        } else {
+                            phoneAppOn = viewing && !immersive;
+                        }
+                    }
+                    if (!phoneAppOn) {
+                        if (phoneTouch.reset())
+                            mouseEvent(MOUSEEVENTF_LEFTUP);
+                        phoneAppDraw.on = false;
+                    } else {
+                        // The phone in the hand that opened it (in front of the head if that hand is lost),
+                        // and the other hand's fingertip: its aim pose's point, at the front of the hand.
+                        const auto& holding = frame.hands[phoneAppHand];
+                        const Vec3 lost{NAN, NAN, NAN};
+                        const WheelFrame held = phoneFrameAt(
+                            frame.head, holding.valid && validTrackedPose(holding.grip) ? holding.grip.position : lost);
+                        const unsigned tapHand = 1u - static_cast<unsigned>(phoneAppHand);
+                        const auto& tapping = frame.hands[tapHand];
+                        const bool tipTracked = tapping.valid && validTrackedPose(tapping.aim);
+                        const Vec3 tip = tipTracked ? tapping.aim.position : lost;
+                        const auto touch = phoneTouch.update(held, shownAspect, tip, tipTracked);
+                        menu_pointer::Output mouse;
+                        mouse.pointing = touch.hover;
+                        mouse.hand = tapHand;
+                        mouse.at = touch.at;
+                        mouse.press = touch.press;
+                        mouse.release = touch.release;
+                        gameMouse(mouse);
+                        if (touch.press) {
+                            runtime.haptic(tapHand, .35f, .03f);
+                            if (++phoneAppTaps <= 10)
+                                game_prompts::note("phone: a finger tap on the FNSM app");
+                        }
+                        phoneAppDraw = {true, held, touch, tip, frame.head};
+                    }
                     if (!immersive)
                         immersiveSince = 0;
                     else if (!immersiveSince)
@@ -3651,8 +3718,8 @@ DWORD WINAPI run(void*) {
                         // controller meanwhile. Not while the game plays on its screen (VIEW: GAME
                         // SCREEN), where the mouse would turn the camera, unless it is paused there.
                         {
-                            const bool pointerOn =
-                                mapping == game_pad::Mapping::menus && screen && !(flatScreen && timeRuns);
+                            const bool pointerOn = mapping == game_pad::Mapping::menus && screen &&
+                                                   !(flatScreen && timeRuns) && !phoneAppDraw.on;
                             std::array<menu_pointer::Hand, 2> menuHands{};
                             for (unsigned i = 0; i < 2; ++i)
                                 menuHands[i] = {frame.hands[i].valid && validTrackedPose(frame.hands[i].grip),
@@ -4436,6 +4503,45 @@ DWORD WINAPI run(void*) {
                 },
                 [&](std::array<XrRuntime::EyeTarget, 2>& targets) {
                     const auto copyStart = std::chrono::steady_clock::now();
+                    // MilesVR 0.1.80: the game's FNSM app on the phone in the hand, the room around it dark
+                    // (phoneAppDraw): the phone's body, the game's image on its glass, then the fingertip and
+                    // where it lands, each eye from where it is now.
+                    if (native_gpu::Screen app; phoneAppDraw.on && native_gpu::latestScreen(app, imageHoldMs)) {
+                        const float aspect = static_cast<float>(app.width) / static_cast<float>(app.height);
+                        shownAspect = aspect;
+                        std::array<D3D12Renderer::ViewTarget, 2> views;
+                        for (unsigned eye = 0; eye < 2; ++eye) {
+                            const auto& v = targets[eye].view;
+                            const Pose pose{{v.pose.position.x, v.pose.position.y, v.pose.position.z},
+                                            {v.pose.orientation.x, v.pose.orientation.y, v.pose.orientation.z,
+                                             v.pose.orientation.w}};
+                            views[eye] = {targets[eye].texture, targets[eye].format, targets[eye].width,
+                                          targets[eye].height,
+                                          multiply(projection(v.fov.angleLeft, v.fov.angleRight, v.fov.angleDown,
+                                                              v.fov.angleUp, .03f, 200.f),
+                                                   viewMatrix(pose))};
+                        }
+                        std::vector<Vertex> phoneBody, marks;
+                        appendPhoneBody(phoneBody, phoneAppDraw.phone);
+                        appendPhoneTouch(marks, phoneAppDraw.phone, phoneAppDraw.touch, phoneAppDraw.tip,
+                                         phoneAppDraw.head);
+                        overlay.renderViews(views, phoneBody, false, false);
+                        const auto corners = phoneAppCorners(phoneAppDraw.phone, aspect);
+                        for (const auto& view : views)
+                            overlay.quad(app.texture.Get(), app.view, app.linear, view, corners);
+                        if (!marks.empty())
+                            overlay.renderViews(views, marks, true, false);
+                        copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                                           copyStart)
+                                     .count();
+                        runtime.presentation(false);
+                        drawn = Presentation::gameScreen;
+                        std::lock_guard lock(telemetry);
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        SpidyXrData.serial = SpidyXrData.generation = 0;
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        return true;
+                    }
                     if (showScreen && stereoScene && native_hud::onScreen(sceneHoldMs)) {
                         // The scene's newest pair, once the game has rendered
                         // one with the HUD's panel on its screen; until then

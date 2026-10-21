@@ -57,6 +57,12 @@ class D3D12Renderer {
     // unchanged; `linearSource` holds light values and is encoded. Asynchronous
     // like renderViews.
     void blit(ID3D12Resource* source, DXGI_FORMAT sourceView, bool linearSource, const ViewTarget& target);
+    // MilesVR 0.1.80: `source` on a rectangle in the view (the game's FNSM app on the phone's screen):
+    // `corners` its top left, top right, bottom right and bottom left, in the space target.viewProjection
+    // takes, over what the target holds (no depth test, nothing behind it kept). Read as for blit, four
+    // samples a pixel so a large image shrunk small does not shimmer. Asynchronous like blit.
+    void quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool linearSource, const ViewTarget& target,
+              const std::array<Vec3, 4>& corners);
     void waitIdle();
     // Diagnostic RGBA8 readback; target enters and exits in RENDER_TARGET state.
     std::vector<unsigned char> readback(ID3D12Resource* target);
@@ -118,6 +124,11 @@ class D3D12Renderer {
     ComPtr<ID3D12RootSignature> blitRoot_;
     ComPtr<ID3D12PipelineState> blitPipeline_;
     DXGI_FORMAT blitFormat_ = DXGI_FORMAT_UNKNOWN;
+    // quad's: its own root signature (the view, the corners, the mode) and pipeline per target format.
+    void prepareQuad(DXGI_FORMAT targetFormat);
+    ComPtr<ID3D12RootSignature> quadRoot_;
+    ComPtr<ID3D12PipelineState> quadPipeline_;
+    DXGI_FORMAT quadFormat_ = DXGI_FORMAT_UNKNOWN;
     // The grade: its own descriptor, root signature and pipeline, and the
     // copy of a view's image it reads (made like the targets, reused).
     ComPtr<ID3D12DescriptorHeap> gradeHeap_;

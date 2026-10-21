@@ -4485,6 +4485,38 @@ int main() {
         at(true,buttonA,0,true);
         check(!f.jump&&!(f.buttons&buttonA)&&mine.jump&&(mine.buttons&buttonA),"A was not the phone's, jump and all");
     });
+    test("phone FNSM app: the image fits the glass, a fingertip presses, drags and lets go", [] {
+        // The phone upright 40 cm ahead, facing back at the eyes (+z).
+        const WheelFrame phone{{0, 1.4f, -.4f}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        const auto c = phoneAppCorners(phone, 16.f / 9);
+        check(std::abs(c[1].x - c[0].x - phoneAppWidth) < 1e-5f &&
+                  std::abs(c[0].y - c[3].y - phoneAppWidth * 9 / 16) < 1e-5f && c[0].x < c[1].x && c[0].y > c[3].y,
+              "the image's corners: as wide as the glass, 16:9, top left first");
+        const auto at = [&](float u, float v, float depth) {
+            return Vec3{(u - .5f) * phoneAppWidth, 1.4f + (.5f - v) * phoneAppWidth * 9 / 16, -.4f + .002f + depth};
+        };
+        PhoneTouch t;
+        auto o = t.update(phone, 16.f / 9, at(.25f, .5f, .03f), true);
+        check(o.hover && !o.touching && !o.press && std::abs(o.at[0] - .25f) < 1e-3f, "3 cm off: it only hovers");
+        o = t.update(phone, 16.f / 9, at(.25f, .5f, .004f), true);
+        check(o.press && o.touching, "on the glass: it presses");
+        o = t.update(phone, 16.f / 9, at(.6f, .4f, .01f), true);
+        check(!o.press && !o.release && o.touching && std::abs(o.at[0] - .6f) < 1e-3f, "a press drags");
+        o = t.update(phone, 16.f / 9, at(.6f, .4f, .03f), true);
+        check(o.release && !o.touching, "lifted off: it lets go");
+        o = t.update(phone, 16.f / 9, at(1.5f, .5f, 0), true);
+        check(!o.press && !o.hover, "beside the image: nothing");
+        o = t.update(phone, 16.f / 9, at(.5f, .5f, -.05f), true);
+        check(!o.press, "from behind the phone: nothing");
+        t.update(phone, 16.f / 9, at(.5f, .5f, 0), true);
+        o = t.update(phone, 16.f / 9, at(.5f, .5f, 0), false);
+        check(o.release, "a hand lost lets go");
+        std::vector<Vertex> v;
+        appendPhoneBody(v, phone);
+        appendPhoneTouch(v, phone, t.update(phone, 16.f / 9, at(.5f, .5f, .02f), true), at(.5f, .5f, .02f),
+                         Pose{{0, 1.6f, 0}, {}});
+        check(!v.empty() && v.size() % 3 == 0, "the phone's body and the touch marks drew");
+    });
     test("phone: a draw opens it in the hand once VR shows play, where it stays until B puts it away", [] {
         Phone p;
         const Pose head{{0,1.7f,0},{}};

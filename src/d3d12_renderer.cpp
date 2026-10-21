@@ -571,6 +571,139 @@ void D3D12Renderer::blit(ID3D12Resource* source, DXGI_FORMAT sourceView, bool li
     queue_->ExecuteCommandLists(1, lists);
     hr(queue_->Signal(fence_.Get(), ++fenceValue_), "Signal blit completion");
 }
+void D3D12Renderer::prepareQuad(DXGI_FORMAT targetFormat) {
+    prepareBlit(targetFormat); // the source's descriptor heap
+    if (!quadRoot_) {
+        D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+        D3D12_ROOT_PARAMETER parameters[2]{};
+        parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        parameters[0].DescriptorTable = {1, &range};
+        parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        parameters[1].Constants.Num32BitValues = 36;
+        parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_STATIC_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MaxLOD = D3D12_FLOAT32_MAX;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        D3D12_ROOT_SIGNATURE_DESC rs{2, parameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        ComPtr<ID3DBlob> signature, error;
+        hr(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error),
+           "Serialize quad root signature");
+        hr(device_->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+                                        IID_PPV_ARGS(&quadRoot_)),
+           "Create quad root signature");
+    }
+    if (!quadPipeline_ || quadFormat_ != targetFormat) {
+        const char* shader = R"(
+Texture2D source : register(t0);
+SamplerState scaled : register(s0);
+cbuffer Quad : register(b0) {
+    row_major float4x4 vp;
+    float4 corner0; float4 corner1; float4 corner2; float4 corner3;
+    uint linearSource; uint srgbTarget; float2 unused;
+};
+struct Out { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
+Out vs(uint id : SV_VertexID) {
+    // Two triangles: top left, top right, bottom right; top left, bottom right, bottom left.
+    const uint k = id < 3 ? id : (id == 3 ? 0 : id - 2);
+    const float3 p = k == 0 ? corner0.xyz : k == 1 ? corner1.xyz : k == 2 ? corner2.xyz : corner3.xyz;
+    Out o;
+    o.position = mul(vp, float4(p, 1));
+    o.uv = float2(k == 1 || k == 2 ? 1 : 0, k >= 2 ? 1 : 0);
+    return o;
+}
+float3 decode(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+float3 encode(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1 / 2.4) - 0.055; }
+float4 ps(Out i) : SV_TARGET {
+    // Four samples across the pixel's own footprint on the image.
+    const float2 dx = ddx(i.uv) * 0.25, dy = ddy(i.uv) * 0.25;
+    float3 c = (source.Sample(scaled, i.uv - dx - dy).rgb + source.Sample(scaled, i.uv + dx - dy).rgb +
+                source.Sample(scaled, i.uv - dx + dy).rgb + source.Sample(scaled, i.uv + dx + dy).rgb) * 0.25;
+    if (linearSource)
+        c = srgbTarget ? max(c, 0) : encode(saturate(c));
+    else if (srgbTarget)
+        c = decode(saturate(c));
+    return float4(c, 1);
+}
+)";
+        ComPtr<ID3DBlob> vs, ps, error;
+        hr(D3DCompile(shader, std::strlen(shader), "spidy_quad", nullptr, nullptr, "vs", "vs_5_0",
+                      D3DCOMPILE_ENABLE_STRICTNESS, 0, &vs, &error),
+           "Compile quad vertex shader");
+        hr(D3DCompile(shader, std::strlen(shader), "spidy_quad", nullptr, nullptr, "ps", "ps_5_0",
+                      D3DCOMPILE_ENABLE_STRICTNESS, 0, &ps, &error),
+           "Compile quad pixel shader");
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC p{};
+        p.pRootSignature = quadRoot_.Get();
+        p.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+        p.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+        p.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        p.NumRenderTargets = 1;
+        p.RTVFormats[0] = targetFormat;
+        p.SampleDesc.Count = 1;
+        p.SampleMask = UINT_MAX;
+        p.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        p.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        p.RasterizerState.DepthClipEnable = TRUE;
+        auto& blend = p.BlendState.RenderTarget[0];
+        blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+        blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blend.LogicOp = D3D12_LOGIC_OP_NOOP;
+        blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        quadPipeline_.Reset();
+        hr(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&quadPipeline_)), "Create quad pipeline");
+        quadFormat_ = targetFormat;
+    }
+}
+void D3D12Renderer::quad(ID3D12Resource* source, DXGI_FORMAT sourceView, bool linearSource, const ViewTarget& target,
+                         const std::array<Vec3, 4>& corners) {
+    if (!source || !target.texture || !target.width || !target.height)
+        throw std::runtime_error("Quad requires a source and a target");
+    waitForSubmission();
+    prepareQuad(target.format);
+    hr(allocator_->Reset(), "Reset quad allocator");
+    hr(list_->Reset(allocator_.Get(), quadPipeline_.Get()), "Reset quad list");
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = sourceView;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    device_->CreateShaderResourceView(source, &sv, srv_->GetCPUDescriptorHandleForHeapStart());
+    D3D12_RENDER_TARGET_VIEW_DESC rv{};
+    rv.Format = target.format;
+    rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    const auto rtv = rtv_->GetCPUDescriptorHandleForHeapStart();
+    device_->CreateRenderTargetView(target.texture, &rv, rtv);
+    list_->SetGraphicsRootSignature(quadRoot_.Get());
+    ID3D12DescriptorHeap* heaps[] = {srv_.Get()};
+    list_->SetDescriptorHeaps(1, heaps);
+    list_->SetGraphicsRootDescriptorTable(0, srv_->GetGPUDescriptorHandleForHeapStart());
+    std::array<float, 36> constants{};
+    std::copy(target.viewProjection.begin(), target.viewProjection.end(), constants.begin());
+    for (size_t i = 0; i < 4; ++i) {
+        constants[16 + i * 4] = corners[i].x;
+        constants[17 + i * 4] = corners[i].y;
+        constants[18 + i * 4] = corners[i].z;
+        constants[19 + i * 4] = 1;
+    }
+    constants[32] = std::bit_cast<float>(linearSource ? 1u : 0u);
+    constants[33] = std::bit_cast<float>(srgb(target.format) ? 1u : 0u);
+    list_->SetGraphicsRoot32BitConstants(1, 36, constants.data(), 0);
+    list_->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    D3D12_VIEWPORT viewport{0, 0, static_cast<float>(target.width), static_cast<float>(target.height), 0, 1};
+    D3D12_RECT rect{0, 0, static_cast<LONG>(target.width), static_cast<LONG>(target.height)};
+    list_->RSSetViewports(1, &viewport);
+    list_->RSSetScissorRects(1, &rect);
+    list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    list_->DrawInstanced(6, 1, 0, 0);
+    hr(list_->Close(), "Close quad list");
+    ID3D12CommandList* lists[] = {list_.Get()};
+    queue_->ExecuteCommandLists(1, lists);
+    hr(queue_->Signal(fence_.Get(), ++fenceValue_), "Signal quad completion");
+}
 namespace {
 bool typeless(DXGI_FORMAT format) {
     return format == DXGI_FORMAT_R8G8B8A8_TYPELESS || format == DXGI_FORMAT_B8G8R8A8_TYPELESS ||
