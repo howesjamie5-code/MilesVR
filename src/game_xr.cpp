@@ -993,6 +993,12 @@ DWORD WINAPI run(void*) {
         static constexpr float venomDashSeconds = 180;
         int venomDashBefore = -1;
         float venomDashLeft{};
+        // MilesVR 0.1.79: seconds the Venom Dash flag has read off with a player in the world. The flag
+        // reads off while a save loads, so off-then-on alone re-armed the dash after every load and the
+        // venom punch came out as a dash in fights (the user: "sometimes the punch works sometimes the
+        // dash triggers"). Only a flag off through real play and then on is the game giving the dash.
+        float venomDashOffSeconds{};
+        static constexpr float venomDashOffNeeded = 10;
         uint64_t fnsmRemindersSeen{};
         // The game played on its screen (VIEW: GAME SCREEN): Back and the
         // D-pad, which the VR controllers lack, besides the Xbox controller's.
@@ -2044,15 +2050,19 @@ DWORD WINAPI run(void*) {
                     // Venom Dash flag turning on while VR plays makes the venom gesture the game's
                     // Venom Dash (its LB + Y, PlayStation's L1 + Triangle) for venomDashSeconds, in a
                     // fight or out of one.
+                    if (venomGame.dash == 0 && player.record)
+                        venomDashOffSeconds += std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
                     if (venomGame.dash >= 0) {
-                        if (venomDashBefore == 0 && venomGame.dash == 1) {
+                        if (venomDashBefore == 0 && venomGame.dash == 1 && venomDashOffSeconds >= venomDashOffNeeded) {
                             venomDashLeft = venomDashSeconds;
                             runtime.haptic(venomSide, .6f, .15f);
                             message(3, 0, "Venom Dash - hold the venom button and punch toward him: MilesVR does the "
                                           "game's Venom Dash");
-                            game_prompts::note("the game gave Venom Dash: the venom gesture is its LB + Y for 3 min");
+                            game_prompts::note("the game gave Venom Dash: the venom gesture is its LB + Y once (3 min at most)");
                         }
                         venomDashBefore = venomGame.dash;
+                        if (venomGame.dash == 1)
+                            venomDashOffSeconds = 0;
                     }
                     if (venomDashLeft > 0)
                         venomDashLeft -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
@@ -2388,11 +2398,18 @@ DWORD WINAPI run(void*) {
                                 venomPromptDemand = ask;
                                 ++venomPromptPresses;
                                 runtime.haptic(venomSide, 1.f, .2f);
+                                // One Venom Dash for the story's moment; then the gesture is the venom
+                                // punch again (0.1.79).
+                                const bool dashing = !venomPromptOn && venomDashLeft > 0 &&
+                                                     ask.buttons == (prompt_buttons::padLeftShoulder |
+                                                                     prompt_buttons::padY);
                                 message(3, 0, venomPromptOn ? "Venom - the game's venom move, as its prompt asks"
                                               : venomDashLeft > 0
                                                   ? "Venom Dash - the game's own (its LB + Y)"
                                                   : "Venom - the game's own venom punch (its LB + X), "
                                                     "for as long as you hold the venom button");
+                                if (dashing)
+                                    venomDashLeft = 0;
                             }
                             // Sent while the web button is held: at least a tap's worth,
                             // at most venomGameMost; the hand shoots no web meanwhile.
