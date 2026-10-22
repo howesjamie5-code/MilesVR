@@ -553,14 +553,14 @@ int main() {
     test("prompt actions: the game's action names become the VR controls", [] {
         using namespace spidy::prompt_actions;
         const Controls grips{false, true}, triggers{true, false};
-        check(rewrite("[ACTION_WEB_YANK] (Hold) Throw", grips) == "RIGHT STICK UP (Hold) Throw", "throw");
+        check(rewrite("[ACTION_WEB_YANK] (Hold) Throw", grips) == "BOTH GRIPS (Hold) Throw", "throw");
         check(rewrite("[ACTION_WEB_STRIKE] Open Door", grips) == "Y Open Door", "interact");
         check(rewrite("Use Venom Dash by pressing [ACTION_VENOM] + [ACTION_WEB_STRIKE].", grips) ==
                   "Use Venom Dash by pressing VENOM TRIGGER + PUNCH.",
               "venom dash is one gesture");
         check(rewrite("[ACTION_VENOM] + [ACTION_ATTACK]", triggers) == "HOLD VENOM GRIP + PUNCH", "venom punch");
         check(rewrite("[ACTION_VENOM] + [ACTION_MELEE]", grips) == "HOLD VENOM TRIGGER + PUNCH", "venom punch (melee)");
-        check(rewrite("[BTN_LB] + [BTN_RB] (Hold) Throw", grips) == "RIGHT STICK UP (Hold) Throw", "button throw");
+        check(rewrite("[BTN_LB] + [BTN_RB] (Hold) Throw", grips) == "BOTH GRIPS (Hold) Throw", "button throw");
         check(rewrite("[BTN_Y] Enter", grips) == "Y Enter", "button interact");
         check(rewrite("<span class='x'>hold</span> [BTN_B] [i]", grips) == "<span class='x'>hold</span> B [i]",
               "other brackets stay");

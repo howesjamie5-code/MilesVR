@@ -895,6 +895,13 @@ DWORD WINAPI run(void*) {
         venom_punch::VenomButtons venomButtons;
         // The Mega Venom Blast: both grips together with three full bars.
         venom_punch::BothGrips bothGrips;
+        // MilesVR 0.1.80 (the user: "change throwing objects to both grips and disable web swinging webs when
+        // you throw an object and keep zip to point with right stick up"): on his feet at a world marker
+        // offering its interaction (a throwable's LB + RB), both grips squeezed together are the game's
+        // LB + RB held - its "(Hold) Throw" - until both are let go, and meanwhile neither hand shoots a web
+        // (a grip alone there waits a moment for the other first, as the Mega blast's does).
+        venom_punch::BothGrips throwGrips;
+        bool gripThrow{};
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -1025,7 +1032,6 @@ DWORD WINAPI run(void*) {
         float phoneAppCommittedSeconds{};
         // MilesVR 0.1.78: a blow on a boss taps the game's X this long (game_punch::Venom::bossBlows).
         float bossTap{}, bossVenomTap{}, bossStrikeTap{};
-        bool throwingUp{};
         // The game's venom punch tutorial (October 21, Mission 1): venom given (a meter) and the game
         // frozen on its prompt, which VR shows as the game screen.
         // The venom gesture there is the game's LB + X (screenVenomTap seconds, X for the last .2 s).
@@ -2466,6 +2472,18 @@ DWORD WINAPI run(void*) {
                         for (unsigned i = 0; i < 2; ++i)
                             if (both.hold[i])
                                 (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
+                        // The throw on both grips (throwGrips), when no Mega blast is ready for them.
+                        const bool offered = immersive && !calibrationInput && !padLayer.latched() && !ready &&
+                                             swingState.grounded && swingState.wall == 0 &&
+                                             game_prompts::interactOffered();
+                        const auto toss =
+                            throwGrips.update(frame.seconds, offered, frame.hands[0].squeeze, frame.hands[1].squeeze);
+                        if (toss.fire)
+                            game_prompts::note("both grips at a marker -> the game's LB + RB (throw), webs off");
+                        gripThrow = toss.hold[0] && toss.hold[1];
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (toss.hold[i])
+                                motion.swing.hands[i].trigger = motion.swing.hands[i].grip = 0;
                     }
                     // Miles's venom punch: with the meter full the venom hand's
                     // controller (the launcher's Venom punch hand) shoots no web nor
@@ -3646,20 +3664,13 @@ DWORD WINAPI run(void*) {
                         walk.heal = push == game_pad::StickPush::Way::down;
                         // Held on into the game's aim mode (its own time slowed), LT stays down alone,
                         // and letting go zips to the point its aim holds (ZipPress).
-                        // MilesVR 0.1.78 (the user: "when i wanna throw something i push up on right stick"):
-                        // on his feet with a world marker offering its interaction (a throwable's LB + RB), the
-                        // stick held up is the game's LB + RB held - its "(Hold) Throw" - not the zip.
-                        // Begun, it holds while the stick stays up: the game turns the marker off and lifts
-                        // the object as its web catches it, and a let-go there dropped the throw at once.
-                        const bool stickUp = push == game_pad::StickPush::Way::up;
-                        const bool throwUp = stickUp && sticking &&
-                                             (throwingUp || (reaching && !onWall && swingState.grounded &&
-                                                             game_prompts::interactOffered()));
-                        if (throwUp && !throwingUp)
-                            game_prompts::note("right stick up at a marker -> the game's LB + RB (throw)");
-                        throwingUp = throwUp;
-                        walk.pull = walk.pull || throwUp;
-                        const bool zipUp = (reaching || inFlight) && !throwUp && push == game_pad::StickPush::Way::up;
+                        // The throw: both grips at a marker (throwGrips, 0.1.80; the stick up threw from
+                        // 0.1.78). Begun, it holds until both grips are let go: the game turns the marker off
+                        // and lifts the object as its web catches it, and a let-go there drops the throw.
+                        const bool throwHeld = gripThrow && steering && !calibrationInput;
+                        walk.pull = walk.pull || throwHeld;
+                        // The stick up is the zip, always.
+                        const bool zipUp = (reaching || inFlight) && push == game_pad::StickPush::Way::up;
                         const auto gameTime = game_time::telemetry();
                         const bool slow = gameTime.installed && gameTime.own < game_pad::ZipPress::slowBelow;
                         const auto zipKeys = zipPress.update(frame.seconds, zipUp, sticking, slow);
@@ -5172,7 +5183,7 @@ DWORD WINAPI run(void*) {
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts, X: game "
                                   "menu (hold: gadget wheel), menu or both sticks held: pause, left stick "
                                   "click: slow time, trigger at temple: scan (left: camo); right stick: LB+RB "
-                                  "(venom full: let go), down: heal, up: zip (at a throwable: throw)");
+                                  "(venom full: let go), down: heal, up: zip; both grips at a throwable: throw");
                 }
             }
             {

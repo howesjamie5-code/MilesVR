@@ -47,7 +47,7 @@ inline std::string rewrite(std::string_view text, const Controls& c, std::vector
         {"[ACTION_DODGE]", "B"},
         {"[ACTION_WEB_STRIKE]", "Y"},
         {"[ACTION_WEB_YANK_BOT]", "BOTH " + webs},
-        {"[ACTION_WEB_YANK]", "RIGHT STICK UP"}, // a throw: the stick up at a marker (game_xr)
+        {"[ACTION_WEB_YANK]", "BOTH GRIPS"}, // a throw: both grips at a marker (game_xr, 0.1.80)
         {"[ACTION_SWING]", web},
         {"[ACTION_LS]", "LEFT STICK"},
         {"[ACTION_RS]", "RIGHT STICK"},
@@ -67,10 +67,10 @@ inline std::string rewrite(std::string_view text, const Controls& c, std::vector
         {"[ACTION_PAUSE]", "MENU"},
         // The game's own buttons, which its in-world prompts name instead of actions ("[BTN_Y] Enter",
         // the throw's LB + RB; October 21). Both its PlayStation and Xbox names; pairs first.
-        {"[BTN_LB] + [BTN_RB]", "RIGHT STICK UP"},
-        {"[BTN_LB]+[BTN_RB]", "RIGHT STICK UP"},
-        {"[BTN_L1] + [BTN_R1]", "RIGHT STICK UP"},
-        {"[BTN_L1]+[BTN_R1]", "RIGHT STICK UP"},
+        {"[BTN_LB] + [BTN_RB]", "BOTH GRIPS"},
+        {"[BTN_LB]+[BTN_RB]", "BOTH GRIPS"},
+        {"[BTN_L1] + [BTN_R1]", "BOTH GRIPS"},
+        {"[BTN_L1]+[BTN_R1]", "BOTH GRIPS"},
         {"[BTN_L2] + [BTN_R2]", "RIGHT STICK UP"},
         {"[BTN_L2]+[BTN_R2]", "RIGHT STICK UP"},
         {"[BTN_LB] + [BTN_X]", "HOLD " + venom + " + PUNCH"},
