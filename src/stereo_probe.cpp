@@ -857,8 +857,10 @@ void hudPlace(void* follower) {
     // game's own view does on the flat one.
     const bool screen = head.controlled && head.command.enabled == 3 && !retiring();
     // The HUD off: the eyes (immersive or the flat screen) leave the panel out.
-    // A panel pinned to the phone shows whatever the HUD's size (0.1.80).
-    const bool hide = !native_hud::size() && !head.pinned.on && head.controlled && !screen && !retiring();
+    // A panel pinned to the phone shows whatever the HUD's size, and the game's app drawn on the phone
+    // takes it out (0.1.80).
+    const bool hide = (!native_hud::size() || native_hud::phoneApp()) && !head.pinned.on && head.controlled &&
+                      !screen && !retiring();
     hiddenHud = hide ? placed.instance : 0;
     if (hide)
         native_hud::publish([](native_hud::Data& d) { ++d.hiddenFrames; });

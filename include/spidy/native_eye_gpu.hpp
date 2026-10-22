@@ -78,6 +78,15 @@ bool latestScreen(Screen& out, uint64_t maxAgeMs);
 // How the copy is read: the encoded format of the back buffer's family, or
 // UNKNOWN for a format the screen does not show.
 DXGI_FORMAT screenView(DXGI_FORMAT backBuffer, bool& linear);
+// MilesVR 0.1.80: the game's HUD texture (native_hud.cpp finds it each frame; null: none), and while
+// wanted, a copy of it at each Present on the game's queue (the FNSM app drawn on the phone in VR play).
+// Its state is learned from the game's own submitted barriers: nothing is copied until one is seen.
+void registerHud(ID3D12Resource* resource);
+void wantHud(bool wanted);
+bool latestHud(Screen& out, uint64_t maxAgeMs);
+// Copies made, and presents that wanted one but had no texture or no known state (diagnostic).
+uint32_t hudCopies();
+uint32_t hudSkips();
 // SpidyScreenData, for probes: status 1 once Present is hooked; the copies
 // made, and the rows of the newest one SpidyGpuScreen(2) read back. Also the
 // presents seen while wanted, why the last one was not copied (ScreenSkip),

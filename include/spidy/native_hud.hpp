@@ -311,6 +311,10 @@ int size();
 // phone's glass, pinTo): `offset`, from the head in its own axes (x right, y up, z back), is where the
 // head would stand to see the panel as it is placed (the panel `shape.distance` ahead of there, `relative`
 // turned), and `shape` its size.
+// MilesVR 0.1.80: the game's FNSM app on the phone in VR play (game_xr.cpp draws the app's part of the
+// HUD's texture there): the panel stays out of the eyes, its texture still drawn whatever the HUD's size.
+void setPhoneApp(bool shown);
+bool phoneApp();
 void follow(uint64_t serial, const Quat& relative, const Pinned& pinned = {});
 bool followed(uint64_t serial, Quat& relative, Pinned* pinned = nullptr);
 // An eye's draw of the panel left out while the HUD is off (stereo_probe).

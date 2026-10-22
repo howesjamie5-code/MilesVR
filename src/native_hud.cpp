@@ -3,6 +3,7 @@
 // markers projected from the head onto it. The panel's placement is in
 // stereo_probe.cpp, with the eye views it must match.
 #include "spidy/native_hud.hpp"
+#include "spidy/native_eye_gpu.hpp"
 #include <MinHook.h>
 #include <algorithm>
 #include <array>
@@ -62,6 +63,9 @@ bool eyesRecent() {
 }
 // The HUD row (0 off, 1-3 its size; medium until the XR worker says).
 std::atomic<int> hudSize{2};
+// MilesVR 0.1.80: the game's FNSM app on the phone in VR play: the panel stays out of the eyes, but the
+// second movie (which carries the app) is still drawn onto its texture, which the phone shows.
+std::atomic<bool> phoneAppShown{};
 // The panel's orientation from the head for recent eye commands (XR worker),
 // and one a probe set for commands without (SpidyHudSet; w 0: none).
 struct Followed {
@@ -166,6 +170,15 @@ void stream(void* self) {
         write(hudFollower + 0xd0, &bind, 1);
     }
     vrTexture = vr && target && made[0] == window[0] && made[1] == window[1] ? target : 0;
+    // The colour texture's D3D12 resource, as the eyes' are found (stereo_probe.cpp): its wrapper at +40
+    // (type 557f280), whose allocation at +38 starts with the resource.
+    uintptr_t resource{};
+    if (vrTexture) {
+        const auto wrapper = pointer(texture + 0x40);
+        if (wrapper && pointer(wrapper) == base + 0x557f280)
+            resource = pointer(pointer(wrapper + 0x38));
+    }
+    native_gpu::registerHud(reinterpret_cast<ID3D12Resource*>(resource));
     const bool back = !vr && size[0] == gameBase[0] && size[1] == gameBase[1] && !resized;
     restored = back;
     native_hud::publish([&](native_hud::Data& d) {
@@ -187,7 +200,7 @@ void render(void* payload, uint32_t count) {
     Item* moved{};
     // The HUD off: the second movie stays in the game's view, which the
     // headset shows only on the game screen.
-    if (texture && enabled && (hudSize.load() || screenEyes.load()) && eyesRecent() &&
+    if (texture && enabled && (hudSize.load() || screenEyes.load() || phoneAppShown.load()) && eyesRecent() &&
         !(count && payload && pointer(reinterpret_cast<uintptr_t>(payload) + 8))) {
         // The list this frame draws, as the command picks it.
         const uint32_t frame = *reinterpret_cast<const uint32_t*>(base + 0x83e6610);
@@ -360,6 +373,12 @@ void native_hud::setSize(int size) {
 }
 int native_hud::size() {
     return hudSize.load();
+}
+void native_hud::setPhoneApp(bool shown) {
+    phoneAppShown = shown;
+}
+bool native_hud::phoneApp() {
+    return phoneAppShown.load();
 }
 void native_hud::follow(uint64_t serial, const Quat& relative, const Pinned& pinned) {
     AcquireSRWLockExclusive(&followLock);

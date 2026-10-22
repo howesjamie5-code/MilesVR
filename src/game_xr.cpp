@@ -992,9 +992,10 @@ DWORD WINAPI run(void*) {
         PhoneTouch phoneTouch;
         struct PhoneAppDraw {
             bool on{};
-            // VR play goes on meanwhile: the game's own HUD, which carries its app, is pinned to the phone
-            // (native_hud::pinTo) instead of the textured picture in a dark room.
-            bool pinned{};
+            // VR play goes on meanwhile: the app's part of the game's HUD texture (which carries it) is drawn
+            // on the phone's glass, the HUD's own panel left out (native_hud::setPhoneApp), instead of the
+            // game's picture in a dark room.
+            bool inPlay{};
             WheelFrame phone{};
             PhoneTouch::Out touch{};
             Vec3 tip{};
@@ -1749,6 +1750,10 @@ DWORD WINAPI run(void*) {
                             (since > phoneAppLeastMs && phoneAppCommittedSeconds >= phoneAppPlayEnd)) {
                             phoneAppAt = 0;
                             game_prompts::note("phone: the game's FNSM app closed - the phone goes away");
+                            char counts[96];
+                            std::snprintf(counts, sizeof(counts), "phone: HUD texture copies %u, presents without one %u",
+                                          native_gpu::hudCopies(), native_gpu::hudSkips());
+                            game_prompts::note(counts);
                         }
                     }
                     const bool fnsmScene =
@@ -2278,6 +2283,8 @@ DWORD WINAPI run(void*) {
                         }
                         phoneAppDraw = {true, immersive, held, touch, tip, frame.head};
                     }
+                    native_gpu::wantHud(phoneAppAt != 0);
+                    native_hud::setPhoneApp(phoneAppDraw.on && phoneAppDraw.inPlay);
                     if (!immersive)
                         immersiveSince = 0;
                     else if (!immersiveSince)
@@ -4425,18 +4432,7 @@ DWORD WINAPI run(void*) {
                     const Quat hudFacing = hudFollow.update(frame.head.orientation, frame.seconds);
                     {
                         Quat relative = frame.head.orientation.conjugate() * hudFacing;
-                        native_hud::Pinned pinned;
-                        if (phoneAppDraw.on && phoneAppDraw.pinned) {
-                            const float aspect = SpidyFlatAspect();
-                            Quat pinnedRelative{};
-                            native_hud::Pinned pin;
-                            if (native_hud::pinTo(frame.head, phoneAppCorners(phoneAppDraw.phone, aspect), phoneAppPart,
-                                                  aspect, pinnedRelative, pin)) {
-                                relative = pinnedRelative;
-                                pinned = pin;
-                            }
-                        }
-                        native_hud::follow(eyes.serial, relative, pinned);
+                        native_hud::follow(eyes.serial, relative);
                     }
                     NativeEyeFrame saved;
                     saved.serial = eyes.serial;
@@ -4462,7 +4458,7 @@ DWORD WINAPI run(void*) {
                                       toWorld.orientation.rotate(f.up), toWorld.orientation.rotate(f.out)};
                         wheelPlaces(view);
                     }
-                    if (phoneAppDraw.on && phoneAppDraw.pinned)
+                    if (phoneAppDraw.on && phoneAppDraw.inPlay)
                         saved.phone = {true, compose(motion.headPose, inverse(frame.head))};
                     if (phone.live()) {
                         // The phone: this image's way from tracking space into its
@@ -4534,7 +4530,7 @@ DWORD WINAPI run(void*) {
                     // (phoneAppDraw): the phone's body, the game's image on its glass, then the fingertip and
                     // where it lands, each eye from where it is now.
                     if (native_gpu::Screen app;
-                        phoneAppDraw.on && !phoneAppDraw.pinned && native_gpu::latestScreen(app, imageHoldMs)) {
+                        phoneAppDraw.on && !phoneAppDraw.inPlay && native_gpu::latestScreen(app, imageHoldMs)) {
                         const float aspect = static_cast<float>(app.width) / static_cast<float>(app.height);
                         shownAspect = aspect;
                         std::array<D3D12Renderer::ViewTarget, 2> views;
@@ -4693,6 +4689,9 @@ DWORD WINAPI run(void*) {
                             (std::tan(lens.right) - std::tan(lens.left)) / static_cast<float>(targets[0].width);
                         const auto shown = saved->motion.predictedDisplayTime;
                         std::vector<Vertex> vertices;
+                        // The phone holding the game's app (0.1.80): drawn over the app on its glass.
+                        std::vector<Vertex> phoneMarks;
+                        WheelFrame phoneGlass{{NAN, NAN, NAN}};
                         // Where the overlay puts each tracked web shooter, and
                         // where the game's rope for this image's frame starts.
                         Vec3 shooters[2]{}, ropeStarts[2]{};
@@ -4955,19 +4954,21 @@ DWORD WINAPI run(void*) {
                         // The phone where it is now - in the hand, where the hand is
                         // now - through this image's own way into its world, and
                         // moved with the player to this image as the wheel is.
-                        if (!saved->flatScreen && saved->phone.open && phoneAppDraw.on && phoneAppDraw.pinned) {
-                            // The game's app on the phone: its body round the HUD pinned there, the
-                            // fingertip and where it lands, into this image's world.
+                        if (!saved->flatScreen && saved->phone.open && phoneAppDraw.on && phoneAppDraw.inPlay) {
+                            // The game's app on the phone: its body here, the app's part of the HUD's
+                            // texture on its glass and the fingertip and where it lands after the
+                            // rest (phoneMarks), into this image's world.
                             const Pose& toWorld = saved->phone.toWorld;
                             const Quat turn = toWorld.orientation;
                             const auto place = [&](Vec3 p) { return compose(toWorld, Pose{p, {}}).position + travel; };
                             const auto& f = phoneAppDraw.phone;
                             const WheelFrame held{place(f.centre), turn.rotate(f.right), turn.rotate(f.up),
                                                   turn.rotate(f.out)};
-                            appendPhoneBody(vertices, held, true, saved->screenAspect);
+                            appendPhoneBody(vertices, held);
                             auto touch = phoneAppDraw.touch;
                             touch.point = place(touch.point);
-                            appendPhoneTouch(vertices, held, touch, place(phoneAppDraw.tip), Pose{viewer, {}});
+                            appendPhoneTouch(phoneMarks, held, touch, place(phoneAppDraw.tip), Pose{viewer, {}});
+                            phoneGlass = held;
                         } else if (!saved->flatScreen && saved->phone.open) {
                             auto view = phoneShown;
                             const Pose& toWorld = saved->phone.toWorld;
@@ -5005,6 +5006,15 @@ DWORD WINAPI run(void*) {
                         }
                         if (!saved->flatScreen)
                             overlay.renderViews(overlayViews, vertices, true, false, translucent, &grade);
+                        if (native_gpu::Screen app; finite(phoneGlass.centre) &&
+                                                    native_gpu::latestHud(app, imageHoldMs)) {
+                            const auto corners = phoneAppCorners(
+                                phoneGlass, static_cast<float>(app.width) / static_cast<float>(app.height));
+                            for (const auto& view : overlayViews)
+                                overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
+                        }
+                        if (!phoneMarks.empty())
+                            overlay.renderViews(overlayViews, phoneMarks, true, false);
                         overlayMs = std::chrono::duration<double, std::milli>(
                                         std::chrono::steady_clock::now() - overlayStart)
                                         .count();
