@@ -980,8 +980,12 @@ DWORD WINAPI run(void*) {
         // of which the headset answers with the phone.
         float fnsmHold{};
         // MilesVR 0.1.80: outside the story's FNSM moment the game opens its app only by its own key (M;
-        // a DualSense's touchpad swipe), not by View held: M is held this long (seconds) instead.
-        float fnsmKey{};
+        // a DualSense's touchpad swipe), not by View held, and reads no keys while it reads the virtual Xbox
+        // controller: the controller is let go (padHeldOff) for as long as the app is on the phone, M is
+        // pressed fnsmKeyWait seconds later for fnsmKey seconds, and the game's mouse and keys work its app
+        // (finger taps). The phone put away ends it and gives the controller back.
+        float fnsmKeyWait{}, fnsmKey{};
+        bool phoneAppKey{}, padHeldOff{};
         static constexpr WORD fnsmScan = 0x32; // M
         // MilesVR 0.1.80: the story's FNSM moment (the user: "be actually in the vr camera view pull the phone
         // out and acess the app so the story continues"). The game shows it from a scripted camera, so its
@@ -1643,7 +1647,14 @@ DWORD WINAPI run(void*) {
             // The game's venom bar events, for the report (game_venom_events.hpp).
             if (!venomEventsWatched)
                 venomEventsWatched = true, game_venom_events::install(config.base);
-            if (!padInstalled && GetTickCount64() >= padRetryMs) {
+            // The game's FNSM app opened by its key keeps the controller let go until it is over.
+            if (padHeldOff && !phoneAppAt) {
+                padHeldOff = phoneAppKey = false;
+                fnsmKeyWait = 0;
+                if (fnsmKey > 0)
+                    keyEvent(fnsmScan, false), fnsmKey = 0;
+            }
+            if (!padInstalled && !padHeldOff && GetTickCount64() >= padRetryMs) {
                 padInstalled = !game_pad::install();
                 padRetryMs = GetTickCount64() + 1000;
             }
@@ -1686,9 +1697,11 @@ DWORD WINAPI run(void*) {
                         case PhoneAction::fnsm:
                             if (!fnsmSceneDone)
                                 fnsmHold = 1.f;
-                            else if (const HWND window = gameWindow(); window && GetForegroundWindow() == window) {
-                                keyEvent(fnsmScan, true);
-                                fnsmKey = .3f;
+                            else {
+                                game_pad::uninstall();
+                                padInstalled = false;
+                                padHeldOff = phoneAppKey = true;
+                                fnsmKeyWait = .5f;
                             }
                             fnsmSceneDone = true;
                             phoneAppAt = GetTickCount64();
@@ -1708,6 +1721,22 @@ DWORD WINAPI run(void*) {
                         }
                         if (e.pressed || (e.closed && use.action != PhoneAction::close))
                             runtime.haptic(1, .2f);
+                        if (use.action == PhoneAction::close && phoneAppKey && phoneAppAt) {
+                            phoneAppAt = 0;
+                            game_prompts::note("phone: put away - the game's FNSM app left to the game (B closes it)");
+                        }
+                        // The M key for the game's app, once the game has had a moment without the controller.
+                        const float keyStep = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        if (fnsmKeyWait > 0 && (fnsmKeyWait -= keyStep) <= 0) {
+                            if (const HWND window = gameWindow(); window && GetForegroundWindow() == window) {
+                                keyEvent(fnsmScan, true);
+                                fnsmKey = .3f;
+                            } else {
+                                game_prompts::note("phone: FNSM APP - the game's window is not in front, no M sent");
+                            }
+                        }
+                        if (fnsmKey > 0 && (fnsmKey -= keyStep) <= 0)
+                            keyEvent(fnsmScan, false);
                         if (use.action == PhoneAction::close) {
                             runtime.haptic(1, .15f);
                             message(3, 0, "Phone away - each control is the game's again once let go of");
@@ -1765,8 +1794,10 @@ DWORD WINAPI run(void*) {
                                                                         : 0.f)
                                       : 0;
                         const uint64_t since = GetTickCount64() - phoneAppAt;
-                        if (since > phoneAppMostMs ||
-                            (since > phoneAppLeastMs && phoneAppCommittedSeconds >= phoneAppPlayEnd)) {
+                        // Free roam's app (phoneAppKey): the game's camera goes on through it, so only the
+                        // phone put away (above) or the longest time ends it.
+                        if (since > phoneAppMostMs || (!phoneAppKey && since > phoneAppLeastMs &&
+                                                       phoneAppCommittedSeconds >= phoneAppPlayEnd)) {
                             phoneAppAt = 0;
                             game_prompts::note("phone: the game's FNSM app closed - the phone goes away");
                             char counts[96];
@@ -3887,9 +3918,6 @@ DWORD WINAPI run(void*) {
                                     std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                             }
                         }
-                        if (fnsmKey > 0 &&
-                            (fnsmKey -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f) <= 0)
-                            keyEvent(fnsmScan, false);
                         if (fnsmHold > 0) {
                             pad.buttons |= game_pad::back;
                             fnsmHold -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
