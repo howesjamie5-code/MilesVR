@@ -1316,6 +1316,13 @@ DWORD WINAPI run(void*) {
         // Web-shooter shots each hand had fired by the previous frame.
         bool shooterStarted{};
         uint64_t shotsBefore[2]{};
+        // MilesVR 0.1.80 (the user, the cat's side mission: "webbing mechanisms work by pulling but trying to
+        // web them to keep them in place doesn't work"; the game's own RB there held one): a web ball that
+        // leaves the hand with no thug or device to go to also taps the game's RB, its own web shooter, which
+        // aims and webs what the game holds webbable (a mechanism) - Spidy's balls web only what it knows.
+        uint64_t gadgetShotsBefore{};
+        float gameBallTap{};
+        uint32_t gameBalls{};
         uint64_t submittedFrames{};
         uint64_t previousPresentedGeneration{};
         // The player's standing eye height above the floor: it rises at once
@@ -3153,9 +3160,24 @@ DWORD WINAPI run(void*) {
                                     pulseUntil[i] = frame.predictedDisplayTime + 25'000'000;
                                     ballShot[i] = true;
                                     feel(body_haptics::Kind::webShot, static_cast<int>(i));
+                                    // A web ball (not a gadget's shot) at no thug nor device: the game's RB too.
+                                    // Not with another gadget equipped in the game: its RB fires whatever is.
+                                    bool shooterEquipped = true;
+                                    for (uint32_t g = 0; g < std::min(shots.gadgetCount, 8u); ++g)
+                                        shooterEquipped &= shots.gadgets[g].weapon != shots.equipped ||
+                                                           shots.gadgets[g].kind ==
+                                                               static_cast<uint8_t>(Gadget::webShooter);
+                                    if (!shots.hands[i].lastTarget && shots.gadgetShots == gadgetShotsBefore &&
+                                        shotsBefore[i] && shooterEquipped && gameBallTap <= 0) {
+                                        gameBallTap = .12f;
+                                        if (++gameBalls <= 10)
+                                            game_prompts::note("a web ball at no target -> the game's RB too "
+                                                               "(its web shooter, for what it webs)");
+                                    }
                                 }
                                 shotsBefore[i] = shots.hands[i].shots;
                             }
+                            gadgetShotsBefore = shots.gadgetShots;
                         }
                         fightNear = input.focused && ((fighting && strikes.cueTarget != 0) || punch.bots != 0);
                         calmSeconds = fighting && (strikes.enemies != 0 || strikes.cueTarget != 0)
@@ -3936,6 +3958,11 @@ DWORD WINAPI run(void*) {
                                 screenVenomTap -=
                                     std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                             }
+                        }
+                        if (gameBallTap > 0) {
+                            if (mapping == game_pad::Mapping::gameplay)
+                                pad.buttons |= game_pad::rightShoulder;
+                            gameBallTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                         }
                         if (fnsmCloseTap > 0) {
                             pad.buttons |= game_pad::b;
