@@ -983,9 +983,10 @@ DWORD WINAPI run(void*) {
         // a DualSense's touchpad swipe), not by View held, and reads no keys while it reads the virtual Xbox
         // controller: the controller is let go (padHeldOff) for as long as the app is on the phone, M is
         // pressed fnsmKeyWait seconds later for fnsmKey seconds, and the game's mouse and keys work its app
-        // (finger taps). The phone put away ends it and gives the controller back.
-        float fnsmKeyWait{}, fnsmKey{};
-        bool phoneAppKey{}, padHeldOff{};
+        // (finger taps). B (the phone is away once FNSM APP is pressed) ends it and gives the controller back,
+        // which then holds the game's B a moment (fnsmCloseTap) to close the app.
+        float fnsmKeyWait{}, fnsmKey{}, fnsmCloseTap{};
+        bool phoneAppKey{}, padHeldOff{}, fnsmCloseHeld{};
         static constexpr WORD fnsmScan = 0x32; // M
         // MilesVR 0.1.80: the story's FNSM moment (the user: "be actually in the vr camera view pull the phone
         // out and acess the app so the story continues"). The game shows it from a scripted camera, so its
@@ -1701,7 +1702,8 @@ DWORD WINAPI run(void*) {
                                 game_pad::uninstall();
                                 padInstalled = false;
                                 padHeldOff = phoneAppKey = true;
-                                fnsmKeyWait = .5f;
+                                fnsmKeyWait = 1.f;
+                                fnsmCloseHeld = true; // the A that pressed FNSM APP is not a B, but wait for a fresh press
                             }
                             fnsmSceneDone = true;
                             phoneAppAt = GetTickCount64();
@@ -1721,10 +1723,16 @@ DWORD WINAPI run(void*) {
                         }
                         if (e.pressed || (e.closed && use.action != PhoneAction::close))
                             runtime.haptic(1, .2f);
-                        if (use.action == PhoneAction::close && phoneAppKey && phoneAppAt) {
+                        // B while the game's app is open by its key: the app closes, the controller comes back.
+                        const bool bDown = (frame.buttons & buttonB) != 0;
+                        if (phoneAppKey && phoneAppAt && bDown && !fnsmCloseHeld && !phone.live()) {
                             phoneAppAt = 0;
-                            game_prompts::note("phone: put away - the game's FNSM app left to the game (B closes it)");
+                            fnsmCloseTap = .25f;
+                            runtime.haptic(1, .2f);
+                            message(3, 0, "FNSM app closed - the controls are the game's again");
+                            game_prompts::note("phone: B - the game's FNSM app closes (its B), the controller back");
                         }
+                        fnsmCloseHeld = bDown;
                         // The M key for the game's app, once the game has had a moment without the controller.
                         const float keyStep = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                         if (fnsmKeyWait > 0 && (fnsmKeyWait -= keyStep) <= 0) {
@@ -2318,7 +2326,7 @@ DWORD WINAPI run(void*) {
                         const Vec3 tip = tipTracked ? tapping.aim.position : lost;
                         // In play the picture is the HUD's, the window's shape; in the dark room the one drawn.
                         const auto touch = phoneTouch.update(held, immersive ? SpidyFlatAspect() : shownAspect, tip,
-                                                             tipTracked);
+                                                             tipTracked, frame.seconds);
                         menu_pointer::Output mouse;
                         mouse.pointing = touch.hover;
                         mouse.hand = tapHand;
@@ -3917,6 +3925,10 @@ DWORD WINAPI run(void*) {
                                 screenVenomTap -=
                                     std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                             }
+                        }
+                        if (fnsmCloseTap > 0) {
+                            pad.buttons |= game_pad::b;
+                            fnsmCloseTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                         }
                         if (fnsmHold > 0) {
                             pad.buttons |= game_pad::back;

@@ -664,8 +664,10 @@ void appendPhoneBody(std::vector<Vertex>& out, const WheelFrame& phone, bool ope
     p.text(out, "TAP WITH YOUR FINGER   B BACK", 0, -.0755f, .0026f, .066f, soft);
 }
 
-PhoneTouch::Out PhoneTouch::update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked) {
+PhoneTouch::Out PhoneTouch::update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked, float seconds) {
     Out o;
+    if (std::isfinite(seconds) && seconds > 0)
+        sinceRelease_ = std::min(sinceRelease_ + seconds, again);
     if (!tracked || !finite(tip) || !finite(phone.centre)) {
         o.release = reset();
         return o;
@@ -689,7 +691,8 @@ PhoneTouch::Out PhoneTouch::update(const WheelFrame& phone, float aspect, Vec3 t
     if (down_ && (!over || !near || depth > untouch)) {
         down_ = false;
         o.release = true;
-    } else if (!down_ && over && near && depth < touch) {
+        sinceRelease_ = 0;
+    } else if (!down_ && over && near && depth < touch && sinceRelease_ >= again) {
         down_ = true;
         o.press = true;
     }

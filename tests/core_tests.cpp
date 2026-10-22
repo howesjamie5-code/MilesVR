@@ -4565,6 +4565,15 @@ int main() {
         t.update(phone, 16.f / 9, at(.5f, .5f, 0), true);
         o = t.update(phone, 16.f / 9, at(.5f, .5f, 0), false);
         check(o.release, "a hand lost lets go");
+        {
+            PhoneTouch shaky;
+            shaky.update(phone, 16.f / 9, at(.5f, .5f, 0), true, .01f);
+            shaky.update(phone, 16.f / 9, at(.5f, .5f, .03f), true, .01f);
+            o = shaky.update(phone, 16.f / 9, at(.5f, .5f, 0), true, .01f);
+            check(!o.press, "a touch again right after a let-go: no second click");
+            o = shaky.update(phone, 16.f / 9, at(.5f, .5f, 0), true, PhoneTouch::again);
+            check(o.press, "a moment later: it presses");
+        }
         std::vector<Vertex> v;
         appendPhoneBody(v, phone);
         appendPhoneTouch(v, phone, t.update(phone, 16.f / 9, at(.5f, .5f, .02f), true), at(.5f, .5f, .02f),

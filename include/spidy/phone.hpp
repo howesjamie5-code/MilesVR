@@ -316,8 +316,11 @@ class PhoneTouch {
         Vec3 point{};              // where on the glass
         bool press{}, release{};
     };
-    // tip: the tapping finger's tip, in the phone's space; tracked: whether that hand is.
-    Out update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked);
+    // tip: the tapping finger's tip, in the phone's space; tracked: whether that hand is. seconds: since the
+    // last update; a new press waits `again` seconds after a let-go, so a shaky finger taps once (the
+    // game's app took a second click as "go there", the user's October 22 test).
+    static constexpr float again = .35f;
+    Out update(const WheelFrame& phone, float aspect, Vec3 tip, bool tracked, float seconds = again);
     // A press under way is let go of (the app gone).
     bool reset() {
         const bool was = down_;
@@ -327,6 +330,7 @@ class PhoneTouch {
 
   private:
     bool down_{};
+    float sinceRelease_ = again;
 };
 // The tapping fingertip, a dot facing `head`, and while it hovers a ring where it would land (red while
 // it presses).
