@@ -535,6 +535,14 @@ HWND gameWindow() {
     found = search.area >= 320 * 200 ? search.best : nullptr;
     return found;
 }
+// A key by its scan code (the game reads keys where they are, not what they type).
+void keyEvent(WORD scan, bool down) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wScan = scan;
+    in.ki.dwFlags = KEYEVENTF_SCANCODE | (down ? 0 : KEYEVENTF_KEYUP);
+    SendInput(1, &in, sizeof(in));
+}
 void mouseEvent(DWORD flags, DWORD data = 0) {
     INPUT in{};
     in.type = INPUT_MOUSE;
@@ -971,6 +979,10 @@ DWORD WINAPI run(void*) {
         // opens the game's FNSM app (a press opens the map); and the game's FNSM reminders seen so far, each
         // of which the headset answers with the phone.
         float fnsmHold{};
+        // MilesVR 0.1.80: outside the story's FNSM moment the game opens its app only by its own key (M;
+        // a DualSense's touchpad swipe), not by View held: M is held this long (seconds) instead.
+        float fnsmKey{};
+        static constexpr WORD fnsmScan = 0x32; // M
         // MilesVR 0.1.80: the story's FNSM moment (the user: "be actually in the vr camera view pull the phone
         // out and acess the app so the story continues"). The game shows it from a scripted camera, so its
         // own camera commits nothing and VR would fall back to the game screen, where the phone cannot be
@@ -1672,7 +1684,12 @@ DWORD WINAPI run(void*) {
                             phoneMusic.setAutoplay(!phoneMusic.status().autoplay);
                             break;
                         case PhoneAction::fnsm:
-                            fnsmHold = 1.f;
+                            if (!fnsmSceneDone)
+                                fnsmHold = 1.f;
+                            else if (const HWND window = gameWindow(); window && GetForegroundWindow() == window) {
+                                keyEvent(fnsmScan, true);
+                                fnsmKey = .3f;
+                            }
                             fnsmSceneDone = true;
                             phoneAppAt = GetTickCount64();
                             phoneAppHand = phone.hand() == 0 ? 0 : 1;
@@ -1680,8 +1697,10 @@ DWORD WINAPI run(void*) {
                             if (phoneTouch.reset())
                                 mouseEvent(MOUSEEVENTF_LEFTUP);
                             runtime.haptic(1, .3f);
-                            message(3, 0, "FNSM app - the game's own opens (its View held)");
-                            game_prompts::note("phone: FNSM APP -> the game's View held 1 s");
+                            message(3, 0, fnsmHold > 0 ? "FNSM app - the game's own opens (its View held)"
+                                                       : "FNSM app - the game's own opens (its M key)");
+                            game_prompts::note(fnsmHold > 0 ? "phone: FNSM APP -> the game's View held 1 s"
+                                                            : "phone: FNSM APP -> the game's M key");
                             break;
                         case PhoneAction::none:
                         case PhoneAction::close:
@@ -3868,6 +3887,9 @@ DWORD WINAPI run(void*) {
                                     std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                             }
                         }
+                        if (fnsmKey > 0 &&
+                            (fnsmKey -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f) <= 0)
+                            keyEvent(fnsmScan, false);
                         if (fnsmHold > 0) {
                             pad.buttons |= game_pad::back;
                             fnsmHold -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
