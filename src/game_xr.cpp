@@ -1084,18 +1084,16 @@ DWORD WINAPI run(void*) {
                     view.equipped = o.place;
             }
         };
-        // The phone (phone.hpp): open from a back-pocket draw until B, live
-        // while VR shows play; its music plays on with it away, on a thread
-        // of its own (phone_music.hpp). phoneShown: what its screen shows,
-        // the newest, which every image draws. phoneBlows: the swing was last
-        // told the phone has the hands (Settings::noBlows).
-        Phone phone;
-        PocketDraw pocketDraw;
-        unsigned pocketHandsBefore{};
+        // The music (phone_music.hpp), on a thread of its own, played from the wrist menu's MUSIC page
+        // (SM2VR has no phone any more: its music, gear and FNSM app are the wrist menu's pages).
+        // wristMusicShown, wristGearShown: what those pages show, the newest.
         PhoneMusic phoneMusic;
-        PhoneView phoneShown;
-        bool phoneBlows{};
-        // The phone's MENU: the game's Back, which opens its menu (the map,
+        wrist_hud::MusicView wristMusicShown;
+        std::array<wrist_hud::GearRow, wrist_hud::gearRows> wristGearShown{};
+        int wristGearCount{};
+        // The hero down (his hit points at 0), and the swing last told so (Settings::noBlows).
+        bool heroDown{}, downBlows{};
+        // The wrist's MENU (was the phone's, Spidy 0.5): the game's Back, which opens its menu (the map,
         // suits and skills), sent this long. A tap of X sent it until October
         // 23, when the menu went onto the phone.
         constexpr float menuTapSeconds = .1f;
@@ -1687,9 +1685,9 @@ DWORD WINAPI run(void*) {
             // setting is kept above and goes back when it ends.
             if (wallsHandedBack)
                 s.walls = 0;
-            phoneBlows = phone.live();
+            downBlows = heroDown;
             fistsBlows = namedFists;
-            s.noBlows = phoneBlows || fistsBlows ? 3u : 0u;
+            s.noBlows = downBlows || fistsBlows ? 3u : 0u;
             if (const auto code = swingSettings(&s)) {
                 const auto text = "VR settings: the swing did not take them (" + std::to_string(code) + ")";
                 message(3, 0, text.c_str());
@@ -1866,74 +1864,43 @@ DWORD WINAPI run(void*) {
             const bool active = runtime.frameStereo(
                 [&](const XrFrame& trackedFrame) {
                     XrFrame frame = trackedFrame;
-                    // The phone takes its controls first (Phone::take, PhoneHold):
-                    // while it is live the stick picks a button, A presses it, B
-                    // puts it away and the triggers step the volume, and none of
-                    // its controls reaches the swing or the game.
+                    // The game's FNSM app, opened from the wrist menu's GEAR page (FNSM APP): in the
+                    // story's moment the game's View is held, in free roam the controller is let go
+                    // and the game's M key opens it; B, or FNSM APP again, closes it.
+                    const auto openFnsmApp = [&] {
+                        if (!fnsmSceneDone)
+                            fnsmHold = 1.f;
+                        else {
+                            game_pad::uninstall();
+                            padInstalled = false;
+                            padHeldOff = phoneAppKey = true;
+                            fnsmKeyWait = 1.f;
+                            fnsmCloseHeld = true; // wait for a fresh B
+                        }
+                        fnsmSceneDone = true;
+                        phoneAppAt = GetTickCount64();
+                        phoneAppHand = static_cast<int>(wristHand);
+                        phoneAppPlaySeconds = phoneAppCommittedSeconds = 0;
+                        if (phoneTouch.reset())
+                            mouseEvent(MOUSEEVENTF_LEFTUP);
+                        runtime.haptic(1, .3f);
+                        message(3, 0, fnsmHold > 0 ? "FNSM app - the game's own opens over your left hand (its View held)"
+                                                   : "FNSM app - the game's own opens over your left hand (its M key)");
+                        game_prompts::note(fnsmHold > 0 ? "wrist menu: FNSM APP -> the game's View held 1 s"
+                                                        : "wrist menu: FNSM APP -> the game's M key");
+                    };
+                    const auto closeFnsmApp = [&] {
+                        phoneAppAt = 0;
+                        fnsmCloseTap = .25f;
+                        runtime.haptic(1, .2f);
+                        message(3, 0, "FNSM app closed - the controls are the game's again");
+                        game_prompts::note("wrist menu: the game's FNSM app closes (its B), the controller back");
+                    };
                     {
-                        const auto use = phone.take(frame, phoneShown.gearCount);
-                        const auto& e = use.controls;
-                        if (e.x || e.y)
-                            runtime.haptic(use.stick, .08f);
-                        if (e.volume) {
-                            phoneMusic.setVolume(phoneMusic.status().volume + e.volume * phoneVolumeStep);
-                            runtime.haptic(e.volume < 0 ? 0 : 1, .1f);
-                        }
-                        switch (use.action) {
-                        case PhoneAction::previous:
-                            phoneMusic.previous();
-                            break;
-                        case PhoneAction::play:
-                            phoneMusic.toggle();
-                            break;
-                        case PhoneAction::next:
-                            phoneMusic.next();
-                            break;
-                        case PhoneAction::autoplay:
-                            phoneMusic.setAutoplay(!phoneMusic.status().autoplay);
-                            break;
-                        case PhoneAction::fnsm:
-                            if (!fnsmSceneDone)
-                                fnsmHold = 1.f;
-                            else {
-                                game_pad::uninstall();
-                                padInstalled = false;
-                                padHeldOff = phoneAppKey = true;
-                                fnsmKeyWait = 1.f;
-                                fnsmCloseHeld = true; // the A that pressed FNSM APP is not a B, but wait for a fresh press
-                            }
-                            fnsmSceneDone = true;
-                            phoneAppAt = GetTickCount64();
-                            phoneAppHand = phone.hand() == 0 ? 0 : 1;
-                            phoneAppPlaySeconds = phoneAppCommittedSeconds = 0;
-                            if (phoneTouch.reset())
-                                mouseEvent(MOUSEEVENTF_LEFTUP);
-                            runtime.haptic(1, .3f);
-                            message(3, 0, fnsmHold > 0 ? "FNSM app - the game's own opens (its View held)"
-                                                       : "FNSM app - the game's own opens (its M key)");
-                            game_prompts::note(fnsmHold > 0 ? "phone: FNSM APP -> the game's View held 1 s"
-                                                            : "phone: FNSM APP -> the game's M key");
-                        case PhoneAction::camera:
-                            cameraTap = cameraTapSeconds;
-                            break;
-                        case PhoneAction::menu:
-                            menuTap = menuTapSeconds;
-                            break;
-                        case PhoneAction::none:
-                        case PhoneAction::close:
-                            break;
-                        }
-                        if (e.pressed || (e.closed && use.action != PhoneAction::close))
-                            runtime.haptic(1, .2f);
                         // B while the game's app is open by its key: the app closes, the controller comes back.
                         const bool bDown = (frame.buttons & buttonB) != 0;
-                        if (phoneAppKey && phoneAppAt && bDown && !fnsmCloseHeld && !phone.live()) {
-                            phoneAppAt = 0;
-                            fnsmCloseTap = .25f;
-                            runtime.haptic(1, .2f);
-                            message(3, 0, "FNSM app closed - the controls are the game's again");
-                            game_prompts::note("phone: B - the game's FNSM app closes (its B), the controller back");
-                        }
+                        if (phoneAppKey && phoneAppAt && bDown && !fnsmCloseHeld)
+                            closeFnsmApp();
                         fnsmCloseHeld = bDown;
                         // The M key for the game's app, once the game has had a moment without the controller.
                         const float keyStep = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
@@ -1942,27 +1909,19 @@ DWORD WINAPI run(void*) {
                                 keyEvent(fnsmScan, true);
                                 fnsmKey = .3f;
                             } else {
-                                game_prompts::note("phone: FNSM APP - the game's window is not in front, no M sent");
+                                game_prompts::note("wrist menu: FNSM APP - the game's window is not in front, no M sent");
                             }
                         }
                         if (fnsmKey > 0 && (fnsmKey -= keyStep) <= 0)
                             keyEvent(fnsmScan, false);
-                        if (use.action == PhoneAction::close) {
-                            runtime.haptic(1, .15f);
-                            message(3, 0, "Phone away - each control is the game's again once let go of");
-                        } else if (use.action == PhoneAction::camera) {
-                            message(3, 0, "The game's camera - left trigger aims, right trigger takes the photo, "
-                                          "right stick up puts it away");
-                        } else if (use.action == PhoneAction::menu) {
-                            message(3, 0, "The game's menu (map, suits, skills) - B closes it");
-                        }
-                        // The game asks for its FNSM app: in VR that is the phone's.
+                        // The game asks for its FNSM app: in VR that is the wrist menu's.
                         if (const uint64_t reminders = game_prompts::fnsmReminders(); reminders != fnsmRemindersSeen) {
                             fnsmRemindersSeen = reminders;
                             runtime.haptic(0, .25f);
                             runtime.haptic(1, .25f);
-                            message(3, 0, "FNSM - pull out your phone (back pocket) and open FNSM APP");
-                            game_prompts::note("the game's FNSM reminder -> the headset asks for the phone");
+                            message(3, 0, "FNSM - open the wrist menu (right hand on the left forearm + trigger), "
+                                          "GEAR, FNSM APP");
+                            game_prompts::note("the game's FNSM reminder -> the headset asks for the wrist menu");
                         }
                     }
                     uint64_t changes{};
@@ -1994,8 +1953,9 @@ DWORD WINAPI run(void*) {
                             fnsmCommittedSeconds = 0;
                             runtime.haptic(0, .3f);
                             runtime.haptic(1, .3f);
-                            message(3, 0, "FNSM - pull out your phone (back pocket) and open FNSM APP");
-                            game_prompts::note("the game asks for its FNSM app: VR stays in play for the phone");
+                            message(3, 0, "FNSM - open the wrist menu (right hand on the left forearm + trigger), "
+                                          "GEAR, FNSM APP");
+                            game_prompts::note("the game asks for its FNSM app: VR stays in play for the wrist menu");
                         }
                         fnsmAskSeen = asked;
                     }
@@ -2095,7 +2055,7 @@ DWORD WINAPI run(void*) {
                     uint32_t hudTriggers{};
                     if (!wristHudFault) {
                         const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
-                        const bool hudPlay = gesturesPlay && !padLayer.latched() && !phone.open() && !gadgetWheel.open();
+                        const bool hudPlay = gesturesPlay && !padLayer.latched() && !gadgetWheel.open();
                         const unsigned hudHand = wristHand, pointHand = 1 - wristHand;
                         // Where the other hand points on the panel, found before the
                         // toggle so a pull on the panel never toggles it.
@@ -2118,6 +2078,7 @@ DWORD WINAPI run(void*) {
                         float toggleTriggers[2]{triggers[0], triggers[1]};
                         if (!wristMenuFault && (wristMenu.claims() || (onPanel && wristToggle.opacity() > 0)))
                             toggleTriggers[pointHand] = 0;
+                        const bool wasOpen = wristToggle.on();
                         if (wristToggle.update(frame.seconds, hudPlay, hudHand, grips, gripsTracked, toggleTriggers)) {
                             runtime.haptic(static_cast<int>(pointHand), .35f);
                             runtime.haptic(static_cast<int>(hudHand), .2f);
@@ -2131,6 +2092,9 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(static_cast<int>(hudHand), .2f);
                         }
                         wristKeyHeld = key;
+                        // Opened: the Music folder looked at again (new songs since).
+                        if (wristToggle.on() && !wasOpen)
+                            phoneMusic.load();
                         // The pages: a pull begun on the panel is the panel's. Values go
                         // through wristApply (a GPU-side one at most four times a second
                         // while dragged), applied here, before anything is submitted; a
@@ -2151,6 +2115,7 @@ DWORD WINAPI run(void*) {
                                 live.hudText = static_cast<float>(values.hudTextPercent);
                                 live.hudTheme = static_cast<float>(values.hudTheme);
                                 live.hudTextColor = static_cast<float>(values.hudTextColor);
+                                live.musicVolume = static_cast<float>(phoneMusic.status().volume);
                                 if (!wristApplyStarted) {
                                     wristApply.start(live);
                                     wristApplyStarted = true;
@@ -2180,6 +2145,28 @@ DWORD WINAPI run(void*) {
                                     if (result.changed >> c & 1)
                                         wristApply.want(static_cast<wrist_hud::Control>(c),
                                                         wristShown[static_cast<wrist_hud::Control>(c)]);
+                                switch (result.music) {
+                                case wrist_hud::Menu::Result::Music::previous:
+                                    phoneMusic.previous();
+                                    break;
+                                case wrist_hud::Menu::Result::Music::toggle:
+                                    phoneMusic.toggle();
+                                    break;
+                                case wrist_hud::Menu::Result::Music::next:
+                                    phoneMusic.next();
+                                    break;
+                                case wrist_hud::Menu::Result::Music::autoplay:
+                                    phoneMusic.setAutoplay(!phoneMusic.status().autoplay);
+                                    break;
+                                case wrist_hud::Menu::Result::Music::none:
+                                    break;
+                                }
+                                if (result.fnsm) {
+                                    if (phoneAppAt)
+                                        closeFnsmApp();
+                                    else
+                                        openFnsmApp();
+                                }
                                 if (result.fpsReset) {
                                     sessionFps.reset(); // from the next frame
                                     wristFps = {};
@@ -2247,6 +2234,10 @@ DWORD WINAPI run(void*) {
                                     case Control::hudTextColor:
                                         values.hudTextColor = number;
                                         return std::pair{true, static_cast<float>(values.hudTextColor)};
+                                    case Control::musicVolume:
+                                        // The player's own setting (phone.ini); it takes it a moment later.
+                                        phoneMusic.setVolume(number);
+                                        return std::pair{true, value};
                                     default:
                                         return std::pair{false, 0.f};
                                     }
@@ -2351,36 +2342,6 @@ DWORD WINAPI run(void*) {
                                                "power)");
                         }
                     }
-                    // A grip squeezed at a back pocket draws the phone, and shoots
-                    // no web until it is let go. Not with the phone out. In the pad
-                    // layer too, where the grips are the game's bumpers: that grip
-                    // is no bumper (October 19: a draw sent the game LB or RB until
-                    // the phone came out), and the phone drawn ends the layer
-                    // (PadLayer::leave), so the phone is always the way back to
-                    // play's controls.
-                    int phoneDrawnWith = -1;
-                    {
-                        const float squeezes[2]{frame.hands[0].squeeze, frame.hands[1].squeeze};
-                        const bool drawPlay = gesturesPlay && !phone.open();
-                        if (pocketDraw.update(frame.seconds, drawPlay, frame.head, grips, gripsTracked,
-                                              squeezes))
-                            phoneDrawnWith = pocketDraw.drewWith();
-                        if (phoneDrawnWith >= 0 && padLayer.latched()) {
-                            padLayer.leave();
-                            // "Phone out" says it; "Pad layer off" would hide it.
-                            padLayerWas = false;
-                        }
-                        for (unsigned i = 0; i < 2; ++i) {
-                            if (pocketDraw.hands() & (1u << i))
-                                controller.hands[i].squeeze = 0;
-                            // MilesVR: a tick as the grip catches the pocket (a draw begins): now bring
-                            // it up in front. The user, October 20: "i pulled it out once and cant do it
-                            // again" - a draw gave no sign it had begun.
-                            if ((pocketDraw.hands() & ~pocketHandsBefore & (1u << i)) && phoneDrawnWith < 0)
-                                runtime.haptic(i, .3f, .05f);
-                        }
-                        pocketHandsBefore = pocketDraw.hands();
-                    }
                     // The buttons the game names in a prompt, pressed with the
                     // controls of those names (game_pad::NamedPress). A control
                     // it claims is the game's until it is let go, and does
@@ -2393,7 +2354,7 @@ DWORD WINAPI run(void*) {
                         named.buttons = frame.buttons;
                         // The temple's scan has a trigger, the pocket's draw a grip.
                         const uint32_t gestures =
-                            values.triggerWebs ? pocketDraw.hands() : templePress.hands() | suitPress.hands() | hudTriggers;
+                            values.triggerWebs ? 0u : templePress.hands() | suitPress.hands() | hudTriggers;
                         for (unsigned i = 0; i < 2; ++i) {
                             const auto& hand = frame.hands[i];
                             named.balls[i] = values.triggerWebs ? hand.squeeze : hand.trigger;
@@ -2408,7 +2369,7 @@ DWORD WINAPI run(void*) {
                         named.airborne = game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart);
                         named.slams = fightLately && (!values.realisticFlips || !values.automaticCombat);
                         const bool namedPlay =
-                            gesturesPlay && !padLayer.latched() && !phone.open() && !gadgetWheel.open();
+                            gesturesPlay && !padLayer.latched() && !gadgetWheel.open();
                         namedPad = namedPress.update(frame.seconds, namedPlay, named, asked);
                         const uint32_t claimed = namedPress.claimed();
                         if (claimed & game_pad::NamedPress::controlA) {
@@ -2641,7 +2602,7 @@ DWORD WINAPI run(void*) {
                         frame.predictedDisplayTime > 0 ? frame.predictedDisplayTime : 0);
                     rig.wallRunBody(values.body && values.handClimb && !flatScreen && swingFresh,
                         runPalm ? climbState.hands : 0, swingState.velocity);
-                    const bool flipZipPlay = gesturesPlay && !padLayer.latched() && !phone.open() &&
+                    const bool flipZipPlay = gesturesPlay && !padLayer.latched() &&
                         !gadgetWheel.open() && values.flips && !values.controlledFlips &&
                         !values.realisticFlips &&
                         game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart) &&
@@ -2961,25 +2922,22 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(1, .15f);
                         }
                     }
-                    // The phone, which a back-pocket draw opens in the hand. It is
-                    // live while VR shows play and no calibration has the
-                    // controllers, which it leaves to a calibration (October 19:
-                    // one begun under it could be neither finished nor skipped).
+                    // The hero down (his HeroHealth's hit points at 0, from the
+                    // blow that killed him until the respawn replaces him): no
+                    // fist lands, as the game's own buttons do nothing then.
                     {
-                        const bool phonePlay = immersive && calibration.phase() == CalibrationPhase::idle;
-                        if (phone.update(frame.seconds, phonePlay, frame.head, grips, gripsTracked,
-                                         phoneDrawnWith, pocketDraw.hand())) {
-                            phoneMusic.load();
-                            runtime.haptic(0, .2f);
-                            runtime.haptic(1, .2f);
-                            feel(body_haptics::Kind::phone, pocketDraw.drewWith());
-                            message(3, 0, "Phone out - the stick, A, B and the triggers are the phone's "
-                                          "until B puts it away");
+                        float hitPoints{};
+                        const auto h = players.health();
+                        const bool down = h && read(h + game_player::hitPointsAt, &hitPoints, sizeof(hitPoints)) &&
+                                          std::isfinite(hitPoints) && hitPoints <= 0;
+                        if (down != heroDown) {
+                            heroDown = down;
+                            message(2, 0, down ? "Hero down - punches off until the respawn" : "Hero back up");
                         }
                     }
                     // While it is out its hands land no blow (Settings::noBlows),
-                    // nor while the game names its X (NamedPress, above).
-                    if (phone.live() != phoneBlows || namedFists != fistsBlows)
+                    // nor while the hero is down, nor while the game names its X (NamedPress, above).
+                    if (heroDown != downBlows || namedFists != fistsBlows)
                         sendSwingSettings();
                     if (calibrationInput && calibration.phase() == CalibrationPhase::idle) {
                         bool held = (frame.buttons & buttonB) || frame.jump;
@@ -4534,12 +4492,6 @@ DWORD WINAPI run(void*) {
                             }
                         }
                         auto buttons = origins.filtered(frame, mapping);
-                        // On the pad layer a grip pressed at a back pocket is the
-                        // phone's draw, not the game's bumper.
-                        if (mapping == game_pad::Mapping::pad)
-                            for (unsigned i = 0; i < 2; ++i)
-                                if (pocketDraw.hands() & (1u << i))
-                                    buttons.hands[i].squeeze = 0;
                         // An X the game names is its X: no wheel (NamedPress).
                         if (named & game_pad::NamedPress::controlX)
                             buttons.buttons &= ~static_cast<uint32_t>(buttonX);
@@ -5009,23 +4961,6 @@ DWORD WINAPI run(void*) {
                         d.seatedEyeMm = static_cast<uint32_t>(std::lround(seatLift.seatedEye() * 1000));
                         d.seatedLiftMm = static_cast<uint32_t>(std::lround(seatLift.lift() * 1000));
                         d.seatedMeasures = seatLift.measures();
-                        {
-                            const auto& p = pocketDraw.stats();
-                            d.pocketPresses = p.presses;
-                            d.pocketBegun = p.begun;
-                            d.pocketDraws = p.draws;
-                            d.pocketSlow = p.tooSlow;
-                            d.pocketLetGo = p.letGo;
-                            for (unsigned m = 0; m < PocketDraw::misses; ++m)
-                                d.pocketMissed[m] = p.missed[m];
-                            d.pocketLastMiss = p.lastMiss < PocketDraw::misses ? p.lastMiss + 1 : 0;
-                            const float hand[3]{p.lastHand.x, p.lastHand.y, p.lastHand.z};
-                            for (unsigned a = 0; a < 3; ++a)
-                                d.pocketLastHand[a] =
-                                    static_cast<int32_t>(std::lround(std::clamp(hand[a], -9.f, 9.f) * 1000));
-                            d.pocketLastLostMs = static_cast<uint32_t>(std::lround(p.lastLost * 1000));
-                            d.pocketLastLook = static_cast<int32_t>(std::lround(p.lastLook * 1800 / 3.14159265f));
-                        }
                         d.eyeGaze = (static_cast<uint32_t>(runtime.eyeTracking()) + 1) |
                                     static_cast<uint32_t>(values.eyeAim) << 8;
                         d.eyeAimFrames = eyeAimFrames;
@@ -5459,38 +5394,28 @@ DWORD WINAPI run(void*) {
                     }
                     if (phoneAppDraw.on && phoneAppDraw.inPlay)
                         saved.phone = {true, compose(motion.headPose, inverse(frame.head))};
-                    if (phone.live()) {
-                        // The phone: this image's way from tracking space into its
-                        // world, and the screen as it is now, which every image
-                        // shows (phoneShown).
-                        saved.phone = {true, compose(motion.headPose, inverse(frame.head))};
-                        auto& view = phoneShown;
-                        view.screen = phone.ui().screen();
-                        view.app = phone.ui().app();
-                        view.lit = phone.ui().button();
-                        // GEAR: the gadget wheel's places in its order, the web
-                        // shooter's first, and the one equipped as the wheel has it.
+                    if (wristToggle.opacity() > 0) {
+                        // GEAR: the gadget wheel's places in its order, the web shooter's first,
+                        // and the one equipped as the wheel has it.
                         GadgetWheelView wheel;
                         wheelPlaces(wheel);
-                        view.gearCount = 0;
-                        for (int p = 0; p < gadgetPlaces; ++p) {
+                        wristGearCount = 0;
+                        for (int p = 0; p < gadgetPlaces && wristGearCount < wrist_hud::gearRows; ++p) {
                             if (wheel.places[p] == Gadget::none)
                                 continue;
-                            auto& row = view.gear[view.gearCount++];
-                            strncpy_s(row.name, gadgetName(wheel.places[p]), _TRUNCATE);
+                            auto& row = wristGearShown[static_cast<size_t>(wristGearCount++)];
+                            row.name = gadgetName(wheel.places[p]);
                             row.ammo = wheel.ammo[p];
                             row.most = wheel.most[p];
                             row.equipped = wheel.equipped == p;
                         }
-                        view.gearTop = phone.ui().gearTop();
                         const auto music = phoneMusic.status();
-                        view.playing = music.playing;
-                        view.autoplay = music.autoplay;
-                        view.failed = music.failed;
-                        view.track = music.track;
-                        view.tracks = music.tracks;
-                        view.volume = music.volume;
-                        strncpy_s(view.song, music.song, _TRUNCATE);
+                        wristMusicShown.playing = music.playing;
+                        wristMusicShown.autoplay = music.autoplay;
+                        wristMusicShown.failed = music.failed;
+                        wristMusicShown.track = music.track;
+                        wristMusicShown.tracks = music.tracks;
+                        wristMusicShown.song = music.song;
                     }
                     for (unsigned i = 0; i < 2; ++i) {
                         saved.webs[i] = swingState.webs[i];
@@ -5563,12 +5488,18 @@ DWORD WINAPI run(void*) {
                                 pendingSnapshot.flatScreen = 1;
                             }
                         }
-                        std::vector<Vertex> phoneBody, marks;
-                        appendPhoneBody(phoneBody, phoneAppDraw.phone);
+                        std::vector<Vertex> glass, marks;
+                        {
+                            const auto& lens = targets[0].view.fov;
+                            const float pixel = (std::tan(lens.angleRight) - std::tan(lens.angleLeft)) /
+                                                static_cast<float>(targets[0].width);
+                            wrist_hud::appendAppGlass(glass, phoneAppCorners(phoneAppDraw.phone, aspect),
+                                                      phoneAppDraw.head.position, pixel);
+                        }
                         appendPhoneTouch(marks, phoneAppDraw.phone, phoneAppDraw.touch, phoneAppDraw.tip,
                                          phoneAppDraw.head);
                         drawSafely([&] {
-                            overlay.renderViews(views, phoneBody, false, false);
+                            overlay.renderViews(views, glass, true, false);
                             const auto corners = phoneAppCorners(phoneAppDraw.phone, aspect);
                             for (const auto& view : views)
                                 overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
@@ -6011,6 +5942,10 @@ DWORD WINAPI run(void*) {
                                 hud.page = wristMenu.page();
                                 hud.scroll = wristMenu.scroll();
                                 hud.vr = values;
+                                hud.music = wristMusicShown;
+                                hud.gear = wristGearShown;
+                                hud.gearCount = wristGearCount;
+                                hud.fnsmOpen = phoneAppAt != 0;
                                 hud.settings = wristShown;
                                 hud.fps = wristFps.fps();
                                 hud.refreshHz = wristFps.refreshHz();
@@ -6085,24 +6020,10 @@ DWORD WINAPI run(void*) {
                             const auto& f = phoneAppDraw.phone;
                             const WheelFrame held{place(f.centre), turn.rotate(f.right), turn.rotate(f.up),
                                                   turn.rotate(f.out)};
-                            appendPhoneBody(vertices, held);
                             auto touch = phoneAppDraw.touch;
                             touch.point = place(touch.point);
                             appendPhoneTouch(phoneMarks, held, touch, place(phoneAppDraw.tip), Pose{viewer, {}});
                             phoneGlass = held;
-                        } else if (!saved->flatScreen && saved->phone.open) {
-                            auto view = phoneShown;
-                            const Pose& toWorld = saved->phone.toWorld;
-                            const auto& f = phone.place();
-                            view.open = true;
-                            view.age = phone.age();
-                            const Quat turn = toWorld.orientation;
-                            view.frame = {compose(toWorld, Pose{f.centre, {}}).position + travel - about,
-                                          turn.rotate(f.right), turn.rotate(f.up), turn.rotate(f.out)};
-                            appendPhone(vertices, view, viewer - about);
-                            appendPhoneScreen(phoneScreen, view);
-                            phonePicture = {phoneScreen, phoneScreenHalfWidth, phoneScreenHalfHeight,
-                                            phoneScreenCorners(view), phoneScreenGlass()};
                         }
                         std::array<D3D12Renderer::ViewTarget, 2> overlayViews;
                         // Slow motion recolours the image under the overlay, about each eye's lens.
@@ -6136,6 +6057,9 @@ DWORD WINAPI run(void*) {
                                                         native_gpu::latestHud(app, imageHoldMs)) {
                                 const auto corners = phoneAppCorners(
                                     phoneGlass, static_cast<float>(app.width) / static_cast<float>(app.height));
+                                std::vector<Vertex> glass;
+                                wrist_hud::appendAppGlass(glass, corners, viewer, pixelAngle);
+                                overlay.renderViews(overlayViews, glass, true, false);
                                 for (const auto& view : overlayViews)
                                     overlay.quad(app.texture.Get(), app.view, app.linear, view, corners,
                                                  phoneAppPart);

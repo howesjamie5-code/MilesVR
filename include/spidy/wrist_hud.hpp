@@ -19,8 +19,14 @@
 //   Spider-Man 2), each a button that steps through its choices.
 // 2 GRAPHICS - the eye passes, live: ANTI-ALIASING (FXAA), HISTORY BLEND,
 //   SHARPNESS, BUILDING REACH, WINDOW FPS and the EYE TEST.
-// 3 HOLOGRAM - its height over the wrist, its size, the text size, a colour
+// 3 MUSIC - the songs in the Music folder (phone_music.hpp): the song, its
+//   number, PREVIOUS / PLAY-PAUSE / NEXT, AUTOPLAY and the music's VOLUME.
+// 4 GEAR - the gadgets in the gadget wheel's order with their charges, the
+//   equipped one marked, and FNSM APP: the game's Friendly Neighborhood
+//   Spider-Man app, shown over the left hand and tapped with the right finger.
+// 5 HOLOGRAM - its height over the wrist, its size, the text size, a colour
 //   theme and a text colour.
+// Pages 3 and 4 are what SM2VR's phone had; there is no phone any more.
 // The other hand's controller points at the panel or touches it: what it is
 // on lights up, and its trigger presses a button or grabs a slider and drags
 // it. A page taller than the panel scrolls (the pointing hand's stick, or a
@@ -33,6 +39,7 @@
 #include "vertex.hpp"
 #include "vr_settings.hpp"
 #include "fps_meter.hpp"
+#include "gadget_wheel.hpp"
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -107,12 +114,18 @@ enum class Control : uint8_t {
     hudText,
     hudTheme,
     hudTextColor,
+    musicVolume,
     fpsReset = 32,
+    musicPrevious,
+    musicPlay,
+    musicNext,
+    musicAutoplay,
+    fnsmApp,
     vrFirst = 64,
 };
 constexpr int controls = 32;
 constexpr int maskedControls = 32;
-static_assert(static_cast<int>(Control::hudTextColor) < maskedControls);
+static_assert(static_cast<int>(Control::musicVolume) < maskedControls);
 // The VR SETTINGS page's control for vr_settings::rows()[row], and back (-1: not one).
 inline Control vrControl(size_t row) {
     return static_cast<Control>(static_cast<int>(Control::vrFirst) + static_cast<int>(row));
@@ -137,6 +150,7 @@ struct Settings {
     float hudText = 100;   // the pages' text size, percent
     float hudTheme = 0;    // a colour theme (themeName)
     float hudTextColor = 0; // 0 the theme's own text colours (textColorName)
+    float musicVolume = 80; // the music's, percent
     float& operator[](Control);
     float operator[](Control c) const {
         return const_cast<Settings&>(*this)[c];
@@ -146,7 +160,8 @@ struct Range {
     float low, high, step;
 };
 Range range(Control);
-constexpr int pages = 3; // VR SETTINGS, GRAPHICS, HOLOGRAM
+constexpr int pages = 5; // VR SETTINGS, GRAPHICS, MUSIC, GEAR, HOLOGRAM
+constexpr int musicPage = 2, gearPage = 3;
 const char* pageName(int page);
 // The text size as a factor (hud_text / 100, held to .75-1.75): bigger text
 // wraps onto more lines and the page scrolls.
@@ -256,6 +271,19 @@ class Applier {
     double noteAt_ = -1e9;
 };
 
+// The MUSIC page's player (phone_music.hpp PhoneMusic::Status) and the GEAR
+// page's gadgets (the gadget wheel's places in its order).
+struct MusicView {
+    int tracks{}, track{}; // track from 0; tracks 0: no songs
+    bool playing{}, autoplay = true, failed{};
+    std::string song;
+};
+struct GearRow {
+    std::string name;
+    int ammo{}, most{}; // most 0: none to count
+    bool equipped{};
+};
+constexpr int gearRows = gadgetPlaces;
 struct View {
     Vec3 emitter{};       // the light on the wrist, in the world
     Vec3 headUp{0, 1, 0}; // the headset's up: the panel stands along it
@@ -265,6 +293,10 @@ struct View {
     int page{};
     Settings settings;
     vr_settings::Values vr; // the VR SETTINGS page's values
+    MusicView music;
+    std::array<GearRow, gearRows> gear{};
+    int gearCount{};
+    bool fnsmOpen{}; // the game's FNSM app is up (its button reads CLOSE FNSM APP)
     Control hover{}, held{};
     bool pointing{};
     Vec3 tip{};
@@ -334,6 +366,9 @@ class Menu {
         // A VR SETTINGS row pressed: its item and the choice it steps to (vr_settings::choose).
         vr_settings::Item vrItem = vr_settings::Item::none;
         int vrChoice{};
+        // The MUSIC page's buttons, and FNSM APP.
+        enum class Music : uint8_t { none, previous, toggle, next, autoplay } music{};
+        bool fnsm{};
     };
     Result update(const Input&, Settings&);
     int page() const {
@@ -371,6 +406,9 @@ class Menu {
     bool layoutSeen_{};
 };
 
+// The glass the game's FNSM app is drawn on, over the left hand (phoneAppCorners'
+// frame): a dark pane with the hologram's red edge, a little larger than the app.
+void appendAppGlass(std::vector<Vertex>& out, const std::array<Vec3, 4>& corners, Vec3 viewer, float pixelAngle);
 // Appends the light, its rays and the panel to `out` (the overlay's
 // translucent list): nothing when it is hidden.
 void appendWristHud(std::vector<Vertex>& out, const View&, Vec3 viewer, float pixelAngle);

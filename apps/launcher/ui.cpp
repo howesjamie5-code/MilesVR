@@ -1365,17 +1365,9 @@ void App::optionsCard(ImVec2 size) {
            S(150), [&] { tabCombo("##uistyle", Item::uiStyle); });
     option("Near clip", "How near your eyes things still show. Nearer keeps your hands in view.", S(150),
            [&] { tabCombo("##nearclip", Item::nearClip); });
-    option("Wall running", "On: a wall you swing or fly onto is yours, and you run along it. Stop on any wall "
-                           "and the game's own crawl holds you, so its vents, doors and prompts work; push the "
-                           "stick up a wall to run up it, the game's own wall run. Off: every wall is the game's "
-                           "crawl. Either way you stand upright on the wall and your view turns so the wall is "
-                           "your floor.",
-           S(40), [&] { changed |= toggle("##wallrun", &o.wallRun); });
     option("Hand wall climbing (experimental)",
            "On a wall, stick at rest: squeeze a grip near the wall and pull to climb. Both grips = roll the view.",
            S(40), [&] { tabToggle("##handclimb", Item::handClimb); });
-    option("Wall camera distance", "How far your eyes stay from the wall while you hand climb.", S(150),
-           [&] { tabCombo("##walldistance", Item::wallDistance); });
     option("Flips (experimental)", "In the air the left stick turns you over; tap A for one flip, hold A to stay.",
            S(40), [&] { changed |= toggle("##flips", &o.flips); });
     option("Flip speed", "How fast a flip turns you over, at full tilt of the left stick.", S(150), [&] {
@@ -1733,16 +1725,16 @@ void App::controls(ImVec2 origin, ImVec2 size) {
          {{"Hand wall climbing: grip near a wall", "Hold on and pull to climb. Both grips held and rolled = turn the "
                                                    "view. A = jump off"},
           {"Realistic flips: arms in the air", "Swing your arms to spin. A in the air = stop and come upright"}}},
-        {"PHONE",
-         {{"Grip at your back pocket, bring it up", "Put a hand behind your hip, squeeze its grip (a short buzz), "
-                                                    "keep squeezing and bring it up in front of you",
-           "Phone out - the stick, A, B and the triggers are the phone's until B puts it away"},
-          {"Stick  /  A", "Pick an app or button  /  press it"},
-          {"B", "Put the phone away", "Phone away - each control is the game's again once let go of"},
-          {"Triggers", "Music volume: left down, right up"},
-          {"Apps", "Music (the songs in the Music folder beside the launcher), map, GEAR (your gadgets), FNSM APP "
-                   "(opens the game's Friendly Neighborhood app; use it when the game asks for that app)",
-           "FNSM - pull out your phone (back pocket) and open FNSM APP"}}},
+        {"WRIST MENU",
+         {{"Right hand on the left forearm + trigger", "Opens or closes the hologram over your left wrist (F8 on the "
+                                                       "keyboard too)"},
+          {"Point + trigger  /  right stick", "Press a button or drag a slider  /  scroll the page. The arrows "
+                                              "at the bottom flip pages"},
+          {"Pages", "VR SETTINGS (FPS and every setting), GRAPHICS, MUSIC (the songs in the Music folder beside "
+                    "the launcher), GEAR (your gadgets, FNSM APP), HOLOGRAM"},
+          {"FNSM APP", "The game's Friendly Neighborhood app over your left hand: tap it with your right index "
+                       "finger, B closes it. Use it when the game asks for that app",
+           "FNSM - open the wrist menu (right hand on the left forearm + trigger), GEAR, FNSM APP"}}},
         {"MENUS, CUTSCENES, BODY",
          {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset. Controllers = Xbox controller. "
                           "Mouse: point at it + pull the trigger. Any button = controller again",

@@ -65,8 +65,6 @@ target_link_libraries(spidy_sim PRIVATE spidy_core)
 # Draws the combat marks over eye captures without a headset (tools/preview-marks.ps1).
 add_executable(spidy_mark_preview apps/mark_preview.cpp)
 target_link_libraries(spidy_mark_preview PRIVATE spidy_core)
-add_executable(spidy_phone_preview apps/phone_preview.cpp)
-target_link_libraries(spidy_phone_preview PRIVATE spidy_core)
 if(SPIDY_BUILD_OBSERVER)
   if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "The game observer requires 64-bit Windows")

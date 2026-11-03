@@ -979,6 +979,7 @@ int main() {
             hung += 1.f / 90;
         }
         check(hung > jumpHang - .1f, "a blow up there does not cut the hang short");
+    });
 
     struct SlingWorld : TwoAnchors {
         std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
@@ -6745,150 +6746,6 @@ int main() {
         }
         near(s.config().gravity,14.715f);
     });
-    test("pocket draw: a grip squeezed at a back pocket, brought up in front, opens the phone there", [] {
-        const Pose head{{0,1.7f,0},{}};
-        // A back pocket 20 cm behind the eyes; a hand hanging at the side, about 8 cm.
-        const Pose pocket{{.2f,.9f,.2f},{}}, front{{.1f,1.25f,-.3f},{}}, hip{{.2f,.9f,-.2f},{}},
-            side{{.25f,.95f,.08f},{}};
-        bool tracked[2]{true,true};
-        const auto step=[&](PocketDraw& d,const Pose& right,float squeeze,float seconds=1.f/90,bool play=true,
-                            const Pose* eyes=nullptr){
-            const Pose grips[2]{Pose{{-.3f,1.f,0},{}},right};
-            const float squeezes[2]{0,squeeze};
-            return d.update(seconds,play,eyes?*eyes:head,grips,tracked,squeezes);
-        };
-        PocketDraw d;
-        check(!step(d,pocket,1),"the squeeze at the pocket opened it at once");
-        check(d.hands()==2u,"the drawing grip is not the draw's: it would shoot a web");
-        check(step(d,front,1)&&d.draws()==1,"brought up in front, it did not open");
-        check(length(d.hand()-front.position)<1e-4f,"it did not open at the hand");
-        check(d.hands()==2u,"the grip was let go to the swing while still squeezed");
-        step(d,front,0);
-        check(d.hands()==0u,"let go of, the grip stayed the draw's");
-        // A squeeze in front of the hip, or with the arm hanging at the side, is a web's, not a draw.
-        check(!step(d,hip,1)&&d.hands()==0u,"a squeeze at the front of the hip began a draw");
-        step(d,front,1);
-        check(d.draws()==1,"a web's squeeze brought up opened the phone");
-        step(d,front,0);
-        check(!step(d,side,1)&&d.hands()==0u,"a squeeze with the arm hanging at the side began a draw");
-        step(d,side,0);
-        // Nor with the head turned 30 degrees the other way for a moment: the
-        // pocket is the body's, which a glance does not turn.
-        const Pose glance{{0,1.7f,0},Quat::yaw(.52f)};
-        for(int i=0;i<30;++i)step(d,side,0,1.f/90,true,&glance);
-        check(!step(d,side,1,1.f/90,true,&glance)&&d.hands()==0u,"a glance over the shoulder made a pocket of the side");
-        step(d,side,0,1.f/90,true,&glance);
-        for(int i=0;i<300;++i)step(d,side,0);
-        check(std::abs(d.yaw())<.05f,"the body did not turn back with the head");
-        // Let go on the way, nothing opens.
-        step(d,pocket,1);
-        step(d,pocket,0);
-        check(!step(d,front,1)&&d.draws()==1,"a draw let go of on the way opened it");
-        step(d,front,0);
-        // Too slow, nothing opens.
-        step(d,pocket,1);
-        for(int i=0;i<30;++i)step(d,pocket,1,.1f);
-        check(!step(d,front,1)&&d.draws()==1,"a draw slower than drawSeconds opened it");
-        step(d,front,0);
-        check(!step(d,pocket,1,1.f/90,false)&&d.hands()==0u,"outside VR play a draw began");
-        step(d,pocket,0);
-        // A hand the headset loses behind the back keeps its grip the draw's, and the draw goes on.
-        step(d,pocket,1);
-        tracked[1]=false;
-        for(int i=0;i<20;++i)step(d,Pose{},1);
-        check(d.hands()==2u,"a hand lost behind the back let go of its grip");
-        tracked[1]=true;
-        check(step(d,front,1)&&d.draws()==2,"a draw through a hand lost behind the back did not open the phone");
-        step(d,front,0);
-        // A press with the hand just lost begins a draw where it was last seen.
-        step(d,pocket,0);
-        tracked[1]=false;
-        check(!step(d,Pose{},1)&&d.hands()==2u,"a press with the hand lost at the pocket began no draw");
-        tracked[1]=true;
-        check(step(d,front,1)&&d.draws()==3,"a draw begun with the hand lost did not open the phone");
-        step(d,front,0);
-        // A hand the headset loses at the side of the hip on its way back (the cameras see no further), squeezed
-        // a moment later: carried on its way, it is at the pocket (October 25: "I cannot find the damn phone").
-        {
-            PocketDraw way;
-            const Vec3 from{.25f,.95f,-.1f};
-            // 1.2 m/s back, lost 10 cm behind the eyes: short of `behind` where it was last seen.
-            for(int i=0;i<=15;++i)step(way,Pose{from+Vec3{0,0,.2f}*(i/15.f),{}},0);
-            tracked[1]=false;
-            for(int i=0;i<12;++i)step(way,Pose{},0);
-            check(!step(way,Pose{},1)&&way.hands()==2u,"a hand lost on its way to the pocket began no draw");
-            tracked[1]=true;
-            check(step(way,front,1)&&way.draws()==1,"a draw begun on the way to the pocket did not open the phone");
-            step(way,front,0);
-            // Lost while hanging still at the side, it stays there: a squeeze is a web's.
-            PocketDraw still;
-            for(int i=0;i<20;++i)step(still,side,0);
-            tracked[1]=false;
-            for(int i=0;i<12;++i)step(still,Pose{},0);
-            check(!step(still,Pose{},1)&&still.hands()==0u,"a hand lost hanging at the side began a draw");
-            tracked[1]=true;
-        }
-        // The head turned 60 degrees to look at the pocket for a second, the eyes going round the neck with it
-        // (October 25: "it's based on where your head is pointing"): the pocket stays the body's.
-        {
-            const Vec3 neck{0,1.6f,.09f};
-            const auto eyes=[&](Quat q){return Pose{neck+q.rotate({0,PocketDraw::neckUp,-PocketDraw::neckAhead}),q};};
-            const Pose looking=eyes(Quat::yaw(-1.05f)),nodding=eyes(Quat::around({1,0,0},-1.05f));
-            check(length(eyes(Quat{}).position-head.position)<1e-4f,"the test's neck is not under the eyes");
-            const Pose rightPocket{{.15f,.9f,.2f},{}};
-            PocketDraw turned;
-            for(int i=0;i<30;++i)step(turned,side,0);
-            for(int i=0;i<90;++i)step(turned,side,0,1.f/90,true,&looking);
-            check(!step(turned,rightPocket,1,1.f/90,true,&looking)&&turned.hands()==2u,
-                  "a look at the pocket turned it away from the hand");
-            check(step(turned,front,1)&&turned.draws()==1,"the draw begun with the head turned did not open");
-            step(turned,front,0);
-            // A nod, the eyes going forward and down, does not put the hand hanging at the side in the pocket.
-            PocketDraw nod;
-            for(int i=0;i<30;++i)step(nod,side,0);
-            for(int i=0;i<30;++i)step(nod,side,0,1.f/90,true,&nodding);
-            check(!step(nod,side,1,1.f/90,true,&nodding)&&nod.hands()==0u,"a nod made a pocket of the side");
-            // The report's count: that squeeze, not behind the neck, its hand and the look.
-            const auto& s=nod.stats();
-            check(s.presses==1&&s.begun==0&&s.missed[PocketDraw::ahead]==1&&s.lastMiss==PocketDraw::ahead,
-                  "the miss at the side was not counted as not behind");
-            check(std::abs(s.lastHand.x-.25f)<.01f&&std::abs(s.lastHand.z-.01f)<.005f&&s.lastLost==0,
-                  "the miss's hand is not where it was from the neck");
-            const auto& t=turned.stats();
-            check(t.presses==1&&t.begun==1&&t.draws==1&&t.lastMiss==PocketDraw::misses,"the draw was not counted");
-            check(t.lastLook==0,"a draw left a look in the report");
-            // A squeeze up in front (a web's) is no press for the phone; one with the hand lost long is, as lost.
-            PocketDraw counted;
-            step(counted,front,1);
-            step(counted,front,0);
-            tracked[1]=false;
-            for(int i=0;i<60;++i)step(counted,Pose{},0);
-            step(counted,Pose{},1);
-            tracked[1]=true;
-            check(counted.stats().presses==1&&counted.stats().missed[PocketDraw::lost]==1,
-                  "a squeeze in front was counted, or one with the hand lost long was not");
-            // Too slow and let go of are counted too.
-            step(counted,front,0);
-            step(counted,pocket,1);
-            step(counted,pocket,0);
-            step(counted,pocket,1);
-            for(int i=0;i<20;++i)step(counted,pocket,1,.1f);
-            check(counted.stats().letGo==1&&counted.stats().tooSlow==1,"the draws that ended were not counted");
-        }
-        // A game hitch on the way (a moment out of play) does not end a draw.
-        step(d,pocket,1);
-        step(d,pocket,1,1.f/90,false);
-        step(d,pocket,1,1.f/90,false);
-        check(step(d,front,1)&&d.draws()==4,"a hitch on the way ended the draw");
-        step(d,front,0);
-        check(d.drewWith()==1,"the right hand's draw was not the right hand's");
-        const auto f=phoneFrameAt(head,front.position);
-        check(dot(f.out,normalized(head.position-f.centre))>.999f&&f.up.y>.5f&&std::abs(dot(f.up,f.out))<1e-4f,
-              "the held phone does not face the eyes with its top up");
-        check(dot(f.right,cross(f.up,f.out))>.999f&&f.right.x>.5f,
-              "the held phone's right is not the viewer's right: it would show its back");
-        check(length(f.centre-front.position)<.1f,"the held phone is not at the hand");
-    });
     test("phone hold: a control changes hands only once let go of, so nothing sees a press nobody made", [] {
         PhoneHold hold;
         XrFrame f, mine;
@@ -7018,202 +6875,6 @@ int main() {
         appendPhoneTouch(v, phone, t.update(phone, 16.f / 9, at(.5f, .5f, .02f), true), at(.5f, .5f, .02f),
                          Pose{{0, 1.6f, 0}, {}});
         check(!v.empty() && v.size() % 3 == 0, "the phone's body and the touch marks drew");
-    });
-    test("phone: a draw opens it in the hand once VR shows play, where it stays until B puts it away", [] {
-        Phone p;
-        const Pose head{{0,1.7f,0},{}};
-        Pose grips[2]{Pose{{-.2f,1.1f,-.3f},{}},Pose{{.2f,1.1f,-.3f},{}}};
-        bool tracked[2]{true,true};
-        const float frame=1.f/90;
-        check(!p.update(frame,false,head,grips,tracked,1,grips[1].position)&&!p.open(),
-              "a draw opened the phone outside VR play");
-        check(!p.update(frame,true,head,grips,tracked)&&!p.open(),"the phone opened with no draw");
-        // Drawn from a pocket it opens in the drawing hand and follows it; a hand lost leaves it where it was.
-        check(p.update(frame,true,head,grips,tracked,1,grips[1].position)&&p.open()&&p.live()&&p.hand()==1,
-              "a draw did not open the phone in its hand");
-        grips[1].position={.25f,1.2f,-.35f};
-        p.update(frame,true,head,grips,tracked);
-        const Vec3 held=p.place().centre;
-        check(length(held-phoneFrameAt(head,grips[1].position).centre)<1e-4f,"the drawn phone did not follow its hand");
-        tracked[1]=false;
-        grips[1].position={};
-        p.update(frame,true,head,grips,tracked);
-        check(length(p.place().centre-held)<1e-4f,"a hand the headset lost carried the phone off");
-        // A draw with the phone out takes nothing from the hand holding it.
-        check(!p.update(frame,true,head,grips,tracked,0,grips[0].position)&&p.hand()==1,
-              "a second draw took the phone out of its hand");
-        // Out of play (a pause, a calibration) it is open but not live; back in play, live.
-        p.update(frame,false,head,grips,tracked);
-        check(p.open()&&!p.live(),"out of play the phone stayed live");
-        p.update(frame,true,head,grips,tracked);
-        check(p.live(),"back in play the phone was not live");
-        // B on the home screen puts it away, and the game never sees that B.
-        XrFrame f;
-        p.take(f,0);
-        f=XrFrame{};
-        f.buttons=buttonB;
-        check(p.take(f,0).action==PhoneAction::close&&!p.open()&&!p.live(),"B on the home screen did not put it away");
-        check(!(f.buttons&buttonB),"the B that put the phone away reached the game");
-        // A on CAMERA (up from MUSIC) puts it away too, for the game's camera, and that A reaches nothing either.
-        check(p.update(frame,true,head,grips,tracked,0,grips[0].position)&&p.live(),"the phone did not open again");
-        f=XrFrame{};p.take(f,0);
-        f=XrFrame{};f.hands[1].stickY=1;p.take(f,0);
-        f=XrFrame{};p.take(f,0);
-        f=XrFrame{};f.buttons=buttonA;f.jump=true;
-        check(p.take(f,0).action==PhoneAction::camera&&!p.open()&&!p.live(),"A on CAMERA did not put the phone away");
-        check(!(f.buttons&buttonA)&&!f.jump,"the A that took the game's camera out reached the game as a jump");
-        // So does A on MENU (down from MUSIC), for the game's menu.
-        check(p.update(frame,true,head,grips,tracked,0,grips[0].position)&&p.live(),"the phone did not open a third time");
-        f=XrFrame{};p.take(f,0);
-        f=XrFrame{};f.hands[1].stickY=-1;p.take(f,0);
-        f=XrFrame{};p.take(f,0);
-        f=XrFrame{};f.buttons=buttonA;f.jump=true;
-        check(p.take(f,0).action==PhoneAction::menu&&!p.open()&&!p.live(),"A on MENU did not put the phone away");
-        check(!(f.buttons&buttonA)&&!f.jump,"the A that opened the game's menu reached the game as a jump");
-    });
-    test("phone: home screen apps, MUSIC's buttons, GEAR's scroll; A, B, stick and triggers once per press", [] {
-        PhoneControls c;
-        // Each opening counts everything as held: the press that opened it presses nothing until let go of.
-        c.update(0,0,false,false);
-        c.reset();
-        check(!c.update(0,0,true,false).pressed,"the opening press pressed something");
-        auto e=c.update(0,0,false,false);
-        check(!e.pressed&&!e.x&&!e.y,"nothing happened, yet something stepped");
-        e=c.update(1,.2f,false,false);
-        check(e.x==1&&e.y==0,"right was not a step right");
-        check(!c.update(1,0,false,false).x,"a held stick kept stepping");
-        c.update(0,0,false,false);
-        e=c.update(.1f,-.9f,false,false);
-        check(e.y==-1&&e.x==0,"down was not a step down");
-        c.update(0,0,false,false);
-        check(c.update(0,0,true,false).pressed&&!c.update(0,0,true,false).pressed,"A pressed never, or twice held");
-        check(c.update(0,0,false,true).closed,"B did not count");
-        // The triggers: the left a step down, the right a step up, once per pull; each held
-        // as the phone opens counts nothing.
-        PhoneControls t;
-        t.update(0,0,false,false,0,0);
-        t.reset();
-        check(t.update(0,0,false,false,1,0).volume==0,"a left trigger held as it opened stepped the volume");
-        t.update(0,0,false,false,0,0);
-        t.reset();
-        check(t.update(0,0,false,false,0,1).volume==0,"a right trigger held as it opened stepped the volume");
-        t.update(0,0,false,false,0,0);
-        check(t.update(0,0,false,false,1,0).volume==-1,"the left trigger did not step it down");
-        check(t.update(0,0,false,false,1,0).volume==0,"a held left trigger stepped it again");
-        t.update(0,0,false,false,0,0);
-        check(t.update(0,0,false,false,0,.9f).volume==1,"the right trigger did not step it up");
-        // The screens.
-        PhoneUi ui;
-        ui.reset();
-        using E=PhoneControls::Event;
-        const auto step=[&](E ev,int rows=0){return ui.update(ev,rows);};
-        check(ui.screen()==PhoneScreen::home&&ui.app()==0,"it did not open home, MUSIC picked");
-        step(E{0,-1});
-        check(ui.app()==phoneMenuApp,"down did not pick MENU");
-        // MENU has no screen: A on it is the game's menu, the home screen left as it is.
-        check(step(E{0,0,true})==PhoneAction::menu&&ui.screen()==PhoneScreen::home,
-              "A on MENU did not ask for the game's menu");
-        step(E{0,1});step(E{0,1});
-        check(ui.app()==phoneFnsmApp,"up from MUSIC did not wrap to FNSM APP");
-        check(step(E{0,0,true})==PhoneAction::fnsm&&ui.screen()==PhoneScreen::home,
-              "A on FNSM APP did not ask for the game's app");
-        step(E{0,1});
-        check(ui.app()==2,"up from FNSM APP did not pick GEAR");
-        check(ui.app()==phoneCameraApp,"up from MUSIC did not wrap to CAMERA");
-        // CAMERA has no screen: A on it is the game's camera, the home screen left as it is.
-        check(step(E{0,0,true})==PhoneAction::camera&&ui.screen()==PhoneScreen::home,
-              "A on CAMERA did not ask for the game's camera");
-        step(E{0,1});
-        check(ui.app()==2,"up from CAMERA did not pick GEAR");
-        step(E{0,0,true});
-        check(ui.screen()==PhoneScreen::gear,"A did not open GEAR");
-        step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);
-        check(ui.gearTop()==9-PhoneUi::gearShown,"GEAR scrolled past its last row");
-        step(E{0,1},9);
-        check(ui.gearTop()==9-PhoneUi::gearShown-1,"up did not scroll GEAR back");
-        check(step(E{0,0,false,true})==PhoneAction::none&&ui.screen()==PhoneScreen::home,"B in an app did not go home");
-        step(E{0,1});step(E{0,1});
-        step(E{0,0,true});
-        check(ui.screen()==PhoneScreen::music&&ui.button()==PhoneButton::play,"MUSIC did not open on PLAY");
-        step(E{1});
-        check(step(E{0,0,true})==PhoneAction::next,"right then A did not press NEXT");
-        step(E{0,-1});
-        check(ui.button()==PhoneButton::autoplay&&step(E{0,0,true})==PhoneAction::autoplay,"down did not reach AUTOPLAY");
-        step(E{0,1});
-        check(ui.button()==PhoneButton::play,"up from AUTOPLAY did not go back to PLAY");
-        step(E{0,0,false,true});
-        check(step(E{0,0,false,true})==PhoneAction::close,"B at home did not put the phone away");
-        // The songs' names: the font's letters, accents taken off, and TRACK and its number for none.
-        check(phoneSongName("C:\\Music\\my_song.mp3",0)=="my song","a song's name kept its folder, extension or underscore");
-        check(phoneSongName("Beyonc\xC3\xA9 - Halo.mp3",0)=="Beyonce - Halo","an accented letter was not its letter");
-        check(phoneSongName("Beyonce\xCC\x81.mp3",0)=="Beyonce","a name in NFD kept its accent");
-        check(phoneSongName("Stra\xC3\x9F" "e.mp3",0)=="Strasse"&&phoneSongName("\xC5\x92uvre.wav",0)=="OEuvre",
-              "a joined letter was not spelt out");
-        check(phoneSongName("\xD7\xA9\xD7\x99\xD7\xA8.mp3",2)=="TRACK 3"&&phoneSongName("\xE2\x99\xAB.mp3",0)=="TRACK 1",
-              "a name of nothing drawable is not TRACK and its number");
-        // Each screen draws what it has to show: the same screen showing something else draws otherwise.
-        PhoneView view;
-        view.open=true;
-        view.age=1;
-        const auto drawn=[&](PhoneScreen s,auto&& change){
-            PhoneView v=view;
-            v.screen=s;
-            change(v);
-            std::vector<Vertex> out;
-            appendPhoneScreen(out,v);
-            check(out.size()%3==0,"a screen not in triangles");
-            // The picture stays inside the screen's own size, in its plane.
-            for(const auto& p:out)
-                if(std::abs(p.position.x)>phoneScreenHalfWidth+1e-4f||std::abs(p.position.y)>phoneScreenHalfHeight+1e-4f)
-                    check(false,"the screen's picture ran off the screen");
-            return out.size();
-        };
-        // The body: inside its own box, its face the part of it nearest the eyes.
-        {
-            PhoneView v=view;
-            v.frame={{0,0,-.4f},{1,0,0},{0,1,0},{0,0,1}};
-            std::vector<Vertex> body;
-            appendPhone(body,v,{0,0,0});
-            check(!body.empty()&&body.size()%3==0,"no body, or not in triangles");
-            float nearest=-1;
-            for(const auto& p:body){
-                const Vec3 d=p.position-v.frame.centre;
-                check(std::abs(d.x)<=.0435f+1e-4f&&std::abs(d.y)<=.0855f+1e-4f&&d.z>=-.0062f&&d.z<=.0046f,
-                      "the body left its box");
-                nearest=std::max(nearest,d.z);
-            }
-            near(nearest,.0045f,1e-4f);
-            const auto corners=phoneScreenCorners(v);
-            near(corners[2].x-corners[0].x,2*phoneScreenHalfWidth,1e-5f);
-            near(corners[2].y-corners[0].y,2*phoneScreenHalfHeight,1e-5f);
-            check(corners[0].z-v.frame.centre.z>nearest,"the screen lies under the glass");
-            PhoneView closed=v;
-            closed.open=false;
-            std::vector<Vertex> none;
-            appendPhone(none,closed,{0,0,0});
-            appendPhoneScreen(none,closed);
-            check(none.empty(),"a closed phone was drawn");
-        }
-        const auto nothing=[](PhoneView&){};
-        const auto songs=[](PhoneView& v){
-            v.tracks=2;
-            std::snprintf(v.song,sizeof v.song,"%s","HELLO");
-        };
-        const auto longer=[&](PhoneView& v){
-            songs(v);
-            std::snprintf(v.song,sizeof v.song,"%s","HELLO AGAIN");
-        };
-        check(drawn(PhoneScreen::home,songs)!=drawn(PhoneScreen::home,longer),"the home screen did not show the song");
-        check(drawn(PhoneScreen::music,nothing)!=drawn(PhoneScreen::music,songs),"MUSIC showed no songs");
-        check(drawn(PhoneScreen::music,songs)!=drawn(PhoneScreen::music,longer),"MUSIC did not show the song");
-        check(drawn(PhoneScreen::music,songs)!=drawn(PhoneScreen::music,[&](PhoneView& v){songs(v);v.failed=true;}),
-              "MUSIC did not say a song could not play");
-        check(drawn(PhoneScreen::gear,nothing)!=drawn(PhoneScreen::gear,[](PhoneView& v){
-                  v.gearCount=1;
-                  std::snprintf(v.gear[0].name,sizeof v.gear[0].name,"%s","WEB BOMB");
-                  v.gear[0].most=4;
-              }),
-              "GEAR showed no gadgets");
     });
     test("sky anchors respect body occlusion and later world obstruction", [] {
         struct Occluded : TestWorld {
@@ -20211,6 +19872,8 @@ int main() {
                 const Vec3 hip=b.at(pose,b.rig.legs[i].upper),foot=b.at(pose,b.rig.legs[i].foot);
                 check(std::fabs(foot.x-hip.x)<.12f,"a wall's foot is not under its hip");
             }
+        }
+    });
     test("body: a dive's legs kick out at him from the hips, whatever the game's air pose", [] {
         for(const bool odd:{false,true}){
             auto b=testBody(odd);
@@ -21947,267 +21610,6 @@ int main() {
               "NaN assist accepted");
         check(!bad([](ShooterConfig&) {}), "defaults rejected");
     });
-    test("VR settings tab: seven sections, every setting once, a list's choices one per step", [] {
-        using namespace vr_settings;
-        const auto& all = rows();
-        check(all[5].item == Item::smartAnchor && all[4].item == Item::airWebs,
-              "smart anchor missing under webs holding in open air");
-        check(all[6].item == Item::webRange && all[7].item == Item::webSpeed && all[6].choices.size() == 9,
-              "web range and web speed missing under the smart anchor");
-        check(all[11].item == Item::elasticWeb && all[10].item == Item::weight && all[11].choices.size() == 4,
-              "elastic web missing under the weight");
-        check(all[12].item == Item::softRelease && all[12].choices.size() == 4,
-              "soft release missing under the elastic web");
-        check(all[13].item == Item::swingAssist && all[13].choices.empty(),
-              "swing assist missing under the soft release");
-        check(all[15].item == Item::slingshotSpeed && all[14].item == Item::webSlingshot,
-              "slingshot speed missing under the web slingshot");
-        check(all[16].item == Item::betterClimbing && all[17].item == Item::twoHandZip &&
-                  all[18].item == Item::ropeSteering,
-              "the hand gestures missing under better climbing");
-        check(all[14].item == Item::webSlingshot, "slingshot missing under SWINGING");
-        check(all[16].item == Item::betterClimbing, "better climbing missing under SWINGING");
-        uint64_t seen = 0;
-        unsigned headings = 0;
-        static_assert(static_cast<unsigned>(lastItem) < 63, "more settings than the test's bits");
-        for (const auto& row : all) {
-            check(row.title && *row.title, "a row without a title");
-            for (const char* c = row.title; *c; ++c)
-                check(!(*c >= 'a' && *c <= 'z'), "a title not in upper case, as the game's own");
-            if (row.item == Item::none) {
-                check(!row.help && row.choices.empty(), "a heading with help or choices");
-                ++headings;
-                continue;
-            }
-            const uint64_t bit = uint64_t{1} << static_cast<unsigned>(row.item);
-            check(!(seen & bit), "a setting twice");
-            seen |= bit;
-            check(row.help && std::strlen(row.help) <= 80, "help missing, or too long for the game's column");
-            check(row.choices.size() <= maxChoices, "more choices than the tab shows");
-            for (const char* c : row.choices)
-                check(c && *c, "an empty choice");
-        }
-        // The sections (the player, October 19: "sort the options in spidy vr
-        // settings ingame into nice sections"), each with a setting in the tab;
-        // MilesVR's VENOM after SWINGING.
-        const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},     {5, "SWINGING"}, {8, "VENOM"},
-                                                           {11, "COMFORT"}, {14, "HAPTICS"}, {21, "DISPLAY"},
-                                                           {29, "BODY"},    {31, "EXPERIMENTAL"}};
-        // settings ingame into nice sections"), each with a setting in the tab.
-        const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},     {8, "SWINGING"}, {19, "COMFORT"},
-                                                           {22, "HAPTICS"}, {30, "DISPLAY"}, {40, "BODY"},
-                                                           {44, "EXPERIMENTAL"}};
-        check(headings == std::size(sections),
-              "the sections: webs, swinging, venom, comfort, haptics, display, body, experimental");
-        for (const auto& [at, title] : sections) {
-            check(all[at].item == Item::none && std::strcmp(all[at].title, title) == 0, "a section out of place");
-            size_t next = at + 1;
-            while (next < all.size() && all[next].place != Place::tab)
-                ++next;
-            check(next < all.size() && all[next].item != Item::none, "a section with no setting in the tab");
-        }
-        // Miles's venom (MilesVR): the hand it charges in, RIGHT or LEFT, as the launcher's Venom punch hand.
-        check(all[9].item == Item::venomHand && all[9].choices.size() == 2 &&
-                  std::strcmp(all[9].choices[0], "RIGHT") == 0 && std::strcmp(all[9].choices[1], "LEFT") == 0,
-              "the venom hand under VENOM: RIGHT, or LEFT");
-        // And the button it charges on, GRIP or TRIGGER, as the launcher's Venom button.
-        check(all[10].item == Item::venomButton && all[10].choices.size() == 2 &&
-                  std::strcmp(all[10].choices[0], "GRIP") == 0 && std::strcmp(all[10].choices[1], "TRIGGER") == 0,
-              "the venom button under the venom hand: GRIP, or TRIGGER");
-        Values v;
-        check(choice(Item::venomButton, v) == 1 && v.venomTrigger && !v.triggerWebs,
-              "by default the venom on the trigger, the webs on the grip");
-        check(choose(Item::webButton, 1, v) && v.triggerWebs && !v.venomTrigger && choice(Item::venomButton, v) == 0,
-              "WEB BUTTON: TRIGGER moves the venom to the grip");
-        check(choose(Item::venomButton, 1, v) && v.venomTrigger && !v.triggerWebs,
-              "VENOM BUTTON: TRIGGER moves the webs to the grip");
-        check(all[32].item == Item::flips && all[32].choices.empty() && std::strcmp(all[31].title, "EXPERIMENTAL") == 0,
-              "the flips: a switch under EXPERIMENTAL");
-        check(all[33].item == Item::flipSpeed && all[33].choices.size() == std::size(flipSpeeds),
-              "the flip speed under the flips");
-        check(all[34].item == Item::handClimb && all[34].choices.empty() && all[35].item == Item::wallDistance &&
-                  all[35].choices.size() == std::size(wallDistances),
-              "hand wall climbing, a switch, and its camera distance under the flips");
-        const Item realistic[] = {Item::realisticFlips,        Item::automaticStrength,    Item::automaticSpeed,
-                                  Item::automaticMinimumSpeed, Item::automaticReleaseFlip, Item::automaticResponse,
-                                  Item::automaticHandStrength, Item::automaticFalloff,     Item::automaticHandThreshold,
-                                  Item::automaticAirBrake};
-        check(all.size() == 36 + std::size(realistic), "the realistic flips' rows are not the last");
-        for (size_t i = 0; i < std::size(realistic); ++i)
-            check(all[36 + i].item == realistic[i], "the realistic flips' rows out of order");
-        check(std::strcmp(all[36].title, "REALISTIC FLIPS") == 0 && all[36].choices.empty(),
-        // BODY: the calibration, then your height and seated play (the user, October 23: "add proper height
-        // calibration or override for seated mode").
-        check(all[41].item == Item::calibrate && all[42].item == Item::height &&
-                  all[42].choices.size() == std::size(heights) && std::strcmp(all[42].choices[0], "AUTO") == 0 &&
-                  std::strcmp(all[42].choices[8], "190 CM") == 0 && all[43].item == Item::seated &&
-                  all[43].choices.empty(),
-              "BODY: CALIBRATE BODY, then HEIGHT (AUTO, 150 to 190 cm), then SEATED, a switch");
-        check(all[45].item == Item::flips && all[45].choices.empty() && std::strcmp(all[44].title, "EXPERIMENTAL") == 0,
-              "the flips: a switch under EXPERIMENTAL");
-        check(all[47].item == Item::flipSpeed && all[47].choices.size() == std::size(flipSpeeds),
-              "the flip speed under the flips");
-        check(all[48].item == Item::handClimb && all[48].choices.empty(),
-              "hand wall climbing switch under the flips");
-        const Item realistic[] = {Item::realisticFlips,        Item::automaticStrength,    Item::automaticSpeed,
-                                  Item::automaticMinimumSpeed, Item::automaticReleaseFlip, Item::automaticResponse,
-                                  Item::automaticHandStrength, Item::automaticFalloff,     Item::automaticHandThreshold,
-                                  Item::automaticAirBrake,     Item::automaticCombat};
-        check(all.size() == 51 + std::size(realistic), "the realistic flips' rows are not the last");
-        for (size_t i = 0; i < std::size(realistic); ++i)
-            check(all[51 + i].item == realistic[i], "the realistic flips' rows out of order");
-        check(std::strcmp(all[51].title, "REALISTIC FLIPS") == 0 && all[51].choices.empty(),
-              "realistic flips: a switch, first of its rows");
-        check(all[46].item == Item::controlledFlips && all[49].item == Item::wallRunCameraTilt, "custom switches misplaced");
-        // EYE AIM, before the realistic flips: what the eyes aim, off by default (only a headset that tracks
-        // the eyes can).
-        check(all[50].item == Item::eyeAim && std::strcmp(all[50].title, "EYE AIM") == 0 &&
-                  all[50].choices.size() == 4 && std::strcmp(all[50].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[50].choices[1], "WEB BALLS") == 0 && std::strcmp(all[50].choices[2], "ZIPS") == 0 &&
-                  std::strcmp(all[50].choices[3], "BOTH") == 0 && all[50].place == Place::tab,
-              "EYE AIM: OFF, WEB BALLS, ZIPS, BOTH, in the tab before the realistic flips");
-        {
-            Values v;
-            check(v.eyeAim == 0 && defaultChoice(Item::eyeAim) == 0, "eye aim on by default");
-            check(choose(Item::eyeAim, 3, v) && v.eyeAim == (eyeAimShots | eyeAimZips) && choice(Item::eyeAim, v) == 3,
-                  "BOTH is web balls and zips");
-            check(choose(Item::eyeAim, 2, v) && v.eyeAim == eyeAimZips && choose(Item::eyeAim, 1, v) &&
-                      v.eyeAim == eyeAimShots && !choose(Item::eyeAim, 4, v),
-                  "ZIPS, WEB BALLS, and nothing past BOTH");
-            check(tabOnlyText({}).find("eye_aim=0\n") != std::string::npos &&
-                      withTabOnly({}, "eye_aim=2\n").eyeAim == eyeAimZips && withTabOnly({}, "eye_aim=9\n").eyeAim == 3,
-                  "spidy_vr.ini keeps EYE AIM as eye_aim, within its range");
-        }
-
-        // The wall view has no row of its own (the player, October 14: "i dont
-        // get why we have a wall run and a wall stand options where wall run
-        // actually controlls wheter i stand or crawl", then "also merge the
-        // two options"), nor the wall camera's distance (October 24); since
-        // October 25 neither is a setting at all.
-        for (const auto& row : all)
-            check(row.item != Item::standOnWalls, "the wall view still has a row of its own");
-        check(all[23].item == Item::screenSize && all[25].item == Item::hud && all[25].choices.size() == 4 &&
-                  std::strcmp(all[25].choices[0], "OFF") == 0 && std::strcmp(all[25].choices[3], "LARGE") == 0,
-              "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
-        check(all[24].item == Item::screenDepth && std::strcmp(all[24].title, "GAME SCREEN 3D") == 0 &&
-                  all[24].choices.size() == 4 && std::strcmp(all[24].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[24].choices[3], "HIGH") == 0,
-              "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
-        // The marks' look after the HUD (the player, October 21: "an optional alternative set of our custom
-        // ingame vr ui in more scifi techy style like the base game ui"): the printed ones first.
-        check(all[26].item == Item::uiStyle && std::strcmp(all[26].title, "UI STYLE") == 0 &&
-                  all[26].choices.size() == 2 && std::strcmp(all[26].choices[0], "COMIC") == 0 &&
-                  std::strcmp(all[26].choices[1], "TECH") == 0,
-              "the UI style after the HUD: COMIC, or TECH");
-        check(all[27].item == Item::nearClip && std::strcmp(all[27].title, "NEAR CLIP") == 0 &&
-                  all[27].choices.size() == std::size(nearClips) && std::strcmp(all[27].choices[6], "10 CM") == 0,
-              "the near clip under the UI style: 1 to 10 cm");
-        check(all[28].item == Item::recordingFov && std::strcmp(all[28].title, "RECORDING FOV") == 0 &&
-                  all[28].choices.size() == std::size(recording_fov::choices) &&
-                  std::strcmp(all[28].choices[0], "OFF") == 0 && std::strcmp(all[28].choices[3], "150\xC2\xB0") == 0,
-              "the recording FOV last under DISPLAY: OFF, then 130 to 150 degrees");
-        // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
-        for (const auto& row : all)
-            check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
-        check(all[22].item == Item::view && std::strcmp(all[22].title, "VR VIEW") == 0 && all[22].choices.size() == 2 &&
-                  std::strcmp(all[22].choices[0], "VR") == 0 && std::strcmp(all[22].choices[1], "GAME SCREEN") == 0,
-            check(std::strcmp(row.title, "STAND ON WALLS") != 0 &&
-                      std::strcmp(row.title, "WALL CAMERA DISTANCE") != 0,
-                  "the wall view or the wall camera's distance has a row again");
-        check(all[32].item == Item::screenSize && all[34].item == Item::hud && all[34].choices.size() == 4 &&
-                  std::strcmp(all[34].choices[0], "OFF") == 0 && std::strcmp(all[34].choices[3], "LARGE") == 0,
-              "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
-        check(all[33].item == Item::screenDepth && std::strcmp(all[33].title, "GAME SCREEN 3D") == 0 &&
-                  all[33].choices.size() == 4 && std::strcmp(all[33].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[33].choices[3], "HIGH") == 0,
-              "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
-        // The marks' look after the HUD (the player, October 21: "an optional alternative set of our custom
-        // ingame vr ui in more scifi techy style like the base game ui"): the printed ones first.
-        check(all[35].item == Item::uiStyle && std::strcmp(all[35].title, "UI STYLE") == 0 &&
-                  all[35].choices.size() == 2 && std::strcmp(all[35].choices[0], "COMIC") == 0 &&
-                  std::strcmp(all[35].choices[1], "TECH") == 0,
-              "the UI style after the HUD: COMIC, or TECH");
-        check(all[37].item == Item::nearClip && std::strcmp(all[37].title, "NEAR CLIP") == 0 &&
-                  all[37].choices.size() == std::size(nearClips) && std::strcmp(all[37].choices[6], "10 CM") == 0,
-              "the near clip under the UI style: 1 to 10 cm");
-        check(all[38].item == Item::recordingFov && std::strcmp(all[38].title, "RECORDING FOV") == 0 &&
-                  all[38].choices.size() == std::size(recording_fov::choices) &&
-                  std::strcmp(all[38].choices[0], "OFF") == 0 &&
-                  std::strcmp(all[38].choices[1], "70\xC2\xB0") == 0 &&
-                  std::strcmp(all[38].choices[8], "160\xC2\xB0") == 0,
-              "the recording FOV under DISPLAY: OFF, then 70 to 160 degrees");
-        check(all[39].item == Item::recordingSmoothing && all[39].choices.size() == 9 &&
-                  std::strcmp(all[39].choices[0], "OFF") == 0,
-              "the recording smoothing last under DISPLAY: OFF, then 10 to 100");
-        // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
-        for (const auto& row : all)
-            check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
-        check(all[31].item == Item::view && std::strcmp(all[31].title, "VR VIEW") == 0 && all[31].choices.size() == 2 &&
-                  std::strcmp(all[31].choices[0], "VR") == 0 && std::strcmp(all[31].choices[1], "GAME SCREEN") == 0,
-              "the view above the game screen's rows: VR, or GAME SCREEN");
-        // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is; the realistic
-        // flips' thresholds and how a spin builds and dies away are the launcher's alone (the user,
-        // October 25: "cleanup the redundant"). The other 43 rows are the tab's.
-        for (const auto& row : all) {
-            const bool launcherOnly =
-                row.item == Item::automaticMinimumSpeed || row.item == Item::automaticResponse ||
-                row.item == Item::automaticFalloff || row.item == Item::automaticHandThreshold;
-            check(row.place == (row.item == Item::view ? Place::page
-                                : launcherOnly           ? Place::launcher
-                                                         : Place::tab),
-                  "a row in the wrong place");
-        }
-        check(std::count_if(all.begin(), all.end(), [](const Row& r) { return r.place == Place::tab; }) == 57,
-              "the tab's own rows");
-        check(all[1].item == Item::webStyle && std::strcmp(all[1].title, "WEB STYLE") == 0 &&
-                  all[1].choices.size() == 2 && std::strcmp(all[1].choices[0], "REALISTIC") == 0 &&
-                  std::strcmp(all[1].choices[1], "ARCADE") == 0,
-              "the web style first under WEBS: REALISTIC, or ARCADE");
-        check(all[2].item == Item::webButton && all[2].choices.size() == 2 &&
-                  std::strcmp(all[2].choices[0], "GRIP") == 0 && std::strcmp(all[2].choices[1], "TRIGGER") == 0,
-              "the web button under the web style: GRIP, or TRIGGER");
-        check(all[3].item == Item::aimMarkers && all[4].item == Item::airWebs, "the aim markers, then the air webs");
-        check(all[6].item == Item::swingSpeed && all[7].item == Item::weight, "SWINGING: the swing speed, the weight");
-        check(all[12].item == Item::snapTurn && all[13].item == Item::smoothTurn, "COMFORT: snap and smooth turning");
-        // HAPTICS (October 20): the controllers' vibration, the bHaptics level and its four groups' switches.
-        check(all[15].item == Item::haptics && all[16].item == Item::bodyHaptics &&
-                  std::strcmp(all[16].title, "BODY HAPTICS") == 0 && all[17].item == Item::hapticWebs &&
-                  all[18].item == Item::hapticWind && all[19].item == Item::hapticCombat &&
-                  all[20].item == Item::hapticMovement && all[17].choices.empty() && all[20].choices.empty(),
-              "HAPTICS: the vibration, body haptics, then the web, wind, combat and movement switches");
-        check(all[30].item == Item::calibrate && all[30].choices.size() == 2 &&
-                  std::strcmp(all[30].choices[1], "ON RESUME") == 0,
-        check(all[9].item == Item::swingSpeed && all[10].item == Item::weight, "SWINGING: the swing speed, the weight");
-        check(all[20].item == Item::snapTurn && all[21].item == Item::smoothTurn, "COMFORT: snap and smooth turning");
-        // HAPTICS (October 20): the controllers' vibration, the bHaptics level and its four groups' switches.
-        check(all[24].item == Item::blowSounds && std::strcmp(all[24].title, "BLOW SOUNDS") == 0 &&
-                  all[24].choices.size() == 3 && std::strcmp(all[24].choices[0], "GAME") == 0 &&
-                  std::strcmp(all[24].choices[2], "OFF") == 0,
-              "BLOW SOUNDS under the vibration: GAME, SPIDY or OFF");
-        check(all[23].item == Item::haptics && all[25].item == Item::bodyHaptics &&
-                  std::strcmp(all[25].title, "BODY HAPTICS") == 0 && all[26].item == Item::hapticWebs &&
-                  all[27].item == Item::hapticWind && all[28].item == Item::hapticCombat &&
-                  all[29].item == Item::hapticMovement && all[26].choices.empty() && all[29].choices.empty(),
-              "HAPTICS: the vibration, body haptics, then the web, wind, combat and movement switches");
-        check(all[41].item == Item::calibrate && all[41].choices.size() == 2 &&
-                  std::strcmp(all[41].choices[1], "ON RESUME") == 0,
-              "the body's calibration: NO, or ON RESUME");
-        // Every setting has a row.
-        constexpr uint64_t everySetting = (uint64_t{2} << static_cast<unsigned>(lastItem)) - 2;
-        check(seen == everySetting, "a setting missing");
-        auto choicesOf = [&](Item item) {
-            return std::find_if(all.begin(), all.end(), [&](const Row& r) { return r.item == item; })->choices.size();
-        };
-        check(choicesOf(Item::swingSpeed) == std::size(swingSpeeds) && choicesOf(Item::snapTurn) == std::size(snapTurns) &&
-                  choicesOf(Item::smoothTurn) == std::size(smoothTurns) &&
-                  choicesOf(Item::haptics) == std::size(hapticLevels) &&
-                  choicesOf(Item::bodyHaptics) == std::size(hapticLevels) && choicesOf(Item::screenSize) == 3 &&
-                  choicesOf(Item::weight) == std::size(weights) &&
-                  choicesOf(Item::recordingFov) == std::size(recording_fov::choices) &&
-                  choicesOf(Item::airWebs) == 0 && choicesOf(Item::aimMarkers) == 0,
-              "lists: one choice per step; switches: the game's own ON and OFF");
-        check(choicesOf(Item::calibrate) == 2, "the calibration's switch names its two choices");
-    });
     test("combat visuals choice persists without disabling punching or web aiming", [] {
         using namespace vr_settings;
         Values v;
@@ -22413,6 +21815,35 @@ int main() {
         triggers[1] = 1;
         check(!toggle.update(.01f, true, 0, grips, tracked, triggers) && toggle.on(), "a pull out of reach: nothing");
     });
+    test("wrist menu: MUSIC's buttons work the player, GEAR's FNSM APP opens the game's app", [] {
+        using namespace wrist_hud;
+        const auto press = [](int page, Control c) {
+            const Spot top = controlSpot(page, c, 0, 1);
+            check(top.found, shortName(c));
+            const float scroll = clampScroll(page, -top.v, 1);
+            const Spot at = controlSpot(page, c, scroll, 1);
+            Menu menu;
+            menu.setPage(page);
+            menu.setScroll(page, scroll, 1);
+            Settings s;
+            Menu::Input in;
+            in.active = true;
+            in.pointer.hit = true;
+            in.pointer.u = at.u;
+            in.pointer.v = at.v;
+            in.trigger = .2f;
+            menu.update(in, s);
+            in.trigger = 1;
+            return menu.update(in, s);
+        };
+        using M = Menu::Result::Music;
+        check(press(musicPage, Control::musicPrevious).music == M::previous, "previous");
+        check(press(musicPage, Control::musicPlay).music == M::toggle, "play / pause");
+        check(press(musicPage, Control::musicNext).music == M::next, "next");
+        check(press(musicPage, Control::musicAutoplay).music == M::autoplay, "autoplay");
+        check(press(gearPage, Control::fnsmApp).fnsm, "FNSM APP");
+        check(std::string(pageName(musicPage)) == "MUSIC" && std::string(pageName(gearPage)) == "GEAR", "names");
+    });
     test("wrist menu: the panel draws on every page within its bounds", [] {
         using namespace wrist_hud;
         for (int page = 0; page < pages; ++page) {
@@ -22561,11 +21992,6 @@ int main() {
                   v.venomLeftHand && !choose(Item::venomHand, 2, v) && choose(Item::venomHand, 0, v) &&
                   !v.venomLeftHand,
               "the venom hand: RIGHT by default, LEFT the other choice");
-        check(defaults.standOnWalls && choice(Item::standOnWalls, defaults) == 1 &&
-                  defaultChoice(Item::standOnWalls) == 1 && choose(Item::standOnWalls, 0, v) && !v.standOnWalls &&
-                  !choose(Item::standOnWalls, 0, v) && choose(Item::standOnWalls, 1, v) && v.standOnWalls,
-              "standing on walls: ON by default, a switch");
-        check(defaults.standOnWalls, "standing on walls: on unless run_game_vr.py says otherwise");
         check(!defaults.triggerWebs && choice(Item::webButton, defaults) == 0 && defaultChoice(Item::webButton) == 0 &&
                   choose(Item::webButton, 1, v) && v.triggerWebs && choice(Item::webButton, v) == 1 &&
                   !choose(Item::webButton, 1, v) && !choose(Item::webButton, 2, v),

@@ -158,7 +158,7 @@ constexpr float scrollbarU = (scrollbarU0 + scrollbarU1) / 2, scrollTrackTop = v
 
 bool slider(Control c) {
     return c == Control::history || c == Control::reach || c == Control::monitor || c == Control::sharpen ||
-           c == Control::hudHeight || c == Control::hudScale || c == Control::hudText;
+           c == Control::hudHeight || c == Control::hudScale || c == Control::hudText || c == Control::musicVolume;
 }
 bool toggle(Control c) {
     return c == Control::aa || c == Control::eyeTest;
@@ -198,6 +198,10 @@ const char* labelOf(Control c) {
         return "COLOR THEME";
     case Control::hudTextColor:
         return "TEXT COLOR";
+    case Control::musicVolume:
+        return "VOLUME";
+    case Control::musicAutoplay:
+        return "AUTOPLAY";
     default:
         return "";
     }
@@ -236,7 +240,7 @@ struct Help {
     float height = helpHeight, pitch = helpPitch;
     std::vector<std::string> lines;
 };
-enum class Kind : uint8_t { title, fps, fpsStats, slider, toggle, cycle, vr, section, footer };
+enum class Kind : uint8_t { title, fps, fpsStats, slider, toggle, cycle, vr, section, footer, song, transport, gear, wide };
 struct Item {
     Kind kind = Kind::title;
     Control control = Control::none;
@@ -374,6 +378,57 @@ Layout build(int page, float k) {
             cycleItem(Kind::vr, vrControl(r), panelText(row.title ? row.title : ""), row.help);
         }
         footerItem(scrollFooter);
+    } else if (page == musicPage) {
+        // The song and where it is in the list, then the player's buttons.
+        Item g = itemOf(Kind::song);
+        g.h = .0052f * k;
+        g.v = c - gapV - g.h;
+        g.h2 = .0040f * k;
+        g.v2 = g.v - .003f * k - g.h2;
+        c = g.v2;
+        l.items.push_back(std::move(g));
+        {
+            const Control row[3] = {Control::musicPrevious, Control::musicPlay, Control::musicNext};
+            const float space = .004f, w = (trackRight - trackLeft - 2 * space) / 3;
+            const float th = std::max(.020f * k, .016f), top = c - gapV;
+            for (int i = 0; i < 3; ++i) {
+                Item b = itemOf(Kind::transport, row[i]);
+                const float u0 = trackLeft + static_cast<float>(i) * (w + space);
+                b.box = {row[i], u0, top - th, u0 + w, top};
+                l.items.push_back(std::move(b));
+            }
+            c = top - th;
+            helpUnder("Previous song, play or pause, next song. Songs: the Music folder beside the launcher.",
+                      l.items.back().help);
+        }
+        toggleItem(Control::musicAutoplay);
+        sliderItem(Control::musicVolume);
+        footerItem(scrollFooter);
+    } else if (page == gearPage) {
+        // A row per gadget: its name, its charges, the equipped one marked.
+        const float rh = std::max(.0115f * k, .0095f);
+        for (int i = 0; i < gearRows; ++i) {
+            Item r = itemOf(Kind::gear);
+            r.track = static_cast<float>(i); // which gadget
+            r.box = {Control::none, trackLeft, c - gapV * .5f - rh, trackRight, c - gapV * .5f};
+            r.h = std::min(.0042f * k, rh * .55f);
+            c = r.box.v0;
+            l.items.push_back(std::move(r));
+        }
+        Item h = itemOf(Kind::section);
+        h.text = "APPS";
+        h.track = c - gapV;
+        h.h = fittedHeight(h.text, headingHeight * k, trackRight - trackLeft);
+        h.v = h.track - .0035f * k - h.h;
+        c = h.v;
+        l.items.push_back(std::move(h));
+        Item f = itemOf(Kind::wide, Control::fnsmApp);
+        f.text = "FNSM APP";
+        f.box = {Control::fnsmApp, trackLeft, c - gapV - .022f * k, trackRight, c - gapV};
+        c = f.box.v0;
+        helpUnder(helpText(Control::fnsmApp), f.help);
+        l.items.push_back(std::move(f));
+        footerItem(scrollFooter);
     } else if (page == 1) {
         toggleItem(Control::aa);
         for (const Control control : {Control::history, Control::sharpen, Control::reach, Control::monitor})
@@ -434,6 +489,17 @@ Layout build(int page, float k) {
             break;
         case Kind::footer:
             centred(it.text, it.v, it.h, "the footer");
+            break;
+        case Kind::song:
+            area(trackLeft, it.v, trackRight, it.v + it.h, "the song");
+            area(trackLeft, it.v2, trackRight, it.v2 + it.h2, "the song's number");
+            break;
+        case Kind::transport:
+        case Kind::wide:
+            area(it.box.u0, it.box.v0, it.box.u1, it.box.v1, "a button");
+            break;
+        case Kind::gear:
+            area(it.box.u0, it.box.v0 + .0005f, it.box.u1, it.box.v1 - .0005f, "a gadget's row");
             break;
         }
         help(it.help);
@@ -616,7 +682,9 @@ void content(const Painter& p, const Layout& l, const View& view) {
             p.text(it.text, trackLeft, it.v, it.h, lit ? p.c.text : p.c.label);
             const int row = vrRow(it.control);
             const std::string value =
-                it.kind == Kind::vr ? vrValueText(row, view.vr) : valueText(it.control, view.settings[it.control]);
+                it.kind == Kind::vr                     ? vrValueText(row, view.vr)
+                : it.control == Control::musicAutoplay ? std::string(view.music.autoplay ? "ON" : "OFF")
+                                                         : valueText(it.control, view.settings[it.control]);
             button(p, it.box, value, view, k);
             // A list steps both ways; a switch just flips.
             if (it.kind == Kind::cycle || (row >= 0 && !vr_settings::rows()[static_cast<size_t>(row)].choices.empty()))
@@ -629,6 +697,67 @@ void content(const Painter& p, const Layout& l, const View& view) {
             break;
         case Kind::footer:
             p.text(it.text, -textWidth(it.text, it.h) / 2, it.v, it.h, p.c.accent);
+            break;
+        case Kind::song: {
+            const MusicView& m = view.music;
+            const std::string song = m.tracks <= 0 ? std::string("NO SONGS YET")
+                                     : m.song.empty() ? std::string("--")
+                                                      : panelText(m.song);
+            p.text(song, trackLeft, it.v, fittedHeight(song, it.h, trackRight - trackLeft), p.c.value);
+            std::string line = m.tracks <= 0 ? "ADD MP3, WAV, WMA OR M4A FILES TO THE MUSIC FOLDER"
+                                             : "TRACK " + std::to_string(m.track + 1) + "/" + std::to_string(m.tracks) +
+                                                   (m.failed ? "  - CANNOT PLAY THIS ONE" : m.playing ? "  - PLAYING" : "  - PAUSED");
+            p.text(line, trackLeft, it.v2, fittedHeight(line, it.h2, trackRight - trackLeft),
+                   m.failed ? p.c.warn : m.playing ? p.c.good : p.c.help);
+            break;
+        }
+        case Kind::transport: {
+            button(p, it.box, "", view, k);
+            const Box& b = it.box;
+            const float cx = (b.u0 + b.u1) / 2, cy = (b.v0 + b.v1) / 2;
+            const float s = std::min((b.v1 - b.v0) * .26f, (b.u1 - b.u0) * .2f);
+            const bool lit = view.hover == it.control || view.held == it.control;
+            const Vec3 col = lit ? p.c.text : p.c.line;
+            const auto right = [&](float x) { p.triangle(x - s * .8f, cy + s, x - s * .8f, cy - s, x + s * .8f, cy, col, .95f); };
+            const auto left = [&](float x) { p.triangle(x + s * .8f, cy + s, x - s * .8f, cy, x + s * .8f, cy - s, col, .95f); };
+            const auto upright = [&](float x) { p.rect(x - s * .2f, cy - s, x + s * .2f, cy + s, col, .95f); };
+            if (it.control == Control::musicPrevious) {
+                upright(cx - s);
+                left(cx + s * .25f);
+            } else if (it.control == Control::musicNext) {
+                right(cx - s * .25f);
+                upright(cx + s);
+            } else if (view.music.playing) {
+                upright(cx - s * .45f);
+                upright(cx + s * .45f);
+            } else {
+                right(cx + s * .1f);
+            }
+            break;
+        }
+        case Kind::gear: {
+            const int i = static_cast<int>(it.track);
+            if (i >= view.gearCount) {
+                if (i == 0)
+                    p.text("NO GADGETS YET", trackLeft, it.box.v0 + .002f, it.h, p.c.help);
+                break;
+            }
+            const GearRow& g = view.gear[static_cast<size_t>(i)];
+            const Box& b = it.box;
+            p.rect(b.u0, b.v0 + .0005f, b.u1, b.v1 - .0005f, p.c.backing, .6f);
+            if (g.equipped)
+                p.rect(b.u0, b.v0 + .0005f, b.u0 + .002f, b.v1 - .0005f, p.c.frame, .95f);
+            const float mid = (b.v0 + b.v1) / 2 - it.h / 2;
+            const std::string name = panelText(g.name);
+            p.text(name, b.u0 + .005f, mid, fittedHeight(name, it.h, .085f), g.equipped ? p.c.text : p.c.label);
+            if (g.most > 0) {
+                const std::string n = std::to_string(g.ammo) + "/" + std::to_string(g.most);
+                p.text(n, b.u1 - .004f - textWidth(n, it.h), mid, it.h, p.c.value);
+            }
+            break;
+        }
+        case Kind::wide:
+            button(p, it.box, it.control == Control::fnsmApp && view.fnsmOpen ? "CLOSE FNSM APP" : it.text, view, k);
             break;
         }
         helpLines(p, it.help, p.c.help);
@@ -747,6 +876,8 @@ float& Settings::operator[](Control c) {
         return hudTheme;
     case Control::hudTextColor:
         return hudTextColor;
+    case Control::musicVolume:
+        return musicVolume;
     default: {
         static thread_local float none;
         none = 0;
@@ -774,6 +905,8 @@ Range range(Control c) {
         return {0, themes - 1, 1};
     case Control::hudTextColor:
         return {0, textColors - 1, 1};
+    case Control::musicVolume:
+        return {0, 100, 10};
     default:
         return {0, 1, 1};
     }
@@ -783,6 +916,10 @@ const char* pageName(int page) {
     case 1:
         return "GRAPHICS";
     case 2:
+        return "MUSIC";
+    case 3:
+        return "GEAR";
+    case 4:
         return "HOLOGRAM";
     default:
         return "VR SETTINGS";
@@ -996,6 +1133,12 @@ const char* helpText(Control c) {
         return "Colour sets for colour-blind players; FPS also says OK/LOW.";
     case Control::hudTextColor:
         return "The colour of names and values; THEME uses the set's own.";
+    case Control::musicAutoplay:
+        return "ON plays the next song when one ends.";
+    case Control::musicVolume:
+        return "Your music's loudness only; the game's own sound is not changed.";
+    case Control::fnsmApp:
+        return "Opens the game's app over your left hand; tap it with your right index finger. B closes it.";
     default:
         return "";
     }
@@ -1047,6 +1190,7 @@ std::string valueText(Control c, float value) {
         break;
     case Control::reach:
     case Control::hudText:
+    case Control::musicVolume:
         std::snprintf(n, sizeof n, "%d%%", static_cast<int>(std::lround(v)));
         break;
     case Control::monitor:
@@ -1095,6 +1239,8 @@ const char* shortName(Control c) {
         return "THEME";
     case Control::hudTextColor:
         return "TEXT COLOR";
+    case Control::musicVolume:
+        return "VOLUME";
     default:
         return "";
     }
@@ -1268,6 +1414,21 @@ Menu::Result Menu::update(const Input& in, Settings& settings) {
                     break;
                 case Control::fpsReset:
                     r.fpsReset = true;
+                    break;
+                case Control::musicPrevious:
+                    r.music = Result::Music::previous;
+                    break;
+                case Control::musicPlay:
+                    r.music = Result::Music::toggle;
+                    break;
+                case Control::musicNext:
+                    r.music = Result::Music::next;
+                    break;
+                case Control::musicAutoplay:
+                    r.music = Result::Music::autoplay;
+                    break;
+                case Control::fnsmApp:
+                    r.fnsm = true;
                     break;
                 case Control::aa:
                 case Control::eyeTest:
@@ -1455,6 +1616,32 @@ void appendWristHud(std::vector<Vertex>& out, const View& view, Vec3 viewer, flo
         pointerMark(p, view);
     for (size_t i = from; i < out.size(); ++i)
         out[i].alpha *= opacity;
+}
+
+void appendAppGlass(std::vector<Vertex>& out, const std::array<Vec3, 4>& corners, Vec3 viewer, float pixelAngle) {
+    for (const auto& c : corners)
+        if (!finite(c))
+            return;
+    const Vec3 mid = (corners[0] + corners[1] + corners[2] + corners[3]) * .25f;
+    const Vec3 rightHalf = (corners[1] - corners[0]) * .5f, upHalf = (corners[0] - corners[3]) * .5f;
+    const float w = length(rightHalf), h = length(upHalf);
+    if (!(w > 1e-4f) || !(h > 1e-4f))
+        return;
+    const Vec3 r = rightHalf / w, u = upHalf / h;
+    const float pad = .006f, soft = (std::isfinite(pixelAngle) && pixelAngle > 0 ? pixelAngle : .001f) *
+                                    std::max(length(mid - viewer), .1f);
+    const Palette c = palette(0, 0);
+    // Just behind the app, so the app draws over it.
+    const Vec3 n = normalized(cross(r, u)), back = n * -.0015f;
+    const auto at = [&](float x, float y) { return mid + back + r * x + u * y; };
+    const float x = w + pad, y = h + pad;
+    soft::quad(out, {at(-x, -y), c.backing, .92f}, {at(x, -y), c.backing, .92f}, {at(x, y), c.backing, .92f},
+               {at(-x, y), c.backing, .92f});
+    const Vec3 edge[4] = {at(-x, -y), at(x, -y), at(x, y), at(-x, y)};
+    for (int i = 0; i < 4; ++i) {
+        soft::softBar(out, edge[i], edge[(i + 1) % 4], n, .0035f, c.frame, .12f, soft);
+        soft::softBar(out, edge[i], edge[(i + 1) % 4], n, .0009f, c.frame, .95f, soft);
+    }
 }
 
 bool sane(const std::vector<Vertex>& out, size_t from, Vec3 near, float radius) {

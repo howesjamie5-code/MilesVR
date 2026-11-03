@@ -717,7 +717,7 @@ int main() {
                   "# Spidy settings profile. To use it, in the Spidy launcher: Profile > Paste a profile, "
                   "or Import a file.\nname=Spidy's own\nspidy=0.4.1\narcade_webs=0\ntrigger_webs=0\n"
                   "aim_markers=1\nair_webs=1\nsmart_anchor=0\nweb_range_m=100\nweb_speed=0\nswing_speed=32\n"
-                  "weight=100\nelastic_web=0\n"
+                  "weight=100\nvenom_left_hand=0\nelastic_web=0\n"
                   "soft_release=0\nswing_assist=0\nweb_slingshot=0\nslingshot_speed=0\n"
                   "better_climbing=0\ntwo_hand_zip=0\nrope_steering=0\nwall_run=1\nsnap_turn=30\n"
                   "smooth_turn=0\nhaptics=100\nblow_sounds=0\n"

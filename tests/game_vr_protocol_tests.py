@@ -1681,8 +1681,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNone(xr_snapshot(Reader(*([raw, struct.pack('<Q', 6)]*8)), 0))
 
     def test_xr_reports_where_the_venom_meter_came_from(self):
-        raw = bytearray(1352)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 48, 1352, 3, 4)
+        raw = bytearray(1416)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 49, 1416, 3, 4)
         result = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['venom']
         self.assertEqual((result['holder_vtable'], result['holder_offset'], result['route']), ('0x0', '0x0', 'none'))
         # A full meter read from the class that holds it (found after the HeroMeleeManager), and written to.
@@ -1770,25 +1770,25 @@ class ProtocolTests(unittest.TestCase):
     def test_xr_reads_seated_play_and_the_height(self):
         """Version 41 (seated.hpp): SEATED and whether a seated eye height was measured, HEIGHT, that eye height
         and how far the tracking space is raised now, and how often it was measured."""
-        raw = bytearray(1312)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 43, 1312, 3, 4)
+        raw = bytearray(1416)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 49, 1416, 3, 4)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['seated'],
                          dict(on=False, measured=False, height_cm=0, seated_eye_m=0, lift_m=0, measures=0))
-        struct.pack_into('<5I', raw, 1192, 3, 175, 1180, 458, 2)
+        struct.pack_into('<5I', raw, 1364, 3, 175, 1180, 458, 2)
         self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['seated'],
                          dict(on=True, measured=True, height_cm=175, seated_eye_m=1.18, lift_m=.458, measures=2))
 
     def test_xr_reads_eye_aim_and_the_log_says_what_the_eyes_aim(self):
         """Version 43 (EYE AIM): the headset's eye tracking + 1 with the row in bits 8-9, frames of play with it on
         and those with the eyes tracked, web balls the eyes aimed, zips on the camera's point and late ones."""
-        raw = bytearray(1312)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 43, 1312, 3, 4)
+        raw = bytearray(1416)
+        struct.pack_into('<4IQ', raw, 0, 0x53585244, 49, 1416, 3, 4)
         eye_aim = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['eye_aim']
         self.assertEqual(eye_aim, dict(eye_tracking=None, web_balls=False, zips=False, frames=0, gaze_frames=0,
                                        shots=0, zips_aimed=0, zips_late=0))
         self.assertIsNone(eye_aim_line(eye_aim), 'nothing said before the session knows')
         # An eye tracker, BOTH: 900 frames, 870 of them with the eyes, 12 balls, 3 zips on the point and 1 late.
-        struct.pack_into('<6I', raw, 1288, 3 | 3 << 8, 900, 870, 12, 3, 1)
+        struct.pack_into('<6I', raw, 1388, 3 | 3 << 8, 900, 870, 12, 3, 1)
         eye_aim = xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['eye_aim']
         self.assertEqual(eye_aim, dict(eye_tracking='tracker', web_balls=True, zips=True, frames=900,
                                        gaze_frames=870, shots=12, zips_aimed=3, zips_late=1))
@@ -1804,18 +1804,6 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn('Forward face/eye tracking to PC',
                       eye_aim_line(dict(eye_tracking='no_tracker', web_balls=True, zips=True), 'Virtual Desktop'))
         self.assertNotIn('Virtual Desktop', eye_aim_line(dict(eye_tracking='no_tracker', web_balls=True, zips=True)))
-
-    def test_xr_reads_the_phones_draws_and_why_a_press_drew_none(self):
-        """Version 42 (phone.hpp's PocketDraw::Stats): presses at the hip, draws begun, phones out, draws too slow
-        or let go of, misses by why, and the latest miss with the hand from the neck, its lost time and the look."""
-        raw = bytearray(1312)
-        struct.pack_into('<4IQ', raw, 0, 0x53585244, 43, 1312, 3, 4)
-        self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['pocket'],
-                         dict(presses=0, begun=0, draws=0, too_slow=0, let_go=0, missed={}, last_miss=None))
-        struct.pack_into('<5I6II3iIi', raw, 1216, 9, 3, 2, 1, 0, 1, 0, 0, 0, 0, 5, 6, 120, -650, 25, 140, 612)
-        self.assertEqual(xr_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)['pocket'],
-                         dict(presses=9, begun=3, draws=2, too_slow=1, let_go=0, missed=dict(lost=1, ahead=5),
-                              last_miss=dict(why='ahead', hand_m=[.12, -.65, .025], lost_s=.14, look_deg=61.2)))
 
     def test_xr_counts_interacts_dodges_and_aim_markers(self):
         raw = bytearray(1416)
@@ -2029,7 +2017,7 @@ class ProtocolTests(unittest.TestCase):
         holding = {name for name, body in re.findall(r'\nclass (\w+) \{(.*?)\n\};', pad, re.S)
                    if 'bool held() const' in body}
         self.assertTrue({'TemplePress', 'SuitPowerPress'} <= holding, holding)
-        kept = re.findall(r'game_pad::(\w+) (\w+);', worker)
+        kept = re.findall(r'game_pad::(\w+) (\w+)(?:;|\{)', worker)  # MilesVR: {2u} initialisers too
         for name, variable in kept:
             if name in holding:
                 self.assertTrue(f'{variable}.held()' in worker, f'{name} {variable}: what it holds never goes out')
