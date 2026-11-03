@@ -134,6 +134,9 @@ struct Command {
     // (a zip to a point), its Y (a web strike; a car's in a chase), a
     // prompt's button - and the swing lets it have the hero once it takes
     // him (AirYield). Zero until October 18, when it was `reserved`.
+    // Bit 1 (SM2VR 0.0.56): the game's B in the air, its air dodge - the swing
+    // lets go at once for AirYield::dodgeMs (the dodge never quiets the air
+    // handler, so it cannot wait for that).
     uint32_t asks{};
     uint64_t sampleTimeNs = 1;
     // Version 3: a flip's tilt of the tracking space (Input::tilt). Version 2
@@ -494,7 +497,7 @@ inline bool valid(const Command& c) {
           (c.version == 6 && c.bytes == sizeof(c))) ||
         !std::isfinite(c.leap) || c.leap < 0 || c.leap > 1 || !finite(c.look) || length(c.look) > 1.01f ||
         !c.serial || c.focused > 1 || c.jump > 1 || c.leaseMs > 250 || (c.focused && !c.leaseMs) ||
-        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 1 ||
+        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 3 ||
         !std::isfinite(c.sampleSeconds) || c.sampleSeconds <= 0 || c.sampleSeconds > .1f ||
         (c.focused && !c.sampleTimeNs) || !std::isfinite(tilt) || tilt < .99f || tilt > 1.01f)
         return false;
@@ -589,15 +592,31 @@ class InputHold {
 // nothing: the handler goes on, and so does the swing.
 class AirYield {
   public:
-    static constexpr uint64_t askMs = 400, yieldMs = 3000, quietSteps = 2;
+    static constexpr uint64_t askMs = 400, yieldMs = 3000, quietSteps = 2, dodgeMs = 700;
     // nowMs: a clock in milliseconds. asked: the player asks now. owned: the
     // swing has the hero. airborne: he is in the air. grasp: the game's wall
     // grasp (mover flag 0x80). steps, airEvents: the player's mover steps and
     // the game's air handler's calls so far. True while the swing must not
     // drive.
+    // dodge: the player's B in the air now (Command::asks bit 1).
     bool update(uint64_t nowMs, bool asked, bool owned, bool airborne, bool grasp, uint64_t steps,
-                uint64_t airEvents) {
+                uint64_t airEvents, bool dodge = false) {
         began_ = false;
+        // The game's air dodge: let go at once, for dodgeMs or until he lands.
+        if (dodge && airborne && !grasp && (owned || yielded_)) {
+            if (!yielded_) {
+                began_ = true;
+                ++yields_;
+            }
+            yielded_ = dodging_ = true;
+            since_ = nowMs;
+        }
+        if (dodging_) {
+            dodging_ = airborne && nowMs >= since_ && nowMs - since_ < dodgeMs;
+            yielded_ = dodging_;
+            if (dodging_)
+                return true;
+        }
         if (!seen_ || airEvents != air_ || steps < airStep_) {
             air_ = airEvents;
             airStep_ = steps;
@@ -633,7 +652,7 @@ class AirYield {
   private:
     uint64_t air_{}, airStep_{}, askedMs_{}, since_{};
     uint32_t yields_{};
-    bool seen_{}, yielded_{}, began_{};
+    bool seen_{}, yielded_{}, began_{}, dodging_{};
 };
 inline Input input(const Command& c) {
     Input out;

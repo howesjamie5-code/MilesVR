@@ -79,6 +79,8 @@ EyePairState pair;
 uint64_t executes{}, matchedMarkers{}, pairs{}, lastGeneration{}, lastSerial{}, fenceValue{};
 std::atomic<uint64_t> markers{};
 uint64_t begins[2]{}, ends[2]{};
+// Eye images the game replaced during the session (registerEye: its graphics menu).
+std::atomic<uint32_t> eyeReplacements{};
 ComPtr<ID3D12Device> device;
 ComPtr<ID3D12CommandQueue> queue;
 std::array<ComPtr<ID3D12Resource>, 2> resources, readbacks;
@@ -651,6 +653,17 @@ constexpr float downsampleRadius = 2.f;
 // the eyes' fine detail more than a headset wants) and edge threshold 0.125
 // (its "high quality" value).
 constexpr float aaSubpix = 0.5f, aaEdgeThreshold = 0.125f;
+// The AA pass's view of eye image i (prepareAa; again when the game makes a new one, registerEye).
+void writeEyeView(unsigned i) {
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    auto view = aa.views->GetCPUDescriptorHandleForHeapStart();
+    view.ptr += static_cast<SIZE_T>(device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)) * i;
+    device->CreateShaderResourceView(resources[i].Get(), &sv, view);
+}
 bool failAa(uint32_t code) {
     aaFault = code;
     aa.ready = false;
@@ -724,17 +737,9 @@ bool prepareAa() {
     if (FAILED(device->CreateDescriptorHeap(&views, IID_PPV_ARGS(&aa.views))) ||
         FAILED(device->CreateDescriptorHeap(&targetViews, IID_PPV_ARGS(&aa.targets))))
         return failAa(4);
-    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     for (unsigned i = 0; i < 2; ++i) {
-        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
-        sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sv.Texture2D.MipLevels = 1;
-        auto view = aa.views->GetCPUDescriptorHandleForHeapStart();
-        view.ptr += static_cast<SIZE_T>(viewStep) * i;
-        device->CreateShaderResourceView(resources[i].Get(), &sv, view);
+        writeEyeView(i);
         D3D12_RENDER_TARGET_VIEW_DESC rv{};
         rv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
@@ -2370,18 +2375,49 @@ void eyeAATiming(TimingMetric& gpu, uint32_t& mode, uint32_t& code, uint64_t& sm
 void registerEye(unsigned eye, ID3D12Resource* resource) {
     if (!enabled || eye >= 2 || !resource)
         return;
+    // Submission first, as arm() takes them: a new eye image waits for Spidy's own copies.
+    std::lock_guard submitLock(submission);
     std::lock_guard lock(recording);
     if (resources[eye].Get() == resource)
         return;
-    if (resources[eye]) {
-        fault = 3501;
-        return;
-    }
     ComPtr<ID3D12Device> owner;
     ComPtr<IUnknown> a, b;
     if (FAILED(resource->GetDevice(IID_PPV_ARGS(&owner))) || FAILED(owner.As(&a)) || FAILED(device.As(&b)) ||
         a.Get() != b.Get()) {
         fault = 3502;
+        return;
+    }
+    if (resources[eye]) {
+        // SM2VR 0.0.57: the game made new eye images - a change on its graphics menu (the user, October
+        // 23: "changing graphics settings" pushed them out of VR; 0.0.54's reports: fault 3501 right
+        // after the game's "Finished enforcing display settings"). Of the same size and format the
+        // bridge goes on with them: its own GPU work on the old one done, the AA view rewritten, the
+        // old image's transitions still waiting in recorded lists dropped, its state learned afresh.
+        // Another size still stops (the staged eyes, readbacks and passes are made for one).
+        const auto was = resources[eye]->GetDesc(), now = resource->GetDesc();
+        if (was.Width != now.Width || was.Height != now.Height || was.Format != now.Format ||
+            was.Dimension != now.Dimension || was.MipLevels != now.MipLevels ||
+            was.DepthOrArraySize != now.DepthOrArraySize || was.SampleDesc.Count != now.SampleDesc.Count ||
+            (now.Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)) {
+            fault = 3501;
+            return;
+        }
+        if (fence && fence->GetCompletedValue() < fenceValue &&
+            (FAILED(fence->SetEventOnCompletion(fenceValue, fenceEvent)) ||
+             WaitForSingleObject(fenceEvent, 1000) != WAIT_OBJECT_0)) {
+            fault = 3503;
+            return;
+        }
+        for (auto& [list, events] : lists)
+            events.erase(std::remove_if(events.begin(), events.end(),
+                                        [&](const Event& e) { return !e.marker && e.eye == eye; }),
+                         events.end());
+        resources[eye] = resource;
+        watched[eye] = resource;
+        known[eye] = false;
+        if (aa.ready)
+            writeEyeView(eye);
+        ++eyeReplacements;
         return;
     }
     resources[eye] = resource;

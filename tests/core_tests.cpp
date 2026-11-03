@@ -5207,6 +5207,12 @@ int main() {
         bad = c;
         bad.wallGrips[1] = 2;
         check(!game_swing::valid(bad), "invalid physical grip accepted");
+        // SM2VR 0.0.57: the air dodge's ask (bit 1) is a command's too; 0.0.56 refused it and VR stopped (2001).
+        bad = c;
+        bad.asks = 3;
+        check(game_swing::valid(bad), "the air dodge's ask refused");
+        bad.asks = 4;
+        check(!game_swing::valid(bad), "an unknown ask accepted");
         c.version = 4;
         c.bytes = game_swing::commandBytesV4;
         check(game_swing::valid(c), "legacy input no longer accepted");
@@ -8663,6 +8669,24 @@ int main() {
         for(int i=0;i<5;++i){++s2;t2+=5;check(!other.update(t2,true,true,true,true,s2,a2),"the grasp let go");}
         for(int i=0;i<5;++i){++s2;t2+=5;check(!other.update(t2,true,false,true,false,s2,a2),"nobody's hero let go");}
         for(int i=0;i<5;++i){++s2;t2+=5;check(!other.update(t2,true,true,false,false,s2,a2),"the ground let go");}
+    });
+    test("an air dodge has the swing let go at once, for dodgeMs or until he lands", [] {
+        using game_swing::AirYield;
+        uint64_t steps=100,air=200,now=1000;
+        AirYield y;
+        // The game's air handler goes on running through the dodge: no quiet steps, the dodge lets go anyway.
+        check(!y.update(now,false,true,true,false,++steps,air+=2),"flight let go");
+        check(y.update(now+=5,false,true,true,false,++steps,air+=2,true)&&y.began()&&y.yields()==1,
+              "the dodge did not let go");
+        check(y.update(now+=5,false,true,true,false,++steps,air+=2)&&!y.began(),"the dodge ended at once");
+        now+=AirYield::dodgeMs;
+        check(!y.update(now,false,true,true,false,++steps,air+=2),"the dodge outlived dodgeMs");
+        // Landing ends it; the ground and the wall grasp start none.
+        check(y.update(now+=5,false,true,true,false,++steps,air+=2,true),"a second dodge did not let go");
+        check(!y.update(now+=5,false,true,false,false,++steps,air+=2),"landed, still let go");
+        AirYield g;
+        check(!g.update(now,false,true,false,false,++steps,air,true),"a dodge on the ground let go");
+        check(!g.update(now+=5,false,true,true,true,++steps,air,true),"a dodge in the wall grasp let go");
     });
     test("a stutter keeps the last focused input; a longer loss of it does not", [] {
         game_swing::InputHold hold;

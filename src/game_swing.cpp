@@ -902,7 +902,8 @@ void visit(const native_rays::QueryContext& world) {
     // flight (AirYield): hands off, its webs and its wall let go - the move
     // has its own - until it is done.
     const bool yielding = airYield.update(tick, live && (c.asks & 1u), owned, !body.grounded,
-                                          (motion.moverFlags & 0x80u) != 0, motion.steps, motion.airEvents);
+                                          (motion.moverFlags & 0x80u) != 0, motion.steps, motion.airEvents,
+                                          live && (c.asks & 2u));
     gameMoveFlying.store(yielding && !body.grounded, std::memory_order_relaxed);
     if (airYield.began()) {
         solver.releaseAll();

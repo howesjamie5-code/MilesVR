@@ -1047,6 +1047,8 @@ DWORD WINAPI run(void*) {
         // The player asked the game for a move of its own while the swing carried him
         // in the air (game_swing::AirYield), for the next swing command.
         bool askingGame{};
+        // SM2VR 0.0.56: B pressed in the swing's flight (the game's air dodge, Command::asks bit 1).
+        bool askingDodge{};
         uint32_t interacts{}, dodges{}, heals{}, zips{};
         // The whole pad, latched by clicking both thumbsticks, for the
         // controls VR play has no room for; and the buttons the game names in
@@ -3275,7 +3277,7 @@ DWORD WINAPI run(void*) {
                         input.trackingYaw = motion.swing.trackingYaw;
                         input.tilt = motion.swing.tilt;
                         input.leap = input.focused ? leapOut : 0.f;
-                        input.asks = input.focused && askingGame ? 1u : 0u;
+                        input.asks = (input.focused && askingGame ? 1u : 0u) | (input.focused && askingDodge ? 2u : 0u);
                         if (const Vec3 look = motion.headPose.orientation.rotate({0, 0, -1});
                             input.focused && finite(look) && length(look) > .5f)
                             input.look = normalized(look);
@@ -3903,6 +3905,7 @@ DWORD WINAPI run(void*) {
                     }
                     controls(keys);
                     askingGame = false;
+                    askingDodge = false;
                     if (padInstalled) {
                         // The same walking and jumping on the virtual Xbox
                         // controller: after the VR menus, the game plays the
@@ -3992,6 +3995,11 @@ DWORD WINAPI run(void*) {
                             // while a web carries the player, nor while B skips the
                             // calibration.
                             walk.dodge = (origins.play() & buttonB) && !calibrationInput;
+                        } else if (inFlight) {
+                            // SM2VR 0.0.56: in the swing's flight too - the game's air dodge (the user,
+                            // October 23: "air dodging" did not work). The swing lets go of him for it
+                            // (askingDodge, AirYield::dodgeMs), its webs with him.
+                            walk.dodge = (origins.play() & buttonB) != 0;
                         }
                         // What each hand points at among the game's interactions near
                         // the player, on Spidy's wall only: off it the game offers its
@@ -4405,6 +4413,7 @@ DWORD WINAPI run(void*) {
                         askingGame = steering && swingState.owned && !calibrationInput &&
                                      (walk.zip ||
                                       (inFlight && (walk.interact || walk.demand.any() || named != 0)));
+                        askingDodge = inFlight && walk.dodge;
                         walk.jump = (keys & swingJumpKey) != 0;
                         stickWalking = std::hypot(walk.right, walk.forward) > .2f;
                         // A jump pressed: the game's legs for its takeoff (the body's gameLegs).
@@ -5979,10 +5988,18 @@ DWORD WINAPI run(void*) {
                                 wrist_hud::appendWristHud(translucent, hud, viewer, pixelAngle);
                                 if (!wrist_hud::sane(translucent, from, hud.emitter, 1.5f))
                                     throw std::runtime_error("unfit vertices");
+                            } catch (const std::exception& e) {
+                                // SM2VR 0.0.56: with its reason (0.0.55 failed with none to read).
+                                translucent.resize(from);
+                                wristHudFault = true;
+                                message(3, 0, (std::string("Wrist menu failed (") + e.what() +
+                                               ") and is off this session; everything else carries on")
+                                                  .c_str());
                             } catch (...) {
                                 translucent.resize(from);
                                 wristHudFault = true;
-                                message(3, 0, "Wrist menu failed and is off this session; everything else carries on");
+                                message(3, 0, "Wrist menu failed (unknown error) and is off this session; everything "
+                                              "else carries on");
                             }
                         }
                         // The gadget wheel in front of its hand, moved with the
