@@ -35,7 +35,7 @@ from probe_game_swing import snapshot as swing_snapshot
 from vr_launcher import bring_to_front
 
 KINDS = {0: 'none', 1: 'anchor', 2: 'air', 3: 'blocked', 4: 'prop', 5: 'character', 6: 'strand'}
-AIM_SIZE = 96
+AIM_SIZE = 128  # version 2: the hands' aims, then the gaze's (EYE AIM)
 
 
 def aim_snapshot(game, address):
@@ -44,7 +44,7 @@ def aim_snapshot(game, address):
         raw = game.read(address, AIM_SIZE)
         if len(raw) != AIM_SIZE:
             return None
-        if struct.unpack_from('<3I', raw) != (0x5357414d, 1, AIM_SIZE):
+        if struct.unpack_from('<3I', raw) != (0x5357414d, 2, AIM_SIZE):
             raise RuntimeError('Aim protocol mismatch')
         if struct.unpack_from('<q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue

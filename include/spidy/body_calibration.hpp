@@ -1,5 +1,6 @@
 #pragma once
 #include "body_ik.hpp"
+#include "seated.hpp"
 #include "ui_style.hpp"
 #include "vertex.hpp"
 #include <array>
@@ -39,6 +40,13 @@ float armScale(float armLength, float body, const Proportions& = {});
 // What a session takes as a calibration, millimetres (XrConfig,
 // run_game_vr.py, the launcher); a measurement is kept within them.
 constexpr unsigned minEyeHeightMm = 1000, maxEyeHeightMm = 2500, minArmLengthMm = 250, maxArmLengthMm = 1200;
+// The height, metres, of a player whose eyes stand `eyeHeight` above the
+// floor (HEIGHT's share, seated.hpp): what the panel and the launcher show,
+// since the eye height read as a wrong height (the user, October 27: "im
+// around 1,88 m and it shows 1.7 something").
+inline float height(float eyeHeight) {
+    return eyeHeight / seated::eyeShare;
+}
 
 // What a calibration found.
 struct Measurements {
@@ -75,6 +83,14 @@ enum class Hint : std::uint8_t {
     lookAhead, // the head is turned away from the arms' line or tilted
     triggers,  // a trigger is not held
     still,     // the head or a hand moved
+    // The eyes give a height (height()) outside HEIGHT's range: the headset's
+    // floor is off, and the measurement would keep it (players on the
+    // Discord, October 19 and 21: "2.50 meters tall", "I am 170cm but the
+    // calibration measures me for 105cm"). Checked right after standUp, and
+    // again once the arms are out and straight: controllers too far apart
+    // for the eyes (widestSpan) put the floor too high within that range.
+    // Last here so the reports' numbers for the others stay.
+    floor,
 };
 struct Config {
     float holdSeconds = 1.5f;
@@ -84,10 +100,18 @@ struct Config {
     float trigger = .6f, triggerHeld = .35f;
     // Eyes below this are a seated (or kneeling) player's, metres.
     float lowestEyes = 1;
+    // A standing player's height within these, metres (HEIGHT's range).
+    float shortest = seated::minHeightCm / 100.f, tallest = seated::maxHeightCm / 100.f;
     // An arm points from the avatar's shoulder at least this cosine near its
     // side (41 degrees), and reaches at least `bent` of the avatar's arm at
     // the player's size; the two reach within `mismatch` of the longer.
     float sideways = .75f, bent = .72f, mismatch = .12f;
+    // The controllers, arms straight out, at most this many times the eyes'
+    // height apart: the floor does not move the span, and arms reach no
+    // further than straight. The user, 1.88 m tall, holds them 1.65 m apart:
+    // 0.94 of eyes 1.76 m up, and 1.24 of the 1.33 m a Quest Pro gave after
+    // its floor rose 0.42 m (October 26 and 27, "1.43 or something").
+    float widestSpan = 1.15f;
     // The head within these of level and of square to the arms' line, radians.
     float headPitch = .45f, headYaw = .6f;
     // Moving faster is not holding still, m/s.

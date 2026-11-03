@@ -1,5 +1,6 @@
 #include "system.hpp"
 #include <bcrypt.h>
+#include <dxgi.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -546,7 +547,8 @@ Settings loadSettings() {
         else if (key == "venom_left_hand") o.venomLeftHand = number() != 0;
         else if (key == "venom_trigger") o.venomTrigger = number() != 0;
         else if (key == "arcade_webs") o.arcadeWebs = number() != 0;
-        else if (key == "wall_run") o.wallRun = number() != 0;
+        // wall_run (before October 25) and stand_on_walls (written until then, read until October 15) are no
+        // longer read: the swing's walls and the view on them are always on.
         else if (key == "game_depth_of_field") o.gameDepthOfField = number() != 0;
         else if (key == "game_sharpening") o.gameSharpening = number() != 0;
         // physical_webs (before October 15) is no longer read: webs are always physical.
@@ -608,9 +610,7 @@ void saveSettings(const Settings& settings) {
     file << "game=" << narrow(settings.gameExe) << "\nxr_runtime=" << narrow(settings.runtime)
          << "\nsmall_window=" << o.smallWindow << "\nstock_monitor_view=" << o.stockMonitorView
          << "\naim_markers=" << o.aimMarkers << "\nair_webs=" << o.airWebs << "\nflips=" << o.flips
-         << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand << "\nvenom_trigger=" << o.venomTrigger << "\narcade_webs=" << o.arcadeWebs
-         << "\nstand_on_walls=" << o.standOnWalls
-         << "\nwall_run=" << o.wallRun
+         << "\ntrigger_webs=" << o.triggerWebs << "\narcade_webs=" << o.arcadeWebs
          << "\ngame_depth_of_field=" << o.gameDepthOfField
          << "\ngame_sharpening=" << o.gameSharpening
          << "\nrender_scale=" << o.renderScale << "\nupscale=" << o.upscale
@@ -1131,6 +1131,52 @@ void Session::clear() {
     std::lock_guard lock(mutex_);
     if (!running_)
         lines_.clear();
+}
+
+// --- This PC, for a help post ------------------------------------------------------
+
+Hardware hardware() {
+    Hardware pc;
+    MEMORYSTATUSEX memory{sizeof(memory)};
+    if (GlobalMemoryStatusEx(&memory)) {
+        pc.ramMb = memory.ullTotalPhys >> 20;
+        // As tools/run_game_vr.py's free_commit_mb reads it.
+        pc.commitLimitMb = memory.ullTotalPageFile >> 20;
+        pc.commitFreeMb = memory.ullAvailPageFile >> 20;
+    }
+    IDXGIFactory1* factory{};
+    if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        IDXGIAdapter1* adapter{};
+        for (UINT i = 0; SUCCEEDED(factory->EnumAdapters1(i, &adapter)); ++i) {
+            DXGI_ADAPTER_DESC1 description{};
+            // Not Windows' software renderer, which every PC lists.
+            if (SUCCEEDED(adapter->GetDesc1(&description)) &&
+                !(description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+                (pc.gpu.empty() || description.DedicatedVideoMemory >> 20 > pc.gpuMemoryMb)) {
+                pc.gpu = narrow(description.Description);
+                pc.gpuMemoryMb = description.DedicatedVideoMemory >> 20;
+            }
+            adapter->Release();
+        }
+        factory->Release();
+    }
+    return pc;
+}
+
+std::string lastConsoleLog(const std::wstring& root) {
+    fs::path newest;
+    fs::file_time_type newestTime{};
+    std::error_code error;
+    for (const auto& entry : fs::directory_iterator(fs::path(root) / L"reports", error)) {
+        // A session writes its log until it ends, so the log written last is the last session's.
+        const auto time = entry.last_write_time(error);
+        if (!error && entry.path().filename().wstring().ends_with(L"-console.log") &&
+            (newest.empty() || time > newestTime)) {
+            newest = entry.path();
+            newestTime = time;
+        }
+    }
+    return newest.empty() ? std::string() : readText(newest);
 }
 
 // --- Shell -------------------------------------------------------------------------

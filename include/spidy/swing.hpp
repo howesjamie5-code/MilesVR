@@ -18,6 +18,12 @@ class WorldQueries {
   public:
     virtual ~WorldQueries() = default;
     virtual std::optional<RayHit> raycast(Vec3 origin, Vec3 direction, float distance) const = 0;
+    // The nearest hit the player's own body meets: what the game lets his
+    // body through (a broken glass pane: native_rays::meets) it passes too.
+    // For what he walks at, stands on and climbs; the webs take raycast.
+    virtual std::optional<RayHit> bodyRaycast(Vec3 origin, Vec3 direction, float distance) const {
+        return raycast(origin, direction, distance);
+    }
     virtual bool exists(std::uint64_t surface) const = 0;
 };
 class World : public WorldQueries {
@@ -75,7 +81,9 @@ struct SwingConfig {
     // second, and below the walk's speed the body stops and stays.
     float wallCarry = .35f, wallWalkSpeed = 6, wallAcceleration = 24, wallBrake = 3;
     // A jump leaves the wall: out from it and up, on top of the speed along
-    // it; no wall takes the body again within wallJumpPause.
+    // it; no wall takes the body again within wallJumpPause. Nor after a web
+    // shot from the wall takes the body off it (one whose end is further out
+    // than the body).
     float wallJumpOut = 6, wallJumpUp = 5, wallJumpPause = .3f;
     // A wall the ray misses for wallGrace is gone (a recess, the wall's end).
     // Lost while the body went up it, the body hops over its top edge and is
@@ -92,6 +100,14 @@ struct SwingConfig {
     // above the body too. In the air the stick takes a wall within mountReach
     // the same way, with no speed into it.
     float mountReach = 1.3f, mountSeconds = .1f, mountHold = .5f, mountHeight = 1.2f;
+    // Hand climbing (Swing::allowHandClimb): a squeeze with the palm at the
+    // wall holds it only where the hand points at the wall - its aim meets
+    // the wall's face within gripAim of the palm, where a web it shot would
+    // end too near the body to hold it. One that points up the wall, along
+    // it or away from it shoots its web, as anywhere else. Until October 22
+    // every squeeze that near held the wall, and the climbing view keeps the
+    // eyes 40 cm off it, so a hand raised to web up the wall was that near.
+    float gripAim = .5f;
     // A standing body the stick walks at a wall mounts it: the game's jump,
     // then the swing's wall (mountWall). On by default since October 15, the
     // player: "use our locomotion system only and override the games state to
@@ -101,6 +117,8 @@ struct SwingConfig {
     // hand-overs between them and the swing - which felt bad and twice put a
     // player out of the world - are gone from walls. allowMounts switches it
     // off where the game crawls the player through a vent.
+    // With hand climbing enabled, floor approaches never mount automatically;
+    // offers from an existing native wall crawl still allow joystick runs.
     bool mountFromGround = true;
     // Physical webs: a web is a rope (the VR settings' PHYSICAL WEBS).
     // - It bends round the edge that comes between the body and its end
@@ -176,7 +194,9 @@ struct SwingConfig {
 constexpr int maxBends = 6;
 struct HandInput {
     Pose aim{};                // world space, -Z forward
-    Vec3 gripRelativeToHead{}; // tracking meters, excludes artificial travel
+    // Tracking metres, excluding artificial travel. Outdoor grip climbing
+    // references the head at hold entry; ordinary actions use its live pose.
+    Vec3 gripRelativeToHead{};
     bool tracked{};
     // grip shoots and holds this hand's web; trigger reels it in (a free
     // hand's shoots a web ball). The controller's own grip and trigger unless
@@ -203,6 +223,11 @@ struct Input {
     // Both grips are held for the wall roll (HAND WALL CLIMBING): they shoot
     // no web and grab nothing until let go.
     bool wallRotate{};
+    // Where the eyes look (world; gaze unit, zero: not tracked or EYE AIM
+    // off), from between them. gazeShots: web balls go where it meets
+    // (game_shooter, Shooter::aim) instead of along the hand.
+    Vec3 gazeOrigin{}, gaze{};
+    bool gazeShots{};
 };
 // The tracking space's orientation in the world (Rig::orientation): hand
 // motion relative to the head turns into the world with it.
@@ -243,6 +268,26 @@ struct Web {
     // `taken` and not shot by it.
     std::uint32_t strand{};
     bool taken{};
+    // WEB SPEED (Swing::webTravel): where the web was shot from, how long its
+    // flight takes and has left, and since it arrived; while catching, it
+    // pulls softly. A web in flight is attached, but not ready: it holds
+    // nothing yet.
+    Vec3 shotOrigin{};
+    float flightLeft{}, flightTotal{}, engageAge{};
+    bool catching{};
+    bool ready() const {
+        return attached && flightLeft <= 0;
+    }
+    float progress() const {
+        return flightTotal > 0 ? std::clamp(1 - flightLeft / flightTotal, 0.f, 1.f) : 1;
+    }
+    float coupling() const {
+        const float t = flightTotal > 0 ? std::clamp(engageAge / .18f, 0.f, 1.f) : 1;
+        return t * t * (3 - 2 * t);
+    }
+    Vec3 tip() const {
+        return shotOrigin + (end() - shotOrigin) * progress();
+    }
     // Where the web sticks.
     Vec3 end() const {
         return bent ? bends[0].from : anchor;
@@ -282,6 +327,8 @@ enum class EventKind {
     Join,     // a hand took hold of the other hand's web
     Pass,     // an arcade web went through a thin or loose thing: shot past one, or swung past one
     WallGrip, // a palm stuck to the wall; one contact pulse in that hand
+    Slingshot, // both drawn webs released: strength is the stored charge
+    Shoot,     // WEB SPEED: a web shot and flying, which holds nothing yet (Attach when it arrives)
 };
 struct Event {
     EventKind kind;
@@ -308,6 +355,31 @@ class Swing {
     void settleStep(float predictedSeconds, float actualSeconds);
     void reset(Body body = {});
     void releaseAll();
+    // Grounded web shots stay grounded; draw two fixed webs, then release to launch.
+    void allowSlingshot(bool on) {
+        if (slingshotEnabled_ != on) {
+            slingshotEnabled_ = on;
+            clearSlingshot();
+        }
+    }
+    bool slingshotEnabled() const {
+        return slingshotEnabled_;
+    }
+    float slingshotCharge() const {
+        return slingshotCharge_;
+    }
+    // A hand reels its web in (its trigger). A reel lifts a standing body
+    // off the ground even while the slingshot keeps a web shot there down.
+    bool reeling() const {
+        return (webs_[0].attached && hands_[0].reeling) || (webs_[1].attached && hands_[1].reeling);
+    }
+    // A shared strand keeps the length taken in by hand-over-hand pulling.
+    void allowBetterClimbing(bool on) {
+        betterClimbing_ = on;
+        if (!on)
+            for (auto& hand : hands_)
+                hand.ropeClimbing = false;
+    }
     // A new speed limit during play (the VR settings). A body
     // faster than it slows to it in the next step.
     void limitSpeed(float maxSpeed);
@@ -416,7 +488,9 @@ class Swing {
         if (!on)
             climbing_ = {};
     }
-    // A near-wall squeeze belongs to climbing before other actions.
+    bool handClimbEnabled() const { return handClimb_; }
+    // A near-wall squeeze that points at the wall (SwingConfig::gripAim)
+    // belongs to climbing before other actions.
     bool wallHand(int hand, const Input&, const WorldQueries&) const;
     unsigned climbingHands() const {
         return (climbing_[0].attached ? 1u : 0u) | (climbing_[1].attached ? 2u : 0u);
@@ -462,9 +536,86 @@ class Swing {
     // Hand `hand` is free and on the other hand's web, as of the latest
     // input: its grip press would take hold of that web, and shoot none.
     bool onStrand(int hand) const;
+    // The same with BETTER CLIMBING, from `in`'s own hand poses: a hand that
+    // reaches onto the strand and grips in one sample takes hold of it
+    // instead of shooting another web (pull request #44).
+    bool onStrand(int hand, const Input& in) const;
     // Hand `hand`'s web holds the body when taut: any web but the longer
     // rope of two hands on one web.
     bool bears(int hand) const;
+    // With open-air anchors off, a shot that meets nothing straight ahead
+    // takes the best real surface within 8 degrees of its aim (shot()).
+    void allowSmartAnchor(bool on) {
+        smartAnchor_ = on;
+    }
+    // Webs that stretch under load (0 off, a hard rope; 1 to 3 softer):
+    // a damped spring takes the place of the rope's length limit.
+    void elasticWeb(int level) {
+        elasticWeb_ = std::clamp(level, 0, 3);
+    }
+    // A loaded web let go keeps pulling for a moment, fading (0 off; 1 to 3
+    // for 120, 180 or 240 ms), so that letting go is no jolt.
+    void softRelease(int level) {
+        softRelease_ = std::clamp(level, 0, 3);
+        if (!softRelease_) {
+            releasePull_ = {};
+            releaseLeft_ = 0;
+        }
+    }
+    // Flying at something with a web (or for 0.8 s after), speed into it is
+    // cut, at most 50 m/s^2, so that it can still be met at 30 m/s^2.
+    // Nothing turns or lifts the player (avoidObstacles).
+    void allowSwingAssist(bool on) {
+        swingAssist_ = on;
+        if (!on)
+            assistFlight_ = 0;
+    }
+    bool betterClimbingEnabled() const {
+        return betterClimbing_;
+    }
+    // With BETTER CLIMBING, standing: a hand on a shared web pulled it
+    // down, which asks the game for its jump (game_swing's takeoff).
+    bool climbTakeoff() const {
+        return climbTakeoff_ && betterClimbing_ &&
+               ((webs_[0].ready() && hands_[0].ropeClimbing) || (webs_[1].ready() && hands_[1].ropeClimbing));
+    }
+    // SLINGSHOT SPEED: 0, a launch under maxSpeed as before; 20 to 300 m/s,
+    // a full draw's own. Its flight, until the player lands, may go that
+    // fast (speedLimit()), and over 65 m/s with longer native steps.
+    void setSlingshotSpeed(float speed);
+    bool slingshotFlying() const {
+        return slingshotFlight_;
+    }
+    bool boostedFlight() const {
+        return slingshotFlight_ && slingshotSpeed_ > 65;
+    }
+    float speedLimit() const {
+        return slingshotFlight_ ? std::max(config_.maxSpeed, slingshotSpeed_) : config_.maxSpeed;
+    }
+    // Hand gestures on webs, each off unless switched on (pull request #47):
+    // zip, two webs on one spot and both arms pulled back fast toward it
+    // launch the player at it, harder for a faster pull; steering, the free
+    // hand on the same strand turns the swing's momentum by pulling
+    // sideways, making no speed. Switching either clears what is queued.
+    void allowGestures(bool zip, bool steering) {
+        if (twoHandZip_ != zip || ropeSteering_ != steering)
+            resetGestures();
+        twoHandZip_ = zip;
+        ropeSteering_ = steering;
+    }
+    bool gestureTakeoff() const {
+        return gestureTakeoff_;
+    }
+    Vec3 gestureLaunch() const {
+        return gestureLaunch_;
+    }
+    bool gesturesEnabled() const {
+        return twoHandZip_ || ropeSteering_;
+    }
+    void webTravel(float range, int mode);
+    bool webTravelEnabled() const {
+        return webSpeedMode_ != 0;
+    }
     const SwingConfig& config() const {
         return config_;
     }
@@ -473,10 +624,40 @@ class Swing {
     }
 
   private:
+    void clearSlingshot();
+    void slingshot(float dt, const Input&, const WorldQueries&);
+    bool slingshotEnabled_{}, slingshotPair_{}, slingshotReleasing_{};
+    Vec3 slingshotHands_[2]{}, slingshotEnds_[2]{};
+    uint64_t slingshotSurfaces_[2]{};
+    float slingshotCharge_{}, slingshotHold_{}, slingshotRelease_{}, slingshotYaw_{};
+    bool betterClimbing_{};
+    bool smartAnchor_{};
+    int elasticWeb_{};
+    // SOFT RELEASE: the pull (m/s^2) still to come, and for how long.
+    int softRelease_{};
+    Vec3 releasePull_{};
+    float releaseLeft_{};
+    // SWING ASSIST: how much longer it watches after the last web.
+    bool swingAssist_{};
+    float assistFlight_{};
+    void avoidObstacles(float seconds, const Input& in, const WorldQueries& world);
+    bool climbTakeoff_{};
+    float slingshotSpeed_{};
+    bool slingshotFlight_{}, slingshotAirborne_{};
+    bool twoHandZip_{}, ropeSteering_{};
+    bool gestureSample_{}, zipUsed_{}, gestureTakeoff_{};
+    Vec3 gesturePrevious_[2]{}, gestureLaunch_{};
+    uint64_t gestureStrands_[2]{};
+    float zipGestureBlock_{}, gestureYaw_{}, zipPull_[2]{}, zipWindow_{};
+    void resetGestures();
+    void gestures(float dt, const Input&, const WorldQueries&);
+    bool twoHandTarget() const;
+    int webSpeedMode_{};
     struct HandState {
         // held: grip squeezed, with release hysteresis. A web shoots only on the
         // press that sets it, so a lost web never re-fires while the grip stays held.
         bool held{}, sample{}, zipUsed{}, triggerReleased{}, reeling{};
+        bool ropeClimbing{};
         Vec3 previous{};
         float pullDistance{}, pullTime{}, obstructed{};
         float winch{}; // how fast this hand's rope shortened in the last step
@@ -557,8 +738,11 @@ class Swing {
     float climbSeconds_{};
     void climbInputs(const Input&, const WorldQueries&);
     std::optional<RayHit> wallContact(const HandInput&, const WorldQueries&) const;
-    // Time the wall's ray has missed, time since a wall jump, and what is
-    // left of the push over a wall's top edge, against crestNormal_.
+    // The hand's aim meets the wall the body is on within gripAim of its palm.
+    bool pointsAtWall(const HandInput&) const;
+    // Time the wall's ray has missed, time since a wall jump (or a web took
+    // the body off its wall), and what is left of the push over a wall's top
+    // edge, against crestNormal_.
     float wallLost_{}, sinceWallJump_ = 100, crest_{};
     // Whether a wall the body comes into is taken (takeNewWalls). The wall it
     // is already on is kept either way, corners of that wall included.

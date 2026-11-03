@@ -15,10 +15,14 @@ struct Ray {
     Vec3 direction{};
     uint32_t tag{};
 };
+// bodyRays: a bit for each ray (1 << its index) that stands in for the
+// player's own body - the head's clearance, the hands' contact, the roof over
+// the feet - and so takes the nearest hit his body meets (meets()). The rest
+// (the hands' aim for the webs) take the nearest of all.
 struct Command {
     uint32_t magic = 0x5352594d, version = 1, bytes = sizeof(Command), count{};
     uint64_t serial{};
-    uint32_t leaseMs = 100, reserved{};
+    uint32_t leaseMs = 100, bodyRays{};
     Ray rays[capacity];
 };
 struct Hit {
@@ -46,16 +50,47 @@ inline bool fixedSurface(const Hit& hit) {
     return hit.count && hit.bodyMatches && (hit.bodyFlags & 3) == 1 && hit.motionId == 0 &&
            hit.broadPhaseId != 0xffffffff;
 }
+// The player's own body as the game's collision filter sees it (October 24).
+// A query's filter word carries its categories (the low 11 bits) and the
+// types it meets (bits 12-19), a body's its categories and its type (bits
+// 12-15). They collide when they share a category (or either has none) and
+// the body's type is among the query's (18060a0, InsomniacCollisionFilter's
+// test for a query of a group, as the game's own queries are; world bodies
+// have no group). The player's mover queries by its collision profile (its
+// MoverManager's +0xd9c, an index into the game's profiles, 32 bytes each
+// from [7813120]: the types at +8, the categories at +0xc): profile 3,
+// categories 0x004 and types 0xe7 in free roam, measured. Spidy's own rays
+// carry the categories 0x410, which the webs' anchors want: a broken glass
+// pane (0x10) in a burning office met them as a wall, and the game let the
+// player walk through it. So the rays that stand in for his body pass what
+// his body passes: what he walks at, stands on, climbs, and where his head is.
+struct BodyFilter {
+    uint32_t categories{}, types{};
+};
+inline bool meets(BodyFilter body, uint32_t filter) {
+    // The player's profile not read: every hit, as before.
+    if (!body.types)
+        return true;
+    const uint32_t mine = body.categories & 0x7ff, theirs = filter & 0x7ff;
+    if (mine && theirs && !(mine & theirs))
+        return false;
+    return (body.types & (1u << ((filter >> 12) & 0xf)) & 0xff) != 0;
+}
+// The player whose body the rays stand in for (his actor record, 0 none).
+// His MoverManager is looked up once for each record, and his profile read
+// from it again every quarter of a second. Any thread.
+void setPlayer(uint64_t record);
+BodyFilter body();
 inline bool valid(const Command& c) {
     if (c.magic != 0x5352594d || c.version != 1 || c.bytes != sizeof(Command) || !c.serial ||
-        c.count > capacity || c.leaseMs > 250 || (c.count && !c.leaseMs) || c.reserved)
+        c.count > capacity || c.leaseMs > 250 || (c.count && !c.leaseMs) || (c.bodyRays >> c.count))
         return false;
     for (unsigned i = 0; i < c.count; ++i) {
         const auto& ray = c.rays[i];
         const float magnitude = length(ray.direction);
         if (!finite(ray.origin) || length(ray.origin) > 100000 || !finite(ray.direction) ||
             magnitude < .999f || magnitude > 1.001f || !std::isfinite(ray.distance) || ray.distance < .01f ||
-            ray.distance > 150)
+            ray.distance > 1000) // as far as WEB RANGE reaches (150 m before it)
             return false;
     }
     return true;

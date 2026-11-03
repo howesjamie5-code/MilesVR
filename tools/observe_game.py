@@ -37,6 +37,7 @@ get_export = bind('GetProcAddress', c.c_void_p, w.HMODULE, c.c_char_p)
 get_module = bind('GetModuleHandleW', w.HMODULE, w.LPCWSTR)
 module_from_address = bind('GetModuleHandleExW', w.BOOL, w.DWORD, c.c_void_p, c.POINTER(w.HMODULE))
 module_filename = bind('GetModuleFileNameW', w.DWORD, w.HMODULE, w.LPWSTR, w.DWORD)
+module_path = bind('K32GetModuleFileNameExW', w.DWORD, w.HANDLE, c.c_void_p, w.LPWSTR, w.DWORD)
 
 
 def modules(pid):
@@ -50,6 +51,21 @@ def modules(pid):
             ok = next_module(snap, c.byref(entry))
     finally:
         close(snap)
+    # The snapshot's paths pass through the ANSI code page: a letter outside it comes back as '?', which no
+    # Windows path holds (haim.knafo, October 26: Spidy in OneDrive's Hebrew-named Desktop was "Spidy from
+    # another folder" to itself). Those are read again as the process's loader has them.
+    lossy = [m for m in result if '?' in m['path']]
+    if lossy:
+        process = open_process(0x1000 | 0x0010, False, pid)  # query limited information, read memory
+        if process:
+            try:
+                path = c.create_unicode_buffer(32768)
+                for m in lossy:
+                    if module_path(process, m['base'], path, len(path)):
+                        m['path'] = path.value
+                        m['name'] = pathlib.PureWindowsPath(path.value).name
+            finally:
+                close(process)
     return result
 
 

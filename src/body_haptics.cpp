@@ -96,6 +96,12 @@ struct Paint {
             for (unsigned side = 1; side <= 2; ++side)
                 vest(true, row, side, v);
     }
+    // The middle of the chest a row higher, under the collarbones.
+    void upperChest(float v) {
+        for (unsigned row = 0; row <= 1; ++row)
+            for (unsigned side = 1; side <= 2; ++side)
+                vest(false, row, side, v);
+    }
     // The shoulder on a hand's side, front and back, the outer motors most.
     void shoulder(unsigned hand, float v) {
         const unsigned outer = hand ? 3 : 0, inner = hand ? 2 : 1;
@@ -246,20 +252,29 @@ void pattern(Paint& p, const Event& e, float t) {
         p.arms(s * .28f * envelope(t, .005f, .05f, .1f));
         break;
     }
-    case Kind::landing:
+    case Kind::landing: {
         // From the waist up: the waist first and hardest, the shoulders last and least.
+        // A jump's landing (the game's comes down at about 9.4 m/s: 0.34) plays
+        // the waist's row alone; the rows above and the arms come in from 0.4
+        // to 0.6, a fall from a roof. Until bHaptics' notes of October 22 every
+        // landing went up the whole vest, a jump's "slightly stronger than
+        // expected".
+        const float high = clamp01((s - .4f) / .2f);
         for (unsigned row = 0; row < 4; ++row) {
             const float near = static_cast<float>(row + 1) / 4;
-            const float v = s * (.12f + .45f * near) *
+            const float v = s * (.12f + .45f * near) * (row == 3 ? 1 : high) *
                             envelope(t - static_cast<float>(3 - row) * .03f, .005f, .05f, .12f);
             p.rows(row, row, v, v);
         }
         if (s > .6f)
             p.visorAll((s - .6f) * .6f * envelope(t - .06f, .005f, .03f, .08f));
-        p.arms(s * .15f * envelope(t - .04f, .005f, .04f, .08f));
+        p.arms(high * s * .15f * envelope(t - .04f, .005f, .04f, .08f));
         break;
+    }
     case Kind::leapCharge: {
-        const float v = s * .15f * envelope(t, .01f, .04f, .05f);
+        // 30% gentler since bHaptics' notes of October 22 (it was .15), as is
+        // the charge building in render().
+        const float v = s * .105f * envelope(t, .01f, .04f, .05f);
         p.rows(2, 3, v, v);
         break;
     }
@@ -279,34 +294,43 @@ void pattern(Paint& p, const Event& e, float t) {
         ownShoulder(.15f * s * envelope(t - .02f, .005f, kick, .06f));
         break;
     }
+    // The player's attacks play on the upper torso, the shoulders' two rows:
+    // until bHaptics' notes of October 22 a heavy blow took the whole front, a
+    // finisher the whole vest, a web strike's rush the front and a knockout or
+    // a counter the chest's middle, "a relatively broad area".
     case Kind::heavyBlow:
         ownArm(.6f * envelope(t, .005f, .18f, .08f));
         if (handed)
             p.arm(1 - hand, .25f * envelope(t, .005f, .1f, .06f));
-        p.rows(0, 3, .25f * s * envelope(t - .02f, .005f, .1f, .1f), 0);
+        p.rows(0, 1, .25f * s * envelope(t - .02f, .005f, .1f, .1f), 0);
         break;
-    case Kind::finisher:
+    case Kind::finisher: {
         p.arms(.75f * envelope(t, .005f, .3f, .12f));
-        p.vestAll(.5f * s * envelope(t, .005f, .15f, .25f));
+        const float v = .5f * s * envelope(t, .005f, .15f, .25f);
+        p.rows(0, 1, v, v);
         p.visorAll(.35f * s * envelope(t, .005f, .1f, .15f));
         break;
+    }
     case Kind::strikeRush: {
         // Flying at him: the air on the front, fluttering.
         const float v = s * .18f * envelope(t, .03f, .2f, .08f);
-        for (unsigned m = 0; m < 16; ++m)
-            p.vest(m, v * (.6f + .4f * flutter(m, t)));
+        for (unsigned row = 0; row < 2; ++row)
+            for (unsigned side = 0; side < 4; ++side) {
+                const unsigned m = vestMotor(false, row, side);
+                p.vest(m, v * (.6f + .4f * flutter(m, t)));
+            }
         p.arms(s * .18f * envelope(t, .005f, .05f, .05f));
         break;
     }
     case Kind::knockout: {
         const float v = s * (envelope(t, .005f, .07f, .04f) + envelope(t - .14f, .005f, .07f, .04f));
         p.arms(.45f * v);
-        p.chest(.3f * v);
+        p.upperChest(.3f * v);
         break;
     }
     case Kind::counter:
         p.arms(s * .45f * envelope(t, .005f, .08f, .06f));
-        p.chest(s * .35f * envelope(t, .005f, .06f, .08f));
+        p.upperChest(s * .35f * envelope(t, .005f, .06f, .08f));
         p.visorAll(s * .25f * envelope(t, .005f, .05f, .06f));
         break;
     case Kind::spiderSense:
@@ -360,8 +384,10 @@ void pattern(Paint& p, const Event& e, float t) {
         break;
     case Kind::perfectDodge:
     case Kind::dodge: {
-        // A whoosh across the body, from the side the azimuth names.
-        const float v = s * (e.kind == Kind::perfectDodge ? .35f : .2f);
+        // A whoosh across the body, from the side the azimuth names. A dodge's
+        // is 20% lighter since bHaptics' notes of October 22 ("somewhat heavy"
+        // at .2).
+        const float v = s * (e.kind == Kind::perfectDodge ? .35f : .16f);
         for (unsigned step = 0; step < 4; ++step) {
             const unsigned side = e.azimuth > 0 ? 3 - step : step;
             const float w = v * envelope(t - static_cast<float>(step) * .05f, .01f, .05f, .06f);
@@ -588,8 +614,12 @@ Frame Mixer::render(double now) {
             p.arm(h, webFelt_[h]);
             p.shoulder(h, webFelt_[h] * .5f);
         }
-        if (grabFelt_[h] > .005f)
+        // A grab's pull (a thug or a prop on the web) in the arm, and faintly
+        // in its shoulder: the sleeve alone until bHaptics' notes of October 22.
+        if (grabFelt_[h] > .005f) {
             p.arm(h, grabFelt_[h]);
+            p.shoulder(h, grabFelt_[h] * .4f);
+        }
     }
     // The wind, in free flight only: in the air, off any wall, no web
     // holding the player. From 15 m/s (nothing) to 40 (16%), on the motors
@@ -617,24 +647,27 @@ Frame Mixer::render(double now) {
             for (unsigned i = 0; i < 4; ++i)
                 p.visor(i, windFelt_ * face * face * (.7f + .3f * swell(40 + i, now)));
     }
-    // A charged leap building in the legs' end of the vest, and in the arms.
+    // A charged leap building in the legs' end of the vest, and in the arms;
+    // 30% gentler since bHaptics' notes of October 22 (.06 + .2 of the charge
+    // on the vest, .04 + .12 in the arms).
     if (state_.charge > 0 && on(Group::movement)) {
         const float wobble = .75f + .25f * std::sin(2 * pi * 9 * static_cast<float>(std::fmod(now, 1.0)));
-        const float v = (.06f + .2f * state_.charge) * wobble;
+        const float v = (.042f + .14f * state_.charge) * wobble;
         p.rows(2, 3, v, v);
-        p.arms((.04f + .12f * state_.charge) * wobble);
+        p.arms((.028f + .084f * state_.charge) * wobble);
     }
-    // The heart, left of the chest's middle: racing below 30% of the health,
-    // slow and calm in slow motion.
+    // The heart, high on the chest left of its middle: racing below 30% of
+    // the health, slow and calm in slow motion. A row lower until bHaptics'
+    // notes of October 22, further from the heart.
     const bool low = state_.health > 0 && state_.health < .3f;
     if ((low || state_.slowMotion) && on(Group::combat)) {
         const float bpm = low ? 80 + (.3f - state_.health) * 200 : 55.f;
         const float strength = low ? .18f + (.3f - state_.health) * .6f : .14f;
         const float t = static_cast<float>(std::fmod(now, 60.0 / bpm));
         const float beat = strength * (envelope(t, .02f, .07f, .05f) + .7f * envelope(t - .2f, .02f, .06f, .05f));
-        p.vest(false, 1, 1, beat);
-        p.vest(false, 1, 0, .6f * beat);
-        p.vest(false, 2, 1, .5f * beat);
+        p.vest(false, 0, 1, beat);
+        p.vest(false, 0, 0, .6f * beat);
+        p.vest(false, 1, 1, .5f * beat);
     }
     for (const auto& a : active_)
         pattern(p, a.e, static_cast<float>(now - a.start));

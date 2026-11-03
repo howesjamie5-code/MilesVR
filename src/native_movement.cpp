@@ -137,7 +137,7 @@ uintptr_t handleAir(void* self, void* event) {
                        read(config.mover + 0x750, &flags, 4) && !(flags & 0x80000000u) &&
                        read(config.mover + 0x144, &collision, 4) && collisionEnabled(collision) &&
                        drivable(dt);
-    AirOverride override{stepDelta(c.velocity, dt)};
+    AirOverride override{stepDelta(c.velocity, dt, commandDistance(c))};
     auto* previous = currentAir;
     if (drive)
         currentAir = &override;
@@ -255,7 +255,7 @@ uintptr_t query(void* self) {
     Override step{self, position};
     Override* previous = current;
     if (drive) {
-        const Vec3 delta = stepDelta(c.velocity, dt), keepDirection{};
+        const Vec3 delta = stepDelta(c.velocity, dt, commandDistance(c)), keepDirection{};
         // This verified native function sets start/target and prepares its own bookkeeping.
         request(self, &delta, &keepDirection, 0);
         step.target = position + delta;
@@ -298,11 +298,12 @@ bool signature(uintptr_t rva, const uint8_t* expected, size_t n) {
 DWORD disable() {
     enabled = false;
     DWORD result{};
-    for (unsigned i = 0; i < hookCount; ++i) {
-        const auto s = MH_DisableHook(hooks[i]);
-        if (s != MH_OK && s != MH_ERROR_DISABLED)
-            result = 1400 + s;
-    }
+    // Under one freeze, as they went in; a hook queued but never applied is
+    // taken off the queue too.
+    for (unsigned i = 0; i < hookCount; ++i)
+        MH_QueueDisableHook(hooks[i]);
+    if (const auto s = MH_ApplyQueued(); s != MH_OK)
+        result = 1400 + s;
     const auto until = GetTickCount64() + 2000;
     while (active && GetTickCount64() < until)
         Sleep(1);
@@ -325,7 +326,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
             config.base != reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) ||
             !GetModuleHandleW(L"MilesMorales.exe") || (config.durationMs && config.durationMs < 1000) ||
             config.durationMs > 30000 || !std::isfinite(config.maxSpeed) || config.maxSpeed <= 0 ||
-            config.maxSpeed > 65 || config.syncAirVelocity > 1 || config.reserved) {
+            config.maxSpeed > maxPlayerSpeed || config.syncAirVelocity > 1 || config.reserved) {
             result = 1001;
             break;
         }
@@ -382,13 +383,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionStart(void* input) {
         timestep = reinterpret_cast<Timestep>(config.base + 0x1b81500);
         deadline = config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
         enabled = true;
-        for (unsigned i = 0; i < hookCount; ++i) {
-            s = MH_EnableHook(hooks[i]);
-            if (s != MH_OK) {
-                result = 1300 + s;
-                break;
-            }
-        }
+        // Under one freeze of the game's threads (stereo_probe.cpp says why).
+        for (unsigned i = 0; i < hookCount && s == MH_OK; ++i)
+            s = MH_QueueEnableHook(hooks[i]);
+        if (s == MH_OK)
+            s = MH_ApplyQueued();
+        if (s != MH_OK)
+            result = 1300 + s;
     } while (false);
     if (result && hookCount)
         disable();
@@ -432,9 +433,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionRetarget(void* input) {
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyMotionSubmit(void* input) {
     Command c{};
-    if (!read(reinterpret_cast<uintptr_t>(input), &c, sizeof(c)) || c.magic != 0x534d564d || c.version != 1 ||
-        c.bytes != sizeof(c) || !c.serial || c.enabled > 1 || c.leaseMs > 250 || (c.enabled && !c.leaseMs) ||
-        !finite(c.velocity) || length(c.velocity) > config.maxSpeed || c.reserved || c.reserved2)
+    if (!read(reinterpret_cast<uintptr_t>(input), &c, sizeof(c)) || c.magic != 0x534d564d ||
+        !validCommandVersion(c) || c.bytes != sizeof(c) || !c.serial || c.enabled > 1 || c.leaseMs > 250 ||
+        (c.enabled && !c.leaseMs) || !finite(c.velocity) || length(c.velocity) > config.maxSpeed ||
+        c.reserved)
         return 2001;
     AcquireSRWLockExclusive(&control);
     DWORD result{};

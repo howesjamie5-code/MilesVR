@@ -3,11 +3,19 @@
 #include "swing.hpp"
 #include <cstdint>
 
-// The web shooter in the game: a pull of a free hand's trigger fires the
-// game's own web-shooter shot (the web ball its R1 gadget fires) from that
-// hand. Pulls come from the swing's input samples (Shooter), thugs to aim at
-// from a watch of the game's bots (game_targets); the shot itself is the
-// game's, fired on the main thread through the hero's gadget.
+// The web shooter in the game: a pull of a free hand's trigger fires a web
+// ball of the game's own from that hand. Pulls come from the swing's input
+// samples (Shooter), thugs to aim at from a watch of the game's bots
+// (game_targets); the shot itself is the game's, fired on the main thread.
+//
+// Which shot. While the game has its own Web Shooter equipped - the gadget
+// its RB fires, WeaponImpactWeb for all its name, every player's unless a
+// wheel chose another - and it has a charge, the pull fires that gadget as
+// the wheel's gadgets go out (Data::gadgetShots), and its shot carries the
+// game's web: it seals a research station's leak, webs up a vent, a turret,
+// a thug. Otherwise, and once its charges are spent (Data::emptyPulls), the
+// ball below: the built-in web shooter's shot, which carries nothing, and
+// what Spidy fired every time until October 22.
 //
 // The gadget. The hero's web shooter is a WeaponWebShooter component (vtable
 // 391c950, 0x6b8 bytes) on a weapon actor of its own, beside the hero; one is
@@ -104,8 +112,9 @@ struct Data {
     // v4: the latest equip asked for (equipResult 0 done, 1 no player, 2 no
     // inventory, 3 not one the player owns, 4 the game allows no equipping
     // now, 5 a fault; equips: how many were asked for), the shots of the
-    // equipped gadget the free hand fired (not the web shooter's), and the
-    // pulls that found it without a charge.
+    // equipped gadget the free hand fired (the game's own Web Shooter's among
+    // them since October 22; never the ball), and the pulls that found it
+    // without a charge (for the Web Shooter, answered by the ball).
     uint64_t manager{};
     uint32_t gadgetCount{}, gadgetError{};
     uint16_t equipped{}, equipResult{};

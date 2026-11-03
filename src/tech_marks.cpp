@@ -464,6 +464,35 @@ void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view,
     }
 }
 
+void appendPadLayerSign(std::vector<Vertex>& out, Pose hand, Vec3 viewer, float pixelAngle) {
+    if (!finite(hand.position) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0)
+        return;
+    const Vec3 c = hand.position + hand.orientation.rotate({0, .07f, .065f});
+    const float distance = length(viewer - c);
+    if (!finite(c) || !(distance > .08f && distance < 3))
+        return;
+    const Facing f = facing(c, viewer);
+    const float px = pixelAngle * distance;
+    // A tag as the knockout's: a plate ruled above and below, an amber bar
+    // at its left, the title cyan over the hint.
+    constexpr float title = .014f, hint = .0072f, gap = .005f, margin = .006f;
+    const float wide = std::max(textWidth(padLayerTitle, title), textWidth(padLayerHint, hint));
+    const float x0 = wide * -.5f - margin, x1 = -x0;
+    const float y0 = (title + gap + hint) * -.5f - margin, y1 = -y0;
+    Hud hud(out, c, f.right, f.up, f.view, px);
+    hud.plain([&] { hud.fill({x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}, panel, .6f); });
+    hud.lit(0, [&] {
+        const float half = std::max(title * .025f, .7f * px);
+        hud.bar({x0, y1}, {x1, y1}, half, line, .9f);
+        hud.bar({x0, y0}, {x1, y0}, half, line, .9f);
+        hud.bar({x0, y0}, {x0, y1}, title * .07f, amber);
+    });
+    hud.plain([&] {
+        hud.text(padLayerTitle, {textWidth(padLayerTitle, title) * -.5f, y1 - margin - title}, title, cyan, 1,
+                 .13f);
+        hud.text(padLayerHint, {textWidth(padLayerHint, hint) * -.5f, y0 + margin}, hint, line, 1, .12f);
+    });
+}
 void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle) {
     const float distance = length(viewer - impact.point);
     if (!finite(impact.point) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0 ||
@@ -1085,9 +1114,16 @@ void appendGadgetWheel(std::vector<Vertex>& out, const GadgetWheelView& view, Ve
         }
     });
     // The middle: the lit gadget's name between two rules with ticked ends,
-    // its charges under it; nothing lit, a diamond in a ring.
+    // its charges under it; nothing lit, a diamond in a ring, or what a bare
+    // wheel says.
     if (lit < 0) {
         wheel.plain([&] {
+            if (view.bare) {
+                const float height = fittedHeight(bareWheelText, .0105f, .136f);
+                wheel.text(bareWheelText, {textWidth(bareWheelText, height) * -.5f, -height * .5f}, height, line,
+                           .8f, .11f);
+                return;
+            }
             wheel.arc({}, .012f, .0005f, line, .5f);
             wheel.diamond({}, .004f, line, .8f);
         });
@@ -1171,7 +1207,7 @@ void appendCalibration(std::vector<Vertex>& out, const body_calibration::View& v
     };
     if (view.phase == Phase::done) {
         char line1[64], line2[64];
-        std::snprintf(line1, sizeof line1, "EYE HEIGHT %.2f M", view.result.eyeHeight);
+        std::snprintf(line1, sizeof line1, "HEIGHT %.2f M", body_calibration::height(view.result.eyeHeight));
         std::snprintf(line2, sizeof line2, "ARM LENGTH %.2f M", view.result.armLength);
         hud.plain([&] {
             say("CALIBRATED", 0, .15f, .055f, cyan);

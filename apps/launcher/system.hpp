@@ -15,6 +15,7 @@
 #include <vector>
 
 namespace launcher {
+using spidy::launcher::Hardware;
 using spidy::launcher::LineKind;
 using spidy::launcher::Profile;
 using spidy::launcher::SessionOptions;
@@ -197,6 +198,11 @@ private:
 std::optional<DWORD> capture(const std::wstring& commandLine, const std::wstring& folder,
                              std::wstring* environmentBlock, DWORD timeoutMs, std::string& output);
 std::optional<std::string> sha256(const std::wstring& path);
+
+// For the summary a player copies into a help post: this PC's graphics card and memory, and what the
+// session that ended last in `root`\reports printed (its ...-console.log; empty when there is none).
+Hardware hardware();
+std::string lastConsoleLog(const std::wstring& root);
 
 // Shell actions.
 void openUrl(const char* url);

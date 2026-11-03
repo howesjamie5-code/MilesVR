@@ -78,6 +78,8 @@ bool Calibration::update(const Sample& s, const Proportions& p, const body::Conf
         hint = Hint::tracking;
     } else if (!(eyes >= c.lowestEyes)) {
         hint = Hint::standUp;
+    } else if (!(height(eyes) >= c.shortest && height(eyes) <= c.tallest)) {
+        hint = Hint::floor;
     } else {
         for (int i = 0; i < 2; ++i)
             wrists[i] = wrist(s.grips[i], i, bc);
@@ -110,6 +112,8 @@ bool Calibration::update(const Sample& s, const Proportions& p, const body::Conf
         else if (!straight[0] || !straight[1] ||
                  std::abs(reach[0] - reach[1]) > c.mismatch * std::max(reach[0], reach[1]))
             hint = Hint::straight;
+        else if (length(s.grips[0].position - s.grips[1].position) > c.widestSpan * eyes)
+            hint = Hint::floor;
         else if (std::abs(pitch) > c.headPitch || dot(forward, ahead) < std::cos(c.headYaw))
             hint = Hint::lookAhead;
         else if (!triggersHeld_)
@@ -176,6 +180,8 @@ const char* hintText(Hint hint) {
         return "LOOK STRAIGHT AHEAD";
     case Hint::triggers:
         return "HOLD BOTH TRIGGERS";
+    case Hint::floor:
+        return "CHECK YOUR HEADSET'S FLOOR";
     default:
         return "HOLD STILL";
     }
@@ -250,7 +256,7 @@ void appendView(std::vector<Vertex>& out, const View& view, Vec3 viewer, UiStyle
     if (view.phase == Phase::done) {
         char line[64];
         panel.text(out, "CALIBRATED", 0, .17f, .055f, green);
-        std::snprintf(line, sizeof line, "EYE HEIGHT %.2f M", view.result.eyeHeight);
+        std::snprintf(line, sizeof line, "HEIGHT %.2f M", height(view.result.eyeHeight));
         panel.text(out, line, 0, .06f, .04f, white);
         std::snprintf(line, sizeof line, "ARM LENGTH %.2f M", view.result.armLength);
         panel.text(out, line, 0, -.02f, .04f, white);

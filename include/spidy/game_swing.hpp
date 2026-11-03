@@ -67,14 +67,16 @@ class InFlightStep {
         // The movement module moves the body as far as stepDelta says: a
         // command it shortened (a step much longer than the one before it,
         // at the speed limit) is no collision, and takes no speed away.
-        Vec3 travel = flight ? native_movement::stepDelta(flight->requested, s.dt) : s.achieved * s.dt;
+        Vec3 travel = flight ? native_movement::stepDelta(flight->requested, s.dt, flight->distance)
+                             : s.achieved * s.dt;
         // The step that produced the observed velocity: the one observed
         // before this one, or an unobserved one about as long as this one.
         const float took = s.step == step_ + 1 && dt_ > 0 ? dt_ : s.dt;
         if (produced && took > 0) {
             // Collision took this part of the command away. Remove motion into
             // that surface; a projection cannot remove one contact twice.
-            const Vec3 lost = native_movement::stepDelta(produced->requested, took) / took - s.achieved;
+            const Vec3 lost =
+                native_movement::stepDelta(produced->requested, took, produced->distance) / took - s.achieved;
             if (length(lost) > .25f) {
                 const Vec3 into = normalized(lost);
                 velocity -= into * std::max(0.f, dot(velocity, into));
@@ -87,9 +89,10 @@ class InFlightStep {
         dt_ = s.dt;
         return {s.position + travel, velocity, grounded};
     }
-    // A submitted command: its velocity and the solver's velocity at its end.
-    void issued(uint64_t serial, Vec3 requested, Vec3 end) {
-        records_[next_++ % records_.size()] = {serial, requested, end};
+    // A submitted command: its velocity, the solver's velocity at its end and
+    // the farthest its step may go (native_movement::commandDistance).
+    void issued(uint64_t serial, Vec3 requested, Vec3 end, float distance = native_movement::farthestStep) {
+        records_[next_++ % records_.size()] = {serial, requested, end, distance};
     }
     void reset() {
         *this = {};
@@ -99,6 +102,7 @@ class InFlightStep {
     struct Record {
         uint64_t serial{};
         Vec3 requested{}, end{};
+        float distance = native_movement::farthestStep;
     };
     const Record* find(uint64_t serial) const {
         for (const auto& record : records_)
@@ -119,7 +123,7 @@ struct Hand {
     float trigger{}, grip{};
 };
 struct Command {
-    uint32_t magic = 0x5357434d, version = 5, bytes = sizeof(Command), focused{};
+    uint32_t magic = 0x5357434d, version = 6, bytes = sizeof(Command), focused{};
     uint64_t serial{};
     uint32_t leaseMs = 100, jump{};
     Hand hands[2];
@@ -147,9 +151,15 @@ struct Command {
     // Version 4 (commandBytesV4) ends before them.
     Vec3 wallPositions[2]{};
     float wallGrips[2]{};
-    uint32_t wallRotate{};
+    uint32_t wallRotate{}, padding5{}; // version 5 ended in these 4 bytes of padding
+    // Version 6, EYE AIM: where the eyes look (Input::gazeOrigin, gaze; gaze
+    // zero: untracked, or EYE AIM off), and eyeAim bit 0: web balls go there
+    // (Input::gazeShots). The aim previews say what the gaze meets (AimData::
+    // gaze) whenever there is one. Version 5 (commandBytesV5) ends before them.
+    Vec3 gazeOrigin{}, gaze{};
+    uint32_t eyeAim{}, reserved6{};
 };
-constexpr uint32_t commandBytesV2 = 168, commandBytesV3 = 184, commandBytesV4 = 200;
+constexpr uint32_t commandBytesV2 = 168, commandBytesV3 = 184, commandBytesV4 = 200, commandBytesV5 = 240;
 // attached: 0 none, else bits: 1 a web; 2 both hands hold it (Swing::shared:
 // the other hand's web is the same one); 4 this hand took hold of it and did
 // not shoot it (Web::taken; it stays when the other hand lets go).
@@ -189,9 +199,10 @@ struct Data {
     float wallDistance{};
     uint32_t walls{}, wallJumps{}, mount{};
 };
-static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 240 &&
+static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 272 &&
               offsetof(Command, tilt) == commandBytesV2 && offsetof(Command, leap) == commandBytesV3 &&
-              offsetof(Command, wallPositions) == commandBytesV4 && offsetof(Command, wallRotate) == 232);
+              offsetof(Command, wallPositions) == commandBytesV4 && offsetof(Command, wallRotate) == 232 &&
+              offsetof(Command, gazeOrigin) == commandBytesV5);
 // SpidySwingSettings: what the VR settings (the MILES VR tab in the game's
 // Settings) change during play.
 // grab: webs catch props and thugs (a swing started without them starts
@@ -220,10 +231,27 @@ static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 2
 // arcade: arcade webs (the VR settings' WEB STYLE: ARCADE; SwingConfig::
 // arcade). Version 6 (settingsBytesV6) ends before it and leaves the webs'
 // style as it is.
+// Version 20 appends webSpeed (0 off, a web sticks at once; 1 to 3 it flies
+// there) and version 19 webRange, m (100 as before): Swing::webTravel.
+// Version 18 appends ropeSteering and version 17 twoHandZip, both off by
+// default: the hand gestures of Swing::allowGestures.
+// Version 16 appends slingshotSpeed, m/s: 0 the slingshot's launch as before,
+// under maxSpeed; 20 to 300 its own (Swing::setSlingshotSpeed).
+// Version 15 appends swingAssist (off by default): flying at something,
+// speed into it is cut in time (Swing::allowSwingAssist).
+// Version 14 appends softRelease: 0 a web lets go at once, as before; 1 to 3
+// its last pull fades over 120, 180 or 240 ms (Swing::softRelease).
+// Version 13 appends elasticWeb: 0 a hard rope as before, 1 to 3 webs that
+// stretch under load, softer and softer (Swing::elasticWeb).
+// Version 12 appends smartAnchor (off by default): with airWebs off, a shot
+// that just misses catches a nearby real surface (Swing::allowSmartAnchor).
+// Version 11 appends combatVisuals: off allows freely directed combat blows.
+// Version 10 appends betterClimbing (off by default).
+// Version 9 appends webSlingshot (off by default).
 // Version 8 appends handClimb without changing the upstream phone or arcade
 // fields. Older official settings keep their original layout and meaning.
 struct Settings {
-    uint32_t magic = 0x53575354, version = 8, bytes = sizeof(Settings), grab = 1;
+    uint32_t magic = 0x53575354, version = 20, bytes = sizeof(Settings), grab = 1;
     float maxSpeed = 32;
     uint32_t airWebs = 1;
     float gravity = 6;
@@ -232,14 +260,56 @@ struct Settings {
     uint32_t noBlows{};
     uint32_t arcade{};
     uint32_t handClimb{};
+    uint32_t webSlingshot{};
+    uint32_t betterClimbing{};
+    uint32_t combatVisuals = 1;
+    uint32_t smartAnchor{};
+    uint32_t elasticWeb{};
+    uint32_t softRelease{};
+    uint32_t swingAssist{};
+    float slingshotSpeed{};
+    uint32_t twoHandZip{};
+    uint32_t ropeSteering{};
+    float webRange = 100;
+    uint32_t webSpeed{};
 };
 constexpr uint32_t settingsBytesV3 = 28, settingsBytesV4 = 32, settingsBytesV5 = 36, settingsBytesV6 = 40,
-                   settingsBytesV7 = 44;
-static_assert(sizeof(Settings) == 48 && offsetof(Settings, walls) == settingsBytesV3 &&
+                   settingsBytesV7 = 44, settingsBytesV8 = 48, settingsBytesV9 = 52, settingsBytesV10 = 56,
+                   settingsBytesV11 = 60, settingsBytesV12 = 64, settingsBytesV13 = 68,
+                   settingsBytesV14 = 72, settingsBytesV15 = 76, settingsBytesV16 = 80, settingsBytesV17 = 84,
+                   settingsBytesV18 = 88, settingsBytesV19 = 92;
+static_assert(sizeof(Settings) == 96 && offsetof(Settings, walls) == settingsBytesV3 &&
               offsetof(Settings, physical) == settingsBytesV4 &&
               offsetof(Settings, noBlows) == settingsBytesV5 &&
               offsetof(Settings, arcade) == settingsBytesV6 &&
-              offsetof(Settings, handClimb) == settingsBytesV7);
+              offsetof(Settings, handClimb) == settingsBytesV7 &&
+              offsetof(Settings, webSlingshot) == settingsBytesV8 &&
+              offsetof(Settings, betterClimbing) == settingsBytesV9 &&
+              offsetof(Settings, combatVisuals) == settingsBytesV10 &&
+              offsetof(Settings, smartAnchor) == settingsBytesV11 &&
+              offsetof(Settings, elasticWeb) == settingsBytesV12 &&
+              offsetof(Settings, softRelease) == settingsBytesV13 &&
+              offsetof(Settings, swingAssist) == settingsBytesV14 &&
+              offsetof(Settings, slingshotSpeed) == settingsBytesV15 &&
+              offsetof(Settings, twoHandZip) == settingsBytesV16 &&
+              offsetof(Settings, ropeSteering) == settingsBytesV17 &&
+              offsetof(Settings, webRange) == settingsBytesV18 &&
+              offsetof(Settings, webSpeed) == settingsBytesV19);
+// SpidyWebFlightSample: each hand's web in flight (WEB SPEED). phases: 0 no
+// web, 1 flying, 2 just arrived and catching softly, 3 holding.
+struct WebFlightData {
+    uint32_t magic = 0x57464c54, version = 1, bytes = sizeof(WebFlightData), reserved{};
+    uint32_t phases[2]{};
+    Vec3 tips[2]{};
+    float durations[2]{}, progress[2]{1, 1}, coupling[2]{};
+};
+static_assert(sizeof(WebFlightData) == 72);
+// SpidySlingshotSample: charge in [0, 1], zero after cancel or release.
+struct SlingshotData {
+    uint32_t magic = 0x53534c47, version = 1, bytes = sizeof(SlingshotData);
+    float charge{};
+};
+static_assert(sizeof(SlingshotData) == 16);
 // Physical webs (SpidyRopeData): what the ropes did, for the session report.
 struct Ropes {
     uint32_t magic = 0x53575250, version = 3, bytes = sizeof(Ropes), physical{};
@@ -262,12 +332,39 @@ struct Ropes {
 static_assert(sizeof(Ropes) == 96);
 // Separate telemetry keeps existing swing/probe packets compatible.
 struct ClimbData {
-    uint32_t magic = 0x53434c44, version = 1, bytes = sizeof(ClimbData), status{};
+    uint32_t magic = 0x53434c44, version = 2, bytes = sizeof(ClimbData), status{};
     int64_t sequence{};
     uint64_t contacts[2]{};
     uint32_t hands{}, reserved{};
+    Vec3 crawlMove{}; // world-space stick intent for the game's supported crawl
+    uint32_t crawl{};
+    uint64_t sampleTimeNs{};
 };
-static_assert(sizeof(ClimbData) == 48);
+static_assert(sizeof(ClimbData) == 72 && offsetof(ClimbData, crawlMove) == 48);
+// Only a current outdoor attachment can interrupt the visual momentum run.
+// A squeezed grip without contact, a vent hold or stale feedback cannot.
+inline bool outdoorClimbGrip(const ClimbData& d, uint64_t nowNs) {
+    return d.magic == 0x53434c44 && d.version == 2 && d.bytes == sizeof(ClimbData) && d.status &&
+        d.crawl == 0 && d.hands > 0 && d.hands <= 3 && d.sampleTimeNs &&
+        nowNs >= d.sampleTimeNs && nowNs - d.sampleTimeNs <= 100'000'000;
+}
+// Expired feedback, leaving the crawl or a stick press never repeats a pull.
+inline Vec3 crawlPull(const ClimbData& d, bool allowed, uint64_t nowNs) {
+    if (!allowed || d.version != 2 || d.bytes != sizeof(ClimbData) || !d.status || d.crawl != 1 ||
+        !d.hands || d.hands > 3 || !d.sampleTimeNs || nowNs < d.sampleTimeNs ||
+        nowNs - d.sampleTimeNs > 100'000'000 || !finite(d.crawlMove)) return {};
+    return limited(d.crawlMove, 1.f);
+}
+// Only measured hand pulls bypass the game's Xbox stick dead zone. Otherwise
+// a slow physical pull becomes a stick too small to move the player at all.
+// x/z are native right/forward, not tracking-space axes.
+inline Vec3 crawlStick(Vec3 pull, Vec3 ahead, Vec3 side) {
+    if (!finite(pull) || !finite(ahead) || !finite(side)) return {};
+    Vec3 stick{dot(pull, side), 0, dot(pull, ahead)};
+    const float amount = length(stick);
+    if (amount < .012f) return {}; // under 3 cm/s: stationary controller noise
+    return stick * ((.25f + .75f * std::min(amount, 1.f)) / amount);
+}
 // Contact counters survive an attachment released between headset samples.
 class ClimbPulses {
   public:
@@ -323,10 +420,27 @@ inline bool validSettings(const Settings& s) {
          (s.version == 5 && s.bytes == settingsBytesV5) ||
          (s.version == 6 && s.bytes == settingsBytesV6) ||
          (s.version == 7 && s.bytes == settingsBytesV7) ||
-         (s.version == 8 && s.bytes == sizeof(Settings))) &&
+         (s.version == 8 && s.bytes == settingsBytesV8) ||
+         (s.version == 9 && s.bytes == settingsBytesV9) ||
+         (s.version == 10 && s.bytes == settingsBytesV10) ||
+         (s.version == 11 && s.bytes == settingsBytesV11) ||
+         (s.version == 12 && s.bytes == settingsBytesV12) ||
+         (s.version == 13 && s.bytes == settingsBytesV13) ||
+         (s.version == 14 && s.bytes == settingsBytesV14) ||
+         (s.version == 15 && s.bytes == settingsBytesV15) ||
+         (s.version == 16 && s.bytes == settingsBytesV16) ||
+         (s.version == 17 && s.bytes == settingsBytesV17) ||
+         (s.version == 18 && s.bytes == settingsBytesV18) ||
+         (s.version == 19 && s.bytes == settingsBytesV19) ||
+         (s.version == 20 && s.bytes == sizeof(Settings))) &&
         s.grab <= 1 && std::isfinite(s.maxSpeed) && s.maxSpeed > 0 && s.maxSpeed <= motionSpeedLimit &&
         s.airWebs <= 1 && std::isfinite(s.gravity) && s.gravity >= 0 && s.gravity <= maxGravity &&
-        s.walls <= 4 && s.physical <= 1 && s.noBlows <= 3 && s.arcade <= 1 && s.handClimb <= 1;
+        s.walls <= 4 && s.physical <= 1 && s.noBlows <= 3 && s.arcade <= 1 && s.handClimb <= 1 &&
+        s.webSlingshot <= 1 && s.betterClimbing <= 1 && s.combatVisuals <= 1 && s.smartAnchor <= 1 &&
+        s.elasticWeb <= 3 && s.softRelease <= 3 && s.swingAssist <= 1 && std::isfinite(s.slingshotSpeed) &&
+        (s.slingshotSpeed == 0 || (s.slingshotSpeed >= 20 && s.slingshotSpeed <= 300)) && s.twoHandZip <= 1 &&
+        s.ropeSteering <= 1 && std::isfinite(s.webRange) && s.webRange >= 10 && s.webRange <= 1000 &&
+        s.webSpeed <= 3;
 }
 static_assert(sizeof(WebState) == 28 && sizeof(Data) == 272 && offsetof(Data, wall) == 240);
 // The player is in the air: Spidy's own flight, or the game's jump or fall,
@@ -359,19 +473,25 @@ struct Aim {
     Vec3 normal{};   // the surface's normal (anchor, blocked); zero for none
 };
 struct AimData {
-    uint32_t magic = 0x5357414d, version = 1, bytes = sizeof(AimData), status{};
+    uint32_t magic = 0x5357414d, version = 2, bytes = sizeof(AimData), status{};
     int64_t sequence{};
     uint64_t serial{}; // the input command the aims were worked out from
     Aim hands[2];
+    // Version 2: what the eyes look at (Command::gaze; EYE AIM): anchor, the
+    // first surface on their line within gazeRange, at `point`; air, none,
+    // `point` that far out along it; none, no gaze in the command.
+    Aim gaze;
 };
-static_assert(sizeof(Aim) == 32 && sizeof(AimData) == 96);
+static_assert(sizeof(Aim) == 32 && sizeof(AimData) == 128);
+constexpr float gazeRange = 150;
 constexpr uint32_t aimLeaseMs = 250;
 inline bool valid(const Command& c) {
     const auto& t = c.tilt;
     const float tilt = t.x * t.x + t.y * t.y + t.z * t.z + t.w * t.w;
     if (c.magic != 0x5357434d ||
         !((c.version == 2 && c.bytes == commandBytesV2) || (c.version == 3 && c.bytes == commandBytesV3) ||
-          (c.version == 4 && c.bytes == commandBytesV4) || (c.version == 5 && c.bytes == sizeof(c))) ||
+          (c.version == 4 && c.bytes == commandBytesV4) || (c.version == 5 && c.bytes == commandBytesV5) ||
+          (c.version == 6 && c.bytes == sizeof(c))) ||
         !std::isfinite(c.leap) || c.leap < 0 || c.leap > 1 || !finite(c.look) || length(c.look) > 1.01f ||
         !c.serial || c.focused > 1 || c.jump > 1 || c.leaseMs > 250 || (c.focused && !c.leaseMs) ||
         !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 1 ||
@@ -390,7 +510,10 @@ inline bool valid(const Command& c) {
         if (!finite(c.wallPositions[i]) || !std::isfinite(c.wallGrips[i]) || c.wallGrips[i] < 0 ||
             c.wallGrips[i] > 1)
             return false;
-    return c.wallRotate <= 1;
+    // A gaze is a direction or none at all.
+    const float gaze = length(c.gaze);
+    return c.wallRotate <= 1 && finite(c.gazeOrigin) && finite(c.gaze) &&
+           (gaze == 0 || std::abs(gaze - 1) < .01f) && c.eyeAim <= 1;
 }
 class InputSampleClock {
   public:
@@ -535,6 +658,11 @@ inline Input input(const Command& c) {
             out.hands[i].wallGrip = c.wallGrips[i];
         }
         out.wallRotate = c.wallRotate != 0;
+    }
+    if (c.version >= 6 && length(c.gaze) > .5f) {
+        out.gazeOrigin = c.gazeOrigin;
+        out.gaze = c.gaze;
+        out.gazeShots = (c.eyeAim & 1) != 0;
     }
     return out;
 }

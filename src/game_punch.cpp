@@ -2,8 +2,10 @@
 // target watch, blows as the game's own damage; and fighting across the
 // room, the web strike and the flow (game_punch.hpp).
 #include "spidy/game_punch.hpp"
+#include "spidy/game_focus.hpp"
 #include "spidy/game_grab.hpp"
 #include "spidy/game_sense.hpp"
+#include "spidy/game_sound.hpp"
 #include "spidy/game_targets.hpp"
 #include "spidy/game_time.hpp"
 #include "spidy/native_bodies.hpp"
@@ -609,20 +611,28 @@ void land(PunchEvent e, bool byStrike) {
     // and he then goes the way that fist went.
     const Cue before = cues.cue();
     const Vec3 went = byStrike ? strike.direction() : e.direction;
-    const bool called = cues.answers(went, e.point - headAt);
+    const bool called = fighter.combatVisuals && cues.answers(went, e.point - headAt);
+    if (!fighter.combatVisuals && byStrike) {
+        // Keep the player's upward/downward swing when the strike arrives.
+        const auto swung = punches.blow(went, e.speed);
+        e.direction = swung.direction;
+        e.knockback = swung.knockback;
+    }
     if (called && byStrike)
         e.direction = normalized(went);
     tally.called += called;
     tally.strikeCalled += called && byStrike;
-    tally.missedCalls += !byStrike && !called && before.way != CueWay::None;
+    tally.missedCalls += fighter.combatVisuals && !byStrike && !called && before.way != CueWay::None;
     // The flow's finisher must be called: a blow that would be it and
     // answers no such call is a plain one that leaves him standing, to be
     // called on, and the count stays.
-    const bool uncalled = flow.finisher(flow.count() + 1) && !(called && before.finisher);
+    const bool uncalled =
+        fighter.combatVisuals && flow.finisher(flow.count() + 1) && !(called && before.finisher);
     if (uncalled)
         flow.keep();
     const int count = uncalled ? flow.count() : flow.hit();
-    auto d = deliver(e, airborne, count, flow, {}, called ? before.way : CueWay::None, cues.config().damage);
+    auto d = deliver(e, airborne, count, flow, {}, called ? before.way : CueWay::None, cues.config().damage,
+                     !fighter.combatVisuals);
     if (uncalled && (d.fly || d.knockback >= Knockback::Knockdown)) {
         d.kind = BlowKind::Hit;
         d.kinetic = d.fly = false;
@@ -637,7 +647,7 @@ void land(PunchEvent e, bool byStrike) {
         if (made)
             noteCounter(*made, false);
         ++senseTally.counterBlows;
-        if (d.kind == BlowKind::Hit) {
+        if (d.kind == BlowKind::Hit && (fighter.combatVisuals || verticalBlow(e, airborne) != CueWay::Down)) {
             Vec3 along = e.direction;
             along.y = 0;
             along = length(along) > 1e-3f ? normalized(along) : Vec3{0, 0, -1};
@@ -692,12 +702,34 @@ void land(PunchEvent e, bool byStrike) {
     // A plain blow on a boss is the game's own attack (Venom::bossBlows). His venom punch stays the
     // module's own, at once (the user, October 20: the game's Venom Punch "delays the attack").
     const bool onBoss = bossRecord(e.target) && !venom;
+    bool landed = false;
     if (onBoss) {
         AcquireSRWLockExclusive(&output);
         venomOut.bossBlows += bossStunned(e.target) ? 1ull << 32 : 1ull;
         ReleaseSRWLockExclusive(&output);
     } else {
-        native_bodies::damage(tamedForBoss(request));
+        landed = native_bodies::damage(tamedForBoss(request));
+    }
+    // The Focus the game's own blow earns, in the air its air blow's: the
+    // request alone earns none (game_focus.hpp). And the game's own melee
+    // impact on him (game_sound.hpp): where it landed, as hard as the headset
+    // grades it (a jab light, a firm blow medium, heavy, a finisher extreme),
+    // the flow's count, in the air or not, a fist or a web strike.
+    if (landed) {
+        game_focus::earn(fighter.record,
+                         fighter.grounded ? game_focus::Kind::meleeDefault : game_focus::Kind::meleeAir);
+        game_sound::Blow sound;
+        sound.intensity = d.kind == BlowKind::Finisher        ? 4
+                          : d.kind != BlowKind::Hit || called ? 3
+                          : e.strength >= .35f                ? 2
+                                                              : 1;
+        for (const auto& enemy : enemies)
+            if (enemy.id == e.target)
+                sound.location = game_sound::locationOf(e.point.y - enemy.feet.y, enemy.height);
+        sound.combo = static_cast<uint8_t>(std::clamp(count - 1, 0, 5));
+        sound.air = !fighter.grounded;
+        sound.webStrike = byStrike;
+        game_sound::blow(fighter.record, e.target, sound);
     }
     if (!venom)
         chargeMeter(venomMeter.load(), venom_punch::gain(d.kind != BlowKind::Hit && d.kind != BlowKind::Finisher,
@@ -883,7 +915,7 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     events.clear();
     punches.update(seconds, hands, inReach, events);
     flow.update(seconds);
-    if (!flow.count())
+    if (!fighter.combatVisuals || !flow.count())
         cues.clear();
     steerFlights(seconds);
     for (const auto& e : events) {
@@ -1018,9 +1050,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
     if (counterWishLeft > 0 && std::any_of(enemies.begin(), enemies.end(),
                                            [&](const FightTarget& e) { return e.id == counterWish; }))
         wish.target = counterWish;
-    for (const auto& e : enemies)
-        if (e.id == wish.target)
-            wish.called = Cues::direction(cues.cue().way, e.middle() - head);
+    wish.freeDirections = !fighter.combatVisuals;
+    if (fighter.combatVisuals)
+        for (const auto& e : enemies)
+            if (e.id == wish.target)
+                wish.called = Cues::direction(cues.cue().way, e.middle() - head);
     // With a look to mark by, a strike needs its mark: nobody marked, nobody
     // to fly to. (Without one, from an older headset module, the fist picks.)
     const bool looking = finite(in.look) && length(in.look) > .5f;
@@ -1036,6 +1070,15 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         tally.swung += strikeOpened->called;
         tally.held += strikeOpened->held;
         tally.distance = strikeOpened->distance;
+    } else if (const auto dove = strike.dive(player.velocity, player.grounded, head, player.feet, enemies, world,
+                                             wish.target, punches.config())) {
+        // His own flight into the marked enemy: a swing, a zip, a jump or a
+        // fall that takes him at him fast, feet first (WebStrike::dive). The
+        // webs let go; the rest of the way is the strike's.
+        lock.take(dove->target);
+        opened = {true, false};
+        ++tally.opened;
+        tally.distance = dove->distance;
     } else if (flying && strike.phase() == WebStrike::Phase::Idle) {
         ++tally.missed; // the player took no steps: perched, or held by the game
     }
@@ -1110,7 +1153,7 @@ Flight game_punch::fly(float seconds, Vec3 feet, bool grounded, bool waiting) {
     for (const auto& e : enemies)
         if (e.id == strike.target())
             target = &e;
-    const bool flying = strike.phase() == WebStrike::Phase::Flying;
+    const bool flying = strike.phase() == WebStrike::Phase::Flying, diving = strike.diving();
     const int hand = strike.hand();
     const auto step = strike.step(seconds, feet, grounded, flying ? target : nullptr);
     out.drive = step.drive;
@@ -1120,7 +1163,8 @@ Flight game_punch::fly(float seconds, Vec3 feet, bool grounded, bool waiting) {
         // the fist that opened the strike, and no weaker than a strike's.
         const Vec3 chest = feet + Vec3{0, strike.config().chest, 0};
         Vec3 way = normalized(target->middle() - chest);
-        if (length(way) < .5f)
+        // A dive's: along the dive, the way the player came at him.
+        if (length(way) < .5f || diving)
             way = strike.direction();
         auto e = punches.blow(way, std::max(strike.fistSpeed(),
                                             speedOf(punches.config(), strike.config().minStrength)));

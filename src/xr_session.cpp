@@ -1,5 +1,6 @@
 #include "spidy/xr_session.hpp"
 #include "spidy/eye_resolution.hpp"
+#include "spidy/vd_eyes.hpp"
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -31,6 +32,12 @@ XrRuntime::~XrRuntime() {
     for (auto s : gripSpaces_)
         if (s)
             xrDestroySpace(s);
+    if (gazeSpace_)
+        xrDestroySpace(gazeSpace_);
+    if (vdState_)
+        UnmapViewOfFile(vdState_);
+    if (vdMapping_)
+        CloseHandle(vdMapping_);
     if (head_)
         xrDestroySpace(head_);
     if (space_)
@@ -39,6 +46,8 @@ XrRuntime::~XrRuntime() {
         xrDestroySession(session_);
     if (actionSet_)
         xrDestroyActionSet(actionSet_);
+    if (gazeSet_)
+        xrDestroyActionSet(gazeSet_);
     if (instance_)
         xrDestroyInstance(instance_);
 }
@@ -78,6 +87,11 @@ void XrRuntime::initialize(
     for (const auto& layout : controllerLayouts())
         if (layout.extension && has(layout.extension))
             extensions_.push_back(layout.extension);
+    // The eyes' gaze, for EYE AIM, wherever the runtime offers it (Meta's,
+    // Virtual Desktop's, SteamVR's, Varjo's, Pimax's): whether this headset
+    // has an eye tracker the system says once there is one (eyeTracking).
+    if (has(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME))
+        extensions_.push_back(XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME);
     XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
     strcpy_s(ci.applicationInfo.applicationName, "Spidy");
     strcpy_s(ci.applicationInfo.engineName, "Spidy");
@@ -93,9 +107,14 @@ void XrRuntime::initialize(
         created = xrCreateInstance(&ci, &instance_);
     }
     xr(created, "Create XR instance");
+    gazeOffered_ = std::any_of(extensions_.begin(), extensions_.end(), [](const char* name) {
+        return std::strcmp(name, XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0;
+    });
     XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
     xr(xrGetInstanceProperties(instance_, &properties), "XR runtime properties");
     std::cout << "Runtime: " << properties.runtimeName << '\n';
+    // Virtual Desktop's calls itself VirtualDesktopXR.
+    virtualDesktop_ = std::strstr(properties.runtimeName, "VirtualDesktop") != nullptr;
     if (probeOnly) {
         std::cout << "D3D12 extension available. Probe did not start a headset session.\n";
         // Which controller layouts this runtime takes needs no headset.
@@ -105,6 +124,14 @@ void XrRuntime::initialize(
     XrSystemGetInfo si{XR_TYPE_SYSTEM_GET_INFO};
     si.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     xr(xrGetSystem(instance_, &si, &system_), "Find headset (connect Quest to Virtual Desktop first)");
+    bool eyeTracker = false;
+    if (gazeOffered_) {
+        XrSystemEyeGazeInteractionPropertiesEXT gaze{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};
+        XrSystemProperties system{XR_TYPE_SYSTEM_PROPERTIES};
+        system.next = &gaze;
+        eyeTracker = XR_SUCCEEDED(xrGetSystemProperties(instance_, system_, &system)) &&
+                     gaze.supportsEyeGazeInteraction;
+    }
     PFN_xrGetD3D12GraphicsRequirementsKHR requirementsFn{};
     xr(xrGetInstanceProcAddr(instance_, "xrGetD3D12GraphicsRequirementsKHR",
                              reinterpret_cast<PFN_xrVoidFunction*>(&requirementsFn)),
@@ -159,6 +186,14 @@ void XrRuntime::initialize(
     sp.poseInReferenceSpace = identity();
     xr(xrCreateReferenceSpace(session_, &sp, &head_), "Create head space");
     actions();
+    eyeTracking_ = !gazeOffered_ ? EyeTracking::none
+                   : eyeTracker && gazeSpace_ ? EyeTracking::tracker
+                   : EyeTracking::noTracker;
+    std::cout << "Eye tracking: "
+              << (eyeTracking_ == EyeTracking::tracker     ? "this headset's eye tracker (EYE AIM can use it)"
+                  : eyeTracking_ == EyeTracking::noTracker ? "offered by the runtime, not for this headset"
+                                                           : "not offered by this runtime")
+              << '\n';
     xr(xrEnumerateEnvironmentBlendModes(instance_, system_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0,
                                         &count, nullptr),
        "Count blend modes");
@@ -353,10 +388,49 @@ void XrRuntime::actions() {
         info.action = grip_;
         xr(xrCreateActionSpace(session_, &info, &gripSpaces_[i]), "Create grip space");
     }
+    if (gazeAction_) {
+        XrActionSpaceCreateInfo info{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        info.poseInActionSpace = identity();
+        info.action = gazeAction_;
+        if (XR_FAILED(xrCreateActionSpace(session_, &info, &gazeSpace_)))
+            gazeSpace_ = XR_NULL_HANDLE;
+    }
+    const XrActionSet sets[] = {actionSet_, gazeSet_};
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
-    attach.countActionSets = 1;
-    attach.actionSets = &actionSet_;
+    attach.countActionSets = gazeSet_ ? 2 : 1;
+    attach.actionSets = sets;
     xr(xrAttachSessionActionSets(session_, &attach), "Attach actions");
+}
+// The eyes' gaze (XR_EXT_eye_gaze_interaction), in a set of its own. Never at
+// the price of VR: a runtime that takes no binding for it plays as before.
+void XrRuntime::createGaze() {
+    XrActionSetCreateInfo set{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(set.actionSetName, "eye_aim");
+    strcpy_s(set.localizedActionSetName, "Spidy Eye Aim");
+    XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+    strcpy_s(info.actionName, "eye_gaze");
+    strcpy_s(info.localizedActionName, "Eye aim");
+    info.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    XrPath pose{}, profile{};
+    bool taken = XR_SUCCEEDED(xrCreateActionSet(instance_, &set, &gazeSet_)) &&
+                 XR_SUCCEEDED(xrCreateAction(gazeSet_, &info, &gazeAction_)) &&
+                 XR_SUCCEEDED(xrStringToPath(instance_, "/user/eyes_ext/input/gaze_ext/pose", &pose)) &&
+                 XR_SUCCEEDED(xrStringToPath(instance_, "/interaction_profiles/ext/eye_gaze_interaction", &profile));
+    if (taken) {
+        XrActionSuggestedBinding binding{gazeAction_, pose};
+        XrInteractionProfileSuggestedBinding suggested{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+        suggested.interactionProfile = profile;
+        suggested.countSuggestedBindings = 1;
+        suggested.suggestedBindings = &binding;
+        taken = XR_SUCCEEDED(xrSuggestInteractionProfileBindings(instance_, &suggested));
+    }
+    if (!taken) {
+        if (gazeSet_)
+            xrDestroyActionSet(gazeSet_);
+        gazeSet_ = XR_NULL_HANDLE;
+        gazeAction_ = XR_NULL_HANDLE;
+    }
+    std::cout << "Eye gaze: " << (taken ? "taken\n" : "not taken by this runtime\n");
 }
 // The actions and the layouts that bind them: the instance's, no session needed.
 void XrRuntime::createActions() {
@@ -393,6 +467,8 @@ void XrRuntime::createActions() {
     for (const auto& layout : layouts)
         if (offered(layout))
             suggest(layout);
+    if (gazeOffered_)
+        createGaze();
 }
 void XrRuntime::poll() {
     XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
@@ -439,6 +515,29 @@ bool XrRuntime::locate(XrSpace source, XrTime time, Pose& out) {
     out = pose(l.pose);
     return true;
 }
+bool XrRuntime::sharedGaze(const Pose& head, Pose& out) {
+    // Mapped once the Streamer shares it; until then tried every 256 frames.
+    if (!vdState_ && !(inputs_ & 255)) {
+        if (!vdMapping_)
+            vdMapping_ = OpenFileMappingW(FILE_MAP_READ, FALSE, L"VirtualDesktop.BodyState");
+        if (const void* view = vdMapping_ ? MapViewOfFile(vdMapping_, FILE_MAP_READ, 0, 0, 0) : nullptr) {
+            MEMORY_BASIC_INFORMATION region{};
+            if (VirtualQuery(view, &region, sizeof region) && region.RegionSize >= vd_eyes::bytes)
+                vdState_ = static_cast<const uint8_t*>(view);
+            else
+                UnmapViewOfFile(view);
+        }
+    }
+    if (!vdState_)
+        return false;
+    uint8_t state[vd_eyes::bytes];
+    std::memcpy(state, vdState_, sizeof state);
+    Quat eyes;
+    if (!vd_eyes::gaze(state, eyes))
+        return false;
+    out = compose(head, {{}, eyes});
+    return true;
+}
 XrFrame XrRuntime::input(XrTime time) {
     XrFrame frame;
     frame.focused = state_ == XR_SESSION_STATE_FOCUSED;
@@ -452,16 +551,37 @@ XrFrame XrRuntime::input(XrTime time) {
     }
     if (!frame.focused)
         return frame;
-    XrActiveActionSet active{actionSet_, XR_NULL_PATH};
+    const bool gaze = gazeWanted_ && gazeSpace_ && eyeTracking_ == EyeTracking::tracker;
+    const XrActiveActionSet active[] = {{actionSet_, XR_NULL_PATH}, {gazeSet_, XR_NULL_PATH}};
     XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
-    sync.countActiveActionSets = 1;
-    sync.activeActionSets = &active;
+    sync.countActiveActionSets = gaze ? 2 : 1;
+    sync.activeActionSets = active;
     const auto result = xrSyncActions(session_, &sync);
     if (result == XR_SESSION_NOT_FOCUSED) {
         frame.focused = false;
         return frame;
     }
     xr(result, "Sync input");
+    if (gaze) {
+        // Only a gaze the tracker has now: a runtime keeps the last one valid
+        // and untracked through a blink or a lost eye.
+        XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO};
+        get.action = gazeAction_;
+        XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+        XrSpaceLocation l{XR_TYPE_SPACE_LOCATION};
+        constexpr XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                                                  XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                                                  XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        if (XR_SUCCEEDED(xrGetActionStatePose(session_, &get, &state)) && state.isActive &&
+            XR_SUCCEEDED(xrLocateSpace(gazeSpace_, space_, time, &l)) && (l.locationFlags & required) == required) {
+            frame.gaze = pose(l.pose);
+            frame.gazeValid = validTrackedPose(frame.gaze);
+        }
+        // Virtual Desktop's runtime drops a Quest Pro's gaze (vd_eyes.hpp):
+        // its Streamer's eyes then, on this frame's head.
+        if (!frame.gazeValid && virtualDesktop_ && frame.valid)
+            frame.gazeValid = sharedGaze(frame.head, frame.gaze) && validTrackedPose(frame.gaze);
+    }
     // The runtime says when the controllers change; asked every few seconds
     // too, a change it did not announce still reaches the session's report.
     if (!(inputs_++ & 255))

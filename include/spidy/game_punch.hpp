@@ -11,7 +11,9 @@
 // damage against the bot it hit (native_bodies::damage): DamageType kMelee,
 // as much damage as the fist's speed gave it, the hit reaction the punch's
 // strength calls for (punch.hpp's Knockback), the hero as the damager. The
-// bot reacts, loses health and is knocked out as the game has it.
+// bot reacts, loses health and is knocked out as the game has it. The blow
+// also earns the Focus the game's own melee blow earns (game_focus.hpp): the
+// damage alone earns none.
 //
 // Fighting across the room (web_strike.hpp) runs here too. A fist thrown at
 // an enemy out of reach opens a web strike: the swing moves the player to
@@ -179,11 +181,17 @@ struct Player {
     // On the ground; and on a web that carries him (then a blow landed in
     // the air does not stop him there).
     bool grounded{}, swinging{};
+    // Off: no hidden directional calls may override a launcher or ground smash.
+    bool combatVisuals = true;
     // A bit per hand whose web holds something or carries the player: it
     // neither punches nor opens a strike. And the bot each hand's web holds
     // (an actor record, 0 for none): a punch at him with that hand strikes.
     uint32_t busy{};
     uint64_t holds[2]{};
+    // His own motion, real m/s in the world (zero while the mover gives
+    // none): a flight of his into the marked enemy dives at him
+    // (WebStrike::dive).
+    Vec3 velocity{};
 };
 // What a sample opened: a web strike, at the enemy the hand's own web held.
 // The swing lets its webs go, and the grab his.

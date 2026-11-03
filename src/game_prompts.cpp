@@ -255,6 +255,73 @@ std::atomic<uint64_t> invokes{}, promptCallsSeen{}, raised{}, cleared{}, named{}
 constexpr unsigned lineCount = 8, lineChars = 512;
 char lines[lineCount][lineChars]{};
 std::atomic<unsigned> nextLine{};
+// The texts the game got in place of its own (observeText, promptShown): one
+// per text of the game's that names its LB + RB, made once and kept for the
+// session, since the game may read a text long after it asked for it. Each
+// keeps what its original asked for, so a reader meeting the copy (the HUD's
+// line, ShowText's help line) reads the game's LB + RB, not the X it shows.
+struct Copy {
+    const char* original{};
+    std::string text;
+    uint32_t asked{};
+};
+constexpr unsigned copyCount = 64;
+SRWLOCK copyLock = SRWLOCK_INIT;
+Copy copies[copyCount];
+unsigned copiesMade{};
+// The copy made of the game's `text`, made now where it names the pair; null
+// for a text that names nothing of the kind, or with the table full.
+const Copy* copyOf(const char* text) {
+    AcquireSRWLockShared(&copyLock);
+    for (unsigned i = 0; i < copiesMade; ++i)
+        if (copies[i].original == text) {
+            const Copy* found = &copies[i];
+            ReleaseSRWLockShared(&copyLock);
+            return found;
+        }
+    ReleaseSRWLockShared(&copyLock);
+    char seen[lineChars], swapped[lineChars];
+    const size_t length = copyText(text, seen, sizeof(seen));
+    // A whole text only: one cut short would lose its end.
+    if (!length || length + 1 >= sizeof(seen))
+        return nullptr;
+    const size_t made = prompt_buttons::pairOnX({seen, length}, swapped, sizeof(swapped));
+    if (!made)
+        return nullptr;
+    AcquireSRWLockExclusive(&copyLock);
+    const Copy* out = nullptr;
+    for (unsigned i = 0; i < copiesMade && !out; ++i)
+        if (copies[i].original == text)
+            out = &copies[i];
+    if (!out && copiesMade < copyCount) {
+        auto& c = copies[copiesMade++];
+        c.original = text;
+        c.text.assign(swapped, made);
+        c.asked = prompt_buttons::pack(prompt_buttons::forText({seen, length}));
+        out = &c;
+        rewrote.fetch_add(1, std::memory_order_relaxed);
+    }
+    ReleaseSRWLockExclusive(&copyLock);
+    return out;
+}
+// What a text the game shows asked for where it is one of the copies (by its
+// pointer, or by its words where the game has copied it on); `found` false
+// where it is none.
+uint32_t copyAsked(const char* text, std::string_view words, bool& found) {
+    AcquireSRWLockShared(&copyLock);
+    uint32_t asked = 0;
+    found = false;
+    for (unsigned i = 0; i < copiesMade && !found; ++i)
+        if (copies[i].text.c_str() == text || (!words.empty() && copies[i].text == words)) {
+            asked = copies[i].asked;
+            found = true;
+        }
+    ReleaseSRWLockShared(&copyLock);
+    return asked;
+}
+// The widget's lines as they last named something, by kind, for the
+// timeline: a line is shown again every frame while it waits its turn.
+uint32_t promptWords[prompt_buttons::LiveDemands::kinds]{};
 
 void __fastcall resolveHook(void* self, void* field, const char* text) {
     char seen[1024];
@@ -302,7 +369,11 @@ uint32_t readPromptText(const GfxValue* value) {
     if (!length)
         return 0;
     const std::string_view view(seen, length);
-    const auto asked = prompt_buttons::forText(view);
+    // A help line the lookup gave the game as a copy (observeText) asks for
+    // what the game's own text asked for: its LB + RB, not the X it shows.
+    bool copied = false;
+    const uint32_t kept = copyAsked(reinterpret_cast<const char*>(p), view, copied);
+    const auto asked = copied ? prompt_buttons::unpack(kept) : prompt_buttons::forText(view);
     if (!asked.any()) {
         if (asked.keyboard)
             keyboardTexts.fetch_add(1, std::memory_order_relaxed);
@@ -386,6 +457,63 @@ bool game_prompts::interactOffered() {
     return false;
 }
 
+namespace {
+// The census's last places, kept for the calls that prompt: the prompt calls
+// above and any other whose text names a button. In hantop's session of
+// October 22 the map's, the menus' and the HUD's calls had taken all 48
+// places, so a call his research stations made later had none.
+constexpr unsigned censusKept = 8;
+// Whether a place's example names a button, so a name first seen naming
+// nothing shows its first call that does instead.
+bool censusNamed[censusNames]{};
+// Every name the UI is called with, whether this knows it or not, with one
+// example of its arguments, which is what says where a prompt's text and its
+// button arrive. prompts: a prompt call, or a text that named a button
+// (naming).
+void census(const char* name, const GfxValue* args, uint32_t count, bool prompts, bool naming) {
+    AcquireSRWLockExclusive(&callLock);
+    unsigned slot = seenCalls.names;
+    for (unsigned i = 0; i < seenCalls.names; ++i)
+        if (censusAt[i] == name) {
+            slot = i;
+            break;
+        }
+    const bool fresh = slot == seenCalls.names;
+    if (fresh && slot >= (prompts ? censusNames : censusNames - censusKept))
+        slot = censusNames;
+    if (slot < censusNames) {
+        if (fresh) {
+            censusAt[slot] = name;
+            ++seenCalls.names;
+        }
+        if (fresh || (naming && !censusNamed[slot])) {
+            char line[censusChars];
+            formatCall(name, args, count, line, sizeof(line));
+            strncpy_s(seenCalls.example[slot], line, _TRUNCATE);
+            censusNamed[slot] = naming;
+        }
+        ++seenCalls.calls[slot];
+    }
+    ReleaseSRWLockExclusive(&callLock);
+}
+// The game's camera (prompt_buttons::cameraDemand): its overlay shown as it
+// comes out and hidden as it goes - ShowCameraOverlay() and
+// HideCameraOverlay(), one literal each in the supported Spider-Man.exe, seen
+// in the game on October 22 around D-pad up -, and a load or the HUD's
+// shutdown, which takes it down with everything else, in case its own Hide
+// never comes.
+constexpr uintptr_t cameraShown = 0x3dedd90, cameraHidden = 0x3dedda8, hudShutdown = 0x3dedbe8,
+                    loadingShown = 0x57ac5c0;
+// What the first text among a call's arguments that names a button names
+// (readPromptText); 0 for none. A call this does not know by name.
+uint32_t namedInAnyText(const GfxValue* args, uint32_t count) {
+    for (uint32_t i = 0; args && i < count && i < 6; ++i)
+        if (const uint32_t word = readPromptText(args + i))
+            return word;
+    return 0;
+}
+} // namespace
+
 void game_prompts::observeCall(uintptr_t imageBase, const char* name, const void* args, uint32_t count) {
     invokes.fetch_add(1, std::memory_order_relaxed);
     const auto at = reinterpret_cast<uintptr_t>(name);
@@ -429,59 +557,83 @@ void game_prompts::observeCall(uintptr_t imageBase, const char* name, const void
     }
     if (!observing.load(std::memory_order_relaxed))
         return;
-    // The census first: every name, whether this knows it or not. One example
-    // of each call's arguments is kept, which is what says where a prompt's
-    // text and its button arrive.
-    AcquireSRWLockExclusive(&callLock);
-    unsigned slot = seenCalls.names;
-    for (unsigned i = 0; i < seenCalls.names; ++i)
-        if (censusAt[i] == name) {
-            slot = i;
-            break;
-        }
-    if (slot < censusNames) {
-        if (slot == seenCalls.names) {
-            censusAt[slot] = name;
-            ++seenCalls.names;
-            char line[censusChars];
-            formatCall(name, static_cast<const GfxValue*>(args), count, line, sizeof(line));
-            strncpy_s(seenCalls.example[slot], line, _TRUNCATE);
-        }
-        ++seenCalls.calls[slot];
-    }
-    ReleaseSRWLockExclusive(&callLock);
     const uintptr_t offset = at - imageBase;
-    for (unsigned index = 0; index < callNames; ++index) {
-        const auto& call = promptCalls[index];
-        if (call.name != offset)
-            continue;
-        promptCallsSeen.fetch_add(1, std::memory_order_relaxed);
-        const auto values = static_cast<const GfxValue*>(args);
-        const bool reads = reading.load(std::memory_order_relaxed);
-        // A call that carries a text: its buttons are the demand.
-        const uint32_t word = call.text >= 0 && args && count > static_cast<uint32_t>(call.text) && reads
-                                  ? readPromptText(values + call.text)
-                                  : 0;
-        // The call with its arguments, for the session report.
-        char line[callChars];
-        formatCall(name, values, count, line, sizeof(line));
-        AcquireSRWLockExclusive(&callLock);
-        ++seenCalls.perName[index];
-        keepLine(line);
-        ReleaseSRWLockExclusive(&callLock);
-        (call.clears ? cleared : raised).fetch_add(1, std::memory_order_relaxed);
-        // A channel's text: what it names stands until that channel is hidden
-        // or shows another text. Any other call: its demand for liveMs, and its
-        // manager's Hide or Clear ends it (LiveDemands).
-        const int channel = call.channel ? readChannel(values, count) : -1;
+    const auto values = static_cast<const GfxValue*>(args);
+    const bool reads = reading.load(std::memory_order_relaxed);
+    unsigned index = 0;
+    while (index < callNames && promptCalls[index].name != offset)
+        ++index;
+    if (offset == cameraShown || offset == cameraHidden || offset == hudShutdown || offset == loadingShown) {
+        const bool camera = offset == cameraShown || offset == cameraHidden, shown = offset == cameraShown;
+        census(name, values, count, camera, false);
+        const uint32_t word = shown && reads ? prompt_buttons::pack(prompt_buttons::cameraDemand) : 0;
+        if (word)
+            lastPacked.store(word, std::memory_order_relaxed);
+        if (camera) {
+            char line[callChars];
+            formatCall(name, values, count, line, sizeof(line));
+            AcquireSRWLockExclusive(&callLock);
+            keepLine(line);
+            ReleaseSRWLockExclusive(&callLock);
+        }
         AcquireSRWLockExclusive(&demandLock);
-        if (channel < 0)
-            liveDemands.call(GetTickCount64(), word, call.clears);
-        else if (call.clears || reads)
-            liveDemands.text(GetTickCount64(), static_cast<unsigned>(channel), word, call.clears);
+        liveDemands.stand(GetTickCount64(), word, !shown);
+        // A load or the HUD's shutdown takes its prompt list down too, its
+        // widget's hide or not.
+        if (!camera)
+            for (unsigned k = 0; k < prompt_buttons::LiveDemands::kinds; ++k) {
+                liveDemands.prompt(GetTickCount64(), k, 0, true);
+                promptWords[k] = 0;
+            }
         ReleaseSRWLockExclusive(&demandLock);
         return;
     }
+    if (index == callNames) {
+        // Any other call that hands the UI a text naming a button is a prompt
+        // too, one this knows by no name. hantop's research stations on
+        // October 22 brought no ask of the leaks' LT and RB or the camera's
+        // D-pad up in 45 minutes: either the calls above never carried their
+        // help lines, or those lines named their buttons in words this does
+        // not read ([ACTION_*], prompt_buttons.cpp). This takes the first.
+        const uint32_t word = reads ? namedInAnyText(values, count) : 0;
+        census(name, values, count, word != 0, word != 0);
+        if (!word)
+            return;
+        char line[callChars];
+        formatCall(name, values, count, line, sizeof(line));
+        AcquireSRWLockExclusive(&callLock);
+        keepLine(line);
+        ReleaseSRWLockExclusive(&callLock);
+        AcquireSRWLockExclusive(&demandLock);
+        liveDemands.other(GetTickCount64(), word);
+        ReleaseSRWLockExclusive(&demandLock);
+        return;
+    }
+    const auto& call = promptCalls[index];
+    promptCallsSeen.fetch_add(1, std::memory_order_relaxed);
+    // A call that carries a text: its buttons are the demand.
+    const uint32_t word = call.text >= 0 && args && count > static_cast<uint32_t>(call.text) && reads
+                              ? readPromptText(values + call.text)
+                              : 0;
+    census(name, values, count, true, word != 0);
+    // The call with its arguments, for the session report.
+    char line[callChars];
+    formatCall(name, values, count, line, sizeof(line));
+    AcquireSRWLockExclusive(&callLock);
+    ++seenCalls.perName[index];
+    keepLine(line);
+    ReleaseSRWLockExclusive(&callLock);
+    (call.clears ? cleared : raised).fetch_add(1, std::memory_order_relaxed);
+    // A channel's text: what it names stands until that channel is hidden or
+    // shows another text. Any other call: its demand for liveMs, and its
+    // manager's Hide or Clear ends it (LiveDemands).
+    const int channel = call.channel ? readChannel(values, count) : -1;
+    AcquireSRWLockExclusive(&demandLock);
+    if (channel < 0)
+        liveDemands.call(GetTickCount64(), word, call.clears);
+    else if (call.clears || reads)
+        liveDemands.text(GetTickCount64(), static_cast<unsigned>(channel), word, call.clears);
+    ReleaseSRWLockExclusive(&demandLock);
 }
 
 // The game's localized text, on its way to its UI.
@@ -646,6 +798,73 @@ bool game_prompts::rewriteArgs(const char*, const void* args, uint32_t count, vo
         changedAny = true;
     }
     return changedAny;
+}
+
+namespace {
+// MilesVR: Spidy's X over a throwable prop is off - its throw is the right stick click.
+constexpr bool markerOnX = false;
+// AddPOI's name, as the game hands it to the wrapper (its literal).
+constexpr uintptr_t addPoiName = 0x3dfa3f8;
+} // namespace
+
+bool game_prompts::rewriteCall(uintptr_t imageBase, const char* name, const void* args, uint32_t count,
+                               void* copy) {
+    if (!markerOnX || !imageBase || reinterpret_cast<uintptr_t>(name) != imageBase + addPoiName || !args || !copy ||
+        count < 3 || !rewriting.load(std::memory_order_relaxed))
+        return false;
+    auto* out = static_cast<GfxValue*>(copy);
+    if (!read(reinterpret_cast<uintptr_t>(args), out, sizeof(GfxValue) * count) || (out[1].type & 0x8f) != 5 ||
+        (out[2].type & 0x8f) != 5)
+        return false;
+    double category, subtype;
+    std::memcpy(&category, &out[1].data, sizeof(category));
+    std::memcpy(&subtype, &out[2].data, sizeof(subtype));
+    const double drawn = prompt_buttons::markerSubtype(category, subtype);
+    if (drawn == subtype)
+        return false;
+    std::memcpy(&out[2].data, &drawn, sizeof(drawn));
+    rewrote.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
+const char* game_prompts::promptShown(unsigned kind, const char* text) {
+    if (!reading.load(std::memory_order_relaxed) || kind >= prompt_buttons::LiveDemands::kinds ||
+        reinterpret_cast<uintptr_t>(text) < 0x10000)
+        return text;
+    char seen[lineChars];
+    const size_t length = copyText(text, seen, sizeof(seen));
+    const std::string_view view(seen, length);
+    bool copied = false;
+    uint32_t word = copyAsked(text, {}, copied);
+    const char* shown = text;
+    if (!copied) {
+        word = prompt_buttons::pack(prompt_buttons::forText(view));
+    }
+    if (word)
+        lastPacked.store(word, std::memory_order_relaxed);
+    AcquireSRWLockExclusive(&demandLock);
+    liveDemands.prompt(GetTickCount64(), kind, word, false);
+    const bool changed = promptWords[kind] != word;
+    promptWords[kind] = word;
+    ReleaseSRWLockExclusive(&demandLock);
+    if (changed && word) {
+        char line[callChars];
+        _snprintf_s(line, sizeof(line), _TRUNCATE, "HUD prompt %u: '%.*s'", kind,
+                    static_cast<int>(std::min<size_t>(length, 90)), seen);
+        AcquireSRWLockExclusive(&callLock);
+        keepLine(line);
+        ReleaseSRWLockExclusive(&callLock);
+    }
+    return shown;
+}
+
+void game_prompts::promptHidden(unsigned kind) {
+    if (kind >= prompt_buttons::LiveDemands::kinds)
+        return;
+    AcquireSRWLockExclusive(&demandLock);
+    liveDemands.prompt(GetTickCount64(), kind, 0, true);
+    promptWords[kind] = 0;
+    ReleaseSRWLockExclusive(&demandLock);
 }
 
 void game_prompts::note(const char* text) {

@@ -22,22 +22,30 @@
 #include "spidy/eye_snapshot.hpp"
 #include "spidy/vr_settings.hpp"
 #include "spidy/recording_fov.hpp"
+#include "spidy/native_stream.hpp"
 #include "spidy/body_haptics.hpp"
 #include "spidy/web_visual.hpp"
 #include "spidy/web_pull.hpp"
 #include "spidy/web_grab.hpp"
 #include "spidy/lab_props.hpp"
 #include "spidy/body_ik.hpp"
+#include "spidy/native_body.hpp"
+#include "spidy/wall_crawl_body.hpp"
+#include "spidy/wall_run_body.hpp"
 #include "spidy/crawl_stick.hpp"
+#include "spidy/crawl_hands.hpp"
 #include "spidy/body_calibration.hpp"
+#include "spidy/seated.hpp"
 #include "spidy/overlay_text.hpp"
 #include "spidy/punch.hpp"
 #include "spidy/shooter.hpp"
 #include "spidy/slow_motion.hpp"
+#include "spidy/spectator_smoothing.hpp"
 #include "spidy/hand_pose.hpp"
 #include "spidy/impact_sound.hpp"
 #include "spidy/web_strike.hpp"
 #include "spidy/spider_sense.hpp"
+#include "spidy/game_sound.hpp"
 #include "spidy/prompt_buttons.hpp"
 #include "spidy/xr_layers.hpp"
 #include "spidy/offer_pointing.hpp"
@@ -45,6 +53,8 @@
 #include "spidy/prompt_actions.hpp"
 #include "spidy/tech_marks.hpp"
 #include "spidy/venom_punch.hpp"
+#include "spidy/throw_aim.hpp"
+#include "spidy/vd_eyes.hpp"
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -409,6 +419,34 @@ TestBody testBody(bool oddFrames=false,bool heroHand=false) {
     check(body::prepare(r,b.rest),"the test rig was rejected");
     return b;
 }
+TestBody splitPelvisBody() {
+    auto b = testBody(true);
+    const int pelvis = static_cast<int>(b.rig.parent.size());
+    b.rig.parent.push_back(static_cast<int16_t>(b.rig.pelvis));
+    b.rig.parent[b.rig.legs[0].upper] = static_cast<int16_t>(pelvis);
+    b.rig.parent[b.rig.legs[1].upper] = static_cast<int16_t>(pelvis);
+    b.rest.resize((pelvis + 1) * 16, 0);
+    float* matrix = b.rest.data() + pelvis * 16;
+    matrix[0] = matrix[5] = matrix[10] = matrix[15] = 1;
+    matrix[13] = .96f; matrix[14] = -.045f;
+    check(body::prepare(b.rig, b.rest), "native-style separate pelvis was rejected");
+    check(b.rig.hipRoot == pelvis, "leg parent was confused with a_body");
+    return b;
+}
+TestBody longFootBody(float length = .21f) {
+    auto b = splitPelvisBody();
+    body::Pose rest(b.rest.data(), static_cast<int>(b.rig.parent.size()));
+    for (int i = 0; i < 2; ++i) {
+        const auto& leg = b.rig.legs[i];
+        const Vec3 forward = normalized(rest.direction(leg.foot, b.rig.footForward[i]));
+        const Vec3 toe = rest.position(leg.foot) + forward * length - Vec3{0, b.rig.ankleHeight[i], 0};
+        float* matrix = b.rest.data() + (i ? 28 : 24) * 16;
+        matrix[12] = toe.x; matrix[13] = toe.y; matrix[14] = toe.z;
+    }
+    check(body::prepare(b.rig, b.rest), "long-foot native-style rig was rejected");
+    check(b.rig.forefootLength[0] > .2f, "long-foot fixture did not enlarge the actual toes");
+    return b;
+}
 // testBody's heroHand: each hand's thumb (0 the left, 1 the right).
 constexpr int heroThumbs[2][4]={{34,35,36,37},{73,74,75,76}};
 // Where Spider-Man's palm faces in `pose`: across its knuckles and along its
@@ -473,6 +511,26 @@ XrFrame trackedFrame() {
         h.aim=h.grip={{i==0?-.3f:.3f,1.2f,-.5f},{}};h.trigger=h.squeeze=1;
     }
     return f;
+}
+// Native-style hand ray results against two independently chosen faces.
+native_rays::Data handRayBatch(uint64_t serial, const std::array<native_rays::Ray, 2>& rays,
+    const std::array<HeadClearance::Surface, 2>& faces = {{{{}, {0, 0, 1}}, {{}, {0, 0, 1}}}}) {
+    native_rays::Data data;
+    data.status = 2; data.serial = serial; data.qpc = 1000; data.count = 2;
+    for (unsigned i = 0; i < 2; ++i) {
+        auto& hit = data.hits[i];
+        hit.ray = rays[i]; hit.ray.tag = HandCollision::firstTag + i;
+        const auto& face = faces[i];
+        const float speed = dot(hit.ray.direction, face.normal);
+        if (speed >= -.001f || hit.ray.distance <= 0) continue;
+        const float distance = -dot(hit.ray.origin - face.point, face.normal) / speed;
+        if (distance < 0 || distance >= hit.ray.distance) continue;
+        hit.position = hit.ray.origin + hit.ray.direction * distance;
+        hit.normal = face.normal; hit.fraction = distance / hit.ray.distance;
+        hit.count = hit.bodyMatches = hit.bodyFlags = 1;
+        hit.motionId = 0; hit.broadPhaseId = 1;
+    }
+    return data;
 }
 // Plays `seconds` of 90 Hz frames with the player's actor up `up`, its feet at `feet`.
 GameMotionFrame playFor(GameTrackingRig& rig, XrFrame& f, Vec3 feet, Vec3 up, float seconds) {
@@ -920,6 +978,838 @@ int main() {
             hung += 1.f / 90;
         }
         check(hung > jumpHang - .1f, "a blow up there does not cut the hang short");
+
+    struct SlingWorld : TwoAnchors {
+        std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+            return enabled ? TwoAnchors::raycast(o, d, distance) : std::nullopt;
+        }
+        bool exists(uint64_t id) const override {
+            return enabled && TwoAnchors::exists(id);
+        }
+    };
+    struct Sling {
+        SlingWorld world;
+        Swing solver;
+        Input in;
+        Body body{{0, 1, 0}, {}, true};
+        MotionIntent last{};
+        Sling(bool on = true) {
+            world.anchors[0] = {-8, 8, -20};
+            world.anchors[1] = {8, 8, -20};
+            solver.allowSlingshot(on);
+            for (unsigned i = 0; i < 2; ++i) {
+                auto& h = in.hands[i];
+                h.gripRelativeToHead = {i ? .4f : -.4f, 0, -.25f};
+                h.aim.position = body.position + h.gripRelativeToHead;
+                h.aim.orientation = arc({0, 0, -1}, normalized(world.anchors[i] - h.aim.position));
+                h.tracked = true;
+                h.grip = 1;
+            }
+            tick();
+            check(solver.webs()[0].attached && solver.webs()[1].attached, "two shots did not attach");
+            check(!solver.webs()[1].taken, "fixture joined one web instead of firing two");
+        }
+        void tick(float inputDt = .01f) {
+            last = solver.predictNativeStep(.01f, in, world, body, inputDt);
+            check(last.valid, "invalid slingshot prediction");
+        }
+        void draw() {
+            for (auto& h : in.hands) h.gripRelativeToHead.z += .5f;
+            for (int i = 0; i < 140; ++i) tick();
+        }
+        bool fired() const {
+            return std::any_of(solver.events().begin(), solver.events().end(),
+                               [](const Event& e) { return e.kind == EventKind::Slingshot; });
+        }
+        void release() {
+            for (auto& h : in.hands) h.grip = 0;
+            tick();
+        }
+    };
+    test("zero hand momentum is persisted and applies no arm torque", [] {
+        using namespace vr_settings;
+        Values v;
+        choose(Item::automaticHandStrength, 0, v);
+        check(v.automaticHandStrength == 0 &&
+                  withTabOnly(Values{}, tabOnlyText(v)).automaticHandStrength == 0,
+              "zero strength did not save");
+        spidy::RealisticFlip zero, strong;
+        RealisticFlipSettings settings;
+        settings.enabled = true;
+        settings.handStrength = 0;
+        RealisticFlight flight;
+        flight.valid = true;
+        flight.velocity = {0, 0, -10};
+        flight.handMomentum = {2, 0, 0};
+        for (int i = 0; i < 100; ++i) {
+            zero.update(flight, true, false, 0, .01f, settings);
+            settings.handStrength = 100;
+            strong.update(flight, true, false, 0, .01f, settings);
+            settings.handStrength = 0;
+        }
+        check(length(zero.angularVelocity()) < 1e-5f, "zero still applied arm torque");
+        check(length(strong.angularVelocity()) > .05f, "control case generated no arm torque");
+    });
+    test("smart anchor: off by default, catches a near miss only on a real surface", [] {
+        TestWorld world;
+        world.anchor = normalized(Vec3{0, 1, -.14054f}) * 80;
+        Swing solver(inert());
+        solver.allowAirAnchors(false);
+        auto input = aimed();
+        solver.allowSmartAnchor(false);
+        check(!solver.shot(input.hands[0].aim, {}, world).web, "OFF still assisted");
+        solver.allowSmartAnchor(true);
+        check(solver.shot(input.hands[0].aim, {}, world).web.has_value(), "ON missed nearby surface");
+        world.enabled = false;
+        check(!solver.shot(input.hands[0].aim, {}, world).web, "assistance invented an air anchor");
+        using namespace vr_settings;
+        Values v;
+        check(!v.smartAnchor && defaultChoice(Item::smartAnchor) == 0, "smart anchor on by default");
+        check(choose(Item::smartAnchor, 1, v) && withTabOnly({}, tabOnlyText(v)).smartAnchor,
+              "spidy_vr.ini lost SMART ANCHOR");
+        game_swing::Settings s;
+        check(offsetof(game_swing::Settings, smartAnchor) == game_swing::settingsBytesV11 && !s.smartAnchor,
+              "smart anchor not appended, or on");
+        s.smartAnchor = 2;
+        check(!game_swing::validSettings(s), "invalid switch accepted");
+    });
+    test("elastic webs catch a moving body without a hard position correction", [] {
+        for (int strength = 1; strength <= 3; ++strength) {
+            TestWorld world;
+            Swing solver(inert());
+            solver.elasticWeb(strength);
+            auto input = aimed();
+            input.hands[0].trigger = 0;
+            Body body{{0, 0, 0}, {0, -20, 0}, false};
+            const float initial = body.velocity.y;
+            bool loaded = false;
+            for (int frame = 0; frame < 240; ++frame) {
+                const auto result = solver.predictNativeStep(.01f, input, world, body);
+                check(result.valid && finite(result.velocity), "elastic solver invalid");
+                check(length(result.target - (body.position + body.velocity * .01f)) < .025f,
+                      "elastic rope snapped position");
+                check(length(result.velocity - body.velocity) <= 1.801f,
+                      "elastic catch exceeded force limit");
+                loaded |= solver.webs()[0].tension > 1;
+                body = {result.target, result.velocity, false};
+            }
+            check(loaded && body.velocity.y > initial + 10, "elastic rope failed to catch body");
+        }
+        using namespace vr_settings;
+        for (int index = 0; index < 4; ++index) {
+            Values value;
+            choose(Item::elasticWeb, index, value);
+            check(choice(Item::elasticWeb, withTabOnly({}, tabOnlyText(value))) == index,
+                  "saved setting changed");
+        }
+        check(Values{}.elasticWeb == 0 && game_swing::Settings{}.elasticWeb == 0,
+              "elastic webs on by default");
+        game_swing::Settings s;
+        s.elasticWeb = 4;
+        check(!game_swing::validSettings(s), "a fifth elastic level accepted");
+    });
+    test("soft release carries a bounded fading pull then returns to free flight", [] {
+        TestWorld world;
+        auto config = inert();
+        config.gravity = 9.81f;
+        Swing solver(config);
+        solver.softRelease(3);
+        auto input = aimed();
+        input.hands[0].trigger = 0;
+        Body body{{}, {0, -8, 0}, false};
+        auto result = solver.predictNativeStep(.01f, input, world, body);
+        check(solver.webs()[0].tension > 0, "test never loaded rope");
+        body = {result.target, result.velocity, false};
+        input.hands[0].grip = 0;
+        result = solver.predictNativeStep(.01f, input, world, body);
+        check(!solver.webs()[0].attached && result.velocity.y > body.velocity.y - .09f, "no release tail");
+        check(result.velocity.y - body.velocity.y < .5f, "release tail was an impulse");
+        for (int frame = 0; frame < 40; ++frame) {
+            body = {result.target, result.velocity, false};
+            result = solver.predictNativeStep(.01f, input, world, body);
+        }
+        body = {result.target, result.velocity, false};
+        result = solver.predictNativeStep(.01f, input, world, body);
+        near(result.velocity.y - body.velocity.y, -.0981f, .0001f);
+        solver.releaseAll();
+        body = {{}, {}, false};
+        result = solver.predictNativeStep(.01f, input, world, body);
+        near(result.velocity.y, -.0981f, .0001f);
+        using namespace vr_settings;
+        for (int index = 0; index < 4; ++index) {
+            Values value;
+            choose(Item::softRelease, index, value);
+            check(choice(Item::softRelease, withTabOnly({}, tabOnlyText(value))) == index,
+                  "saved setting changed");
+        }
+        check(Values{}.softRelease == 0 && game_swing::Settings{}.softRelease == 0,
+              "soft release on by default");
+    });
+    test("assist at a head-on wall adds no sideways or upward movement", [] {
+        struct Facade : TestWorld {
+            std::optional<RayHit> bodyRaycast(Vec3 from, Vec3 d, float reach) const override {
+                if (d.x <= 0)
+                    return {};
+                const float t = (5 - from.x) / d.x;
+                if (t >= 0 && t <= reach)
+                    return RayHit{from + d * t, {-1, 0, 0}, 2, true};
+                return {};
+            }
+        } world;
+        world.anchor = {100, 5, 0};
+        Swing solver(inert());
+        solver.allowSwingAssist(true);
+        Body body{{0, 5, 0}, {12, 0, 0}, false};
+        auto input = aimedAt(body.position, world.anchor);
+        for (int frame = 0; frame < 180; ++frame) {
+            const auto result = solver.predictNativeStep(.01f, input, world, body);
+            near(result.velocity.z, 0, .0001f);
+            check(result.velocity.y < .2f, "assist lifted player into an invented route");
+            check(result.target.x < 4.7f, "assist failed to brake before wall");
+            body = {result.target, result.velocity, false};
+        }
+    });
+    test("swing assist preserves the player lateral motion instead of choosing a lane", [] {
+        Building world;
+        world.low = {5, 0, -2};
+        world.high = {10, 30, 2};
+        Swing solver(inert());
+        solver.allowSwingAssist(true);
+        Body body{{0, 5, 0}, {10, 0, 1.5f}, false};
+        auto input = aimedAt(body.position, {100, 5, 0});
+        bool braking = false;
+        for (int frame = 0; frame < 300; ++frame) {
+            input.hands[0].aim.position = body.position;
+            const auto result = solver.predictNativeStep(.01f, input, world, body);
+            check(result.valid, "lane prediction invalid");
+            const auto p = result.target;
+            check(!(p.x > 4.65f && p.x < 10.35f && std::abs(p.z) < 2.35f && p.y < 30.35f),
+                  "assist entered building capsule clearance");
+            braking |= result.velocity.x < 8;
+            near(result.velocity.y, 0, .001f);
+            check(result.velocity.z >= 0 && result.velocity.z <= 1.501f, "assist invented lateral speed");
+            body = {result.target, result.velocity, false};
+        }
+        check(braking, "assist failed to reduce approach speed");
+    });
+    test("swing assist brakes before a broad wall without teleporting or adding speed", [] {
+        struct Facade : TestWorld {
+            std::optional<RayHit> bodyRaycast(Vec3 from, Vec3 direction, float reach) const override {
+                if (direction.x <= 0)
+                    return {};
+                const float t = (5 - from.x) / direction.x;
+                if (t >= 0 && t <= reach)
+                    return RayHit{from + direction * t, {-1, 0, 0}, 2, true};
+                return {};
+            }
+        } world;
+        world.anchor = {100, 5, 0};
+        Swing solver(inert());
+        solver.allowSwingAssist(true);
+        Body body{{0, 5, 0}, {10, 0, 0}, false};
+        auto input = aimedAt(body.position, world.anchor);
+        float closest = 0;
+        for (int frame = 0; frame < 250; ++frame) {
+            input.hands[0].aim.position = body.position;
+            const auto result = solver.predictNativeStep(.01f, input, world, body);
+            check(result.valid && finite(result.target), "assist prediction invalid");
+            check(length(result.velocity) <= 10.01f, "assist added travel speed");
+            check(length(result.target - body.position) <= .101f, "assist teleported body");
+            check(length(result.velocity - body.velocity) < 1.2f, "assist changed heading abruptly");
+            closest = std::max(closest, result.target.x);
+            body = {result.target, result.velocity, false};
+        }
+        check(closest < 4.7f, "assist crossed broad wall");
+    });
+    test("swing assist: a switch, off by default, kept in spidy_vr.ini", [] {
+        using namespace vr_settings;
+        Values v;
+        check(!v.swingAssist && defaultChoice(Item::swingAssist) == 0, "swing assist on by default");
+        check(choose(Item::swingAssist, 1, v) && withTabOnly({}, tabOnlyText(v)).swingAssist,
+              "spidy_vr.ini lost SWING ASSIST");
+        game_swing::Settings s;
+        check(!s.swingAssist, "swing assist on by default in the swing's settings");
+        s.swingAssist = 2;
+        check(!game_swing::validSettings(s), "invalid switch accepted");
+    });
+    test("better climbing pulls an open-air web hand over hand", [] {
+        TestWorld world;
+        world.enabled = false;
+        Swing swing([] {
+            auto c = inert();
+            c.physical = true;
+            return c;
+        }());
+        swing.allowBetterClimbing(true);
+        swing.allowAirAnchors(true);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        in.hands[1] = {in.hands[0].aim, {0, .3f, 0}, true, 0, 0};
+        Body body{{}, {}, false};
+        auto intent = swing.predictNativeStep(1.f / 90, in, world, body);
+        auto step = [&] {
+            body = {intent.target, intent.velocity, false};
+            intent = swing.predictNativeStep(1.f / 90, in, world, body);
+            check(intent.valid, "climbing prediction failed");
+            for (const auto& e : swing.events())
+                check(e.kind != EventKind::Zip, "climbing became a yank impulse");
+        };
+        for (int frame = 0; frame < 100; ++frame)
+            step();
+        check(swing.webs()[0].airAnchor && swing.webs()[0].attached, "air web never arrived");
+        step();
+        in.hands[1].grip = 1;
+        step();
+        check(swing.shared(), "two hands did not share the web");
+        for (int i = 0; i < 30; ++i) {
+            in.hands[1].gripRelativeToHead.y -= .01f;
+            step();
+        }
+        check(intent.target.y > .5f, "hand pull did not take in the rope");
+        const float before = intent.target.y;
+        in.hands[1].grip = 0;
+        step();
+        for (int i = 0; i < 25; ++i) {
+            intent.velocity = {};
+            step();
+        }
+        check(intent.target.y > before - .05f, "the remaining hand lost the gained height");
+        const float retained = swing.webs()[0].length;
+        // Reach forward with the free hand, grip the same strand and pull again.
+        in.hands[1].gripRelativeToHead.y += .4f;
+        step();
+        in.hands[1].grip = 1;
+        step();
+        check(swing.shared(), "free hand could not regrip the strand");
+        for (int i = 0; i < 25; ++i) {
+            in.hands[1].gripRelativeToHead.y -= .01f;
+            step();
+        }
+        check(std::min(swing.webs()[0].length, swing.webs()[1].length) < retained - .15f,
+              "another hand-over-hand stroke made no progress");
+    });
+    test("better climbing consumes a grip moved onto the strand in the same input sample", [] {
+        TestWorld world;
+        spidy::Swing solver([] {
+            auto c = inert();
+            c.physical = true;
+            return c;
+        }());
+        solver.allowBetterClimbing(true);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        in.hands[1] = {in.hands[0].aim, {1, .3f, 0}, true, 0, 0};
+        const Body body{{0, 0, 0}, {}, false};
+        solver.predictNativeStep(1.f / 90, in, world, body);
+        solver.predictNativeStep(1.f / 90, in, world, body);
+        check(!solver.onStrand(1), "old sample was not outside the rope");
+        in.hands[1].gripRelativeToHead.x = 0;
+        in.hands[1].grip = 1;
+        check(solver.onStrand(1, in), "current hand pose missed the rope");
+        solver.predictNativeStep(1.f / 90, in, world, body);
+        bool joined = false, shot = false;
+        for (const auto& event : solver.events()) {
+            joined |= event.kind == EventKind::Join && event.hand == 1;
+            shot |= event.kind == EventKind::Attach && event.hand == 1;
+        }
+        check(joined && !shot && solver.shared(), "climbing grip fired another web");
+    });
+    test("an upward rope pull asks the native jump to start climbing from the ground", [] {
+        TestWorld world;
+        spidy::Swing solver([] {
+            auto c = inert();
+            c.physical = true;
+            return c;
+        }());
+        solver.allowBetterClimbing(true);
+        solver.allowSlingshot(true);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        in.hands[1] = {in.hands[0].aim, {0, .3f, 0}, true, 0, 0};
+        const Body actual{{0, 1, 0}, {}, true};
+        auto step = [&] { return solver.predictNativeStep(.01f, in, world, actual); };
+        step();
+        step();
+        in.hands[1].grip = 1;
+        step();
+        check(solver.shared(), "two-hand hold failed on the ground");
+        check(!solver.climbTakeoff(), "just gripping caused a jump");
+        in.hands[1].gripRelativeToHead.y -= .03f;
+        step();
+        check(solver.climbTakeoff() && !in.jump, "rope pull still required the jump button");
+        SwingTakeoff native;
+        native.update(1000, true, true, true, solver.climbTakeoff(), true, actual.position, {}, {});
+        const auto takeoff =
+            native.update(1080, true, true, true, solver.climbTakeoff(), false, actual.position, {}, {});
+        check(takeoff.jump, "native takeoff was not requested");
+        solver.releaseAll();
+        check(!solver.climbTakeoff(), "released rope kept a takeoff request");
+    });
+    test("slingshot draws two fixed webs and launches once, capped, toward their midpoint", [] {
+        Sling s;
+        s.solver.limitSpeed(25);
+        s.draw();
+        check(s.solver.slingshotCharge() > .9f, "held arm draw never charged");
+        check(std::none_of(s.solver.events().begin(), s.solver.events().end(),
+                          [](const Event& e) { return e.kind == EventKind::Zip; }), "draw caused ordinary zip");
+        s.release();
+        check(s.fired() && s.last.velocity.z < -15 && s.last.velocity.y > 0, "no forward launch");
+        check(length(s.last.velocity) <= 25.001f, "launch exceeded the chosen swing limit");
+        near(s.solver.slingshotCharge(), 0);
+        s.tick();
+        check(!s.fired(), "held release repeated the launch");
+    });
+    test("slingshot on, a web's reel still counts as one (it lifts a standing body)", [] {
+        Sling s;
+        check(!s.solver.reeling(), "webs reeled with no trigger pulled");
+        s.in.hands[0].trigger = 1;
+        s.tick();
+        check(s.solver.reeling(), "a pulled trigger did not reel");
+        check(s.last.target.y > s.body.position.y, "the reel did not lift");
+        s.in.hands[0].trigger = 0;
+        s.tick();
+        check(!s.solver.reeling(), "a let-go trigger still reeled");
+    });
+    test("slingshot off, no arm draw, or only one web never charges", [] {
+        Sling off(false);
+        off.draw(); off.release();
+        check(!off.fired(), "default controls launched a slingshot");
+        Sling still;
+        for (int i = 0; i < 200; ++i) still.tick();
+        near(still.solver.slingshotCharge(), 0);
+        still.release(); check(!still.fired(), "waiting without drawing launched");
+        Sling one;
+        one.in.hands[1].grip = 0; one.tick(); one.draw(); one.release();
+        check(!one.fired(), "one hand charged a slingshot");
+    });
+    test("slingshot accepts a brief two-hand release, cancels a staggered one", [] {
+        for (bool quick : {false, true}) {
+            Sling s; s.draw();
+            s.in.hands[0].grip = 0; s.tick();
+            for (int i = 0; i < (quick ? 5 : 25); ++i) s.tick();
+            s.release(); check(s.fired() == quick, "release window incorrect");
+        }
+    });
+    test("slingshot cancels on movement, tracking loss, a snap turn, airborne, gap, off or released webs", [] {
+        for (int mode = 0; mode < 8; ++mode) {
+            Sling s; s.draw();
+            switch (mode) {
+            case 0: s.in.move.x = 1; break;
+            case 1: s.in.hands[0].tracked = false; break;
+            case 2: s.in.trackingYaw = 1; break;
+            case 3: s.body.grounded = false; break;
+            case 4: s.tick(.2f); break;
+            case 5: s.solver.allowSlingshot(false); break;
+            case 6: s.solver.releaseAll(); break;
+            case 7: s.in.jump = true; break;
+            }
+            s.tick(); s.release();
+            check(!s.fired(), "cancelled gesture still launched");
+        }
+    });
+    test("slingshot does not charge duplicate input poses or keep charge after pushing hands forward", [] {
+        Sling s;
+        for (auto& h : s.in.hands) h.gripRelativeToHead.z += .5f;
+        for (int i = 0; i < 150; ++i) s.tick(0);
+        near(s.solver.slingshotCharge(), 0);
+        for (int i = 0; i < 150; ++i) s.tick();
+        check(s.solver.slingshotCharge() > .9f, "new samples never charged");
+        for (auto& h : s.in.hands) h.gripRelativeToHead.z -= .5f;
+        s.tick(); s.release(); check(!s.fired(), "relaxed draw kept its charge");
+    });
+    test("selected slingshot speed bypasses only the ordinary swing cap and resets on landing", [] {
+        for (float speed : {20.f, 32.f, 65.f, 100.f, 200.f, 300.f}) {
+            Sling s;
+            s.solver.setSlingshotSpeed(speed);
+            s.draw();
+            for (int i = 0; i < 60; ++i)
+                s.tick();
+            s.release();
+            check(s.fired(), "charged launch did not fire");
+            check(length(s.last.velocity) > speed * .99f && length(s.last.velocity) <= speed + .01f,
+                  "selected launch speed was capped");
+            check(s.solver.slingshotFlying(), "launch lost flight state");
+            s.body = {s.last.target, s.last.velocity, false};
+            s.tick();
+            s.body = {s.last.target, {}, true};
+            s.tick();
+            check(!s.solver.slingshotFlying(), "landing kept the boosted speed limit");
+            near(s.solver.speedLimit(), s.solver.config().maxSpeed);
+        }
+        native_movement::Command packet;
+        packet.version = 2;
+        packet.reserved2 = 1;
+        check(native_movement::validCommandVersion(packet), "opt-in swept step refused");
+        near(length(native_movement::stepDelta({300, 0, 0}, .02f, native_movement::commandDistance(packet))),
+             6);
+        packet.version = 1;
+        check(!native_movement::validCommandVersion(packet), "legacy packet accepted a new flag");
+    });
+    test("slingshot speed: nine choices, SWING LIMIT by default, kept in spidy_vr.ini", [] {
+        using namespace vr_settings;
+        for (int index = 0; index < static_cast<int>(steps(Item::slingshotSpeed).size()); ++index) {
+            Values value;
+            choose(Item::slingshotSpeed, index, value);
+            check(choice(Item::slingshotSpeed, withTabOnly({}, tabOnlyText(value))) == index,
+                  "saved setting changed");
+        }
+        check(Values{}.slingshotSpeed == 0 && defaultChoice(Item::slingshotSpeed) == 0, "default changed");
+        game_swing::Settings s;
+        s.slingshotSpeed = 10;
+        check(!game_swing::validSettings(s), "a launch under 20 m/s accepted");
+        s.slingshotSpeed = 301;
+        check(!game_swing::validSettings(s), "a launch over 300 m/s accepted");
+    });
+    struct TwinZipTest {
+        TestWorld world;
+        Swing solver{inert()};
+        Input in;
+        Body body{{}, {}, false};
+        unsigned zips{};
+        TwinZipTest(bool enabled = true) {
+            world.anchor = {0, 0, -30};
+            solver.allowGestures(enabled, false);
+            for (int i = 0; i < 2; ++i) {
+                in.hands[i].tracked = true;
+                in.hands[i].grip = 1;
+                in.hands[i].gripRelativeToHead = {i ? .2f : -.2f, 0, -.35f};
+                in.hands[i].aim = {{i ? .2f : -.2f, 0, 0},
+                                   arc({0, 0, -1}, normalized(world.anchor - Vec3{i ? .2f : -.2f, 0, 0}))};
+            }
+            in.look = {0, 0, -1};
+            step();
+        }
+        void step(float inputTime = .02f) {
+            const auto result = solver.predictNativeStep(.02f, in, world, body, inputTime);
+            check(result.valid, "zip prediction failed");
+            for (const auto& e : solver.events())
+                zips += e.kind == EventKind::Zip;
+            body = {result.target, result.velocity, body.grounded};
+        }
+        void pull(float distance) {
+            for (auto& h : in.hands)
+                h.gripRelativeToHead.z += distance;
+            step();
+        }
+    };
+    test("sideways rope steering turns existing momentum only while sharing a strand", [] {
+        TestWorld world;
+        Swing on(inert()), off(inert());
+        on.allowGestures(false, true);
+        Input input = aimed();
+        input.hands[0].trigger = 0;
+        input.hands[1] = {input.hands[0].aim, {0, .3f, 0}, true, 0, 0};
+        Body a{{}, {0, 0, -10}, false}, b = a;
+        auto step = [&] {
+            const auto x = on.predictNativeStep(.01f, input, world, a),
+                       y = off.predictNativeStep(.01f, input, world, b);
+            a = {x.target, x.velocity, false};
+            b = {y.target, y.velocity, false};
+        };
+        step();
+        input.hands[1].grip = 1;
+        step();
+        check(on.shared(), "free hand did not take the rope");
+        for (int i = 0; i < 10; ++i) {
+            input.hands[1].gripRelativeToHead.x += .02f;
+            step();
+        }
+        check(a.velocity.x > b.velocity.x + 1, "sideways pull did not steer");
+        check(length(a.velocity) < 10.1f, "rope steering manufactured speed");
+        input.hands[1].grip = 0;
+        step();
+        check(!on.shared(), "released hand kept steering grip");
+    });
+    test("turning gestures OFF clears a queued launch and does not replay it", [] {
+        TwinZipTest state;
+        state.body.grounded = true;
+        for (int i = 0; i < 3; ++i)
+            state.pull(.05f);
+        check(state.solver.gestureTakeoff(), "test did not queue a takeoff");
+        state.solver.allowGestures(false, false);
+        check(!state.solver.gestureTakeoff(), "OFF retained a queued launch");
+        near(length(state.solver.gestureLaunch()), 0);
+        const unsigned before = state.zips;
+        for (int i = 0; i < 20; ++i)
+            state.step();
+        check(state.zips == before, "OFF replayed the launch");
+    });
+    test("two hand zip rejects one-arm, slow, tracking-gap and yaw-change gestures", [] {
+        TwinZipTest one, slow, gap, yaw;
+        for (int i = 0; i < 8; ++i) {
+            one.in.hands[0].gripRelativeToHead.z += .04f;
+            one.step();
+            slow.pull(.01f);
+        }
+        check(one.zips == 0 && slow.zips == 0, "unintentional arm motion zipped");
+        gap.pull(.05f);
+        gap.in.hands[1].tracked = false;
+        gap.step();
+        gap.in.hands[1].tracked = true;
+        gap.pull(.3f);
+        check(gap.zips == 0, "tracking gap created a zip");
+        yaw.pull(.05f);
+        yaw.in.trackingYaw = .5f;
+        yaw.pull(.2f);
+        check(yaw.zips == 0, "snap turn created a zip");
+    });
+    test("two hand zip uses both retractions once and scales with the arm speed", [] {
+        TwinZipTest medium, strong;
+        for (int i = 0; i < 5; ++i)
+            medium.pull(.028f);
+        for (int i = 0; i < 3; ++i)
+            strong.pull(.05f);
+        check(medium.zips == 1 && strong.zips == 1, "two-hand gesture missed or duplicated zip");
+        check(-strong.body.velocity.z > -medium.body.velocity.z + 3, "stronger pull did not launch harder");
+        for (int i = 0; i < 30; ++i)
+            strong.step(0);
+        check(strong.zips == 1, "repeated input relaunched the zip");
+    });
+    test("hand gestures: two switches, off by default, kept in spidy_vr.ini", [] {
+        using namespace vr_settings;
+        for (Item item : {Item::twoHandZip, Item::ropeSteering}) {
+            Values v;
+            check(defaultChoice(item) == 0, "a gesture on by default");
+            check(choose(item, 1, v) && choice(item, withTabOnly({}, tabOnlyText(v))) == 1, "not kept");
+        }
+        game_swing::Settings s;
+        check(!s.twoHandZip && !s.ropeSteering, "a gesture on in the swing's settings");
+        s.ropeSteering = 2;
+        check(!game_swing::validSettings(s), "invalid switch accepted");
+    });
+    test("fixed shot basis keeps flutter continuous when the wrist crosses the old basis threshold", [] {
+        const Vec3 axis = normalized(Vec3{0, .9f, -.435f});
+        const Vec3 a = flyingWebPoint({}, axis * 40, .4f, .6f, .3f, axis);
+        const Vec3 moved{0, .01f, 0};
+        const Vec3 b = flyingWebPoint(moved, axis * 40, .4f, .6f, .3f, axis);
+        check(length(b - a) < .02f, "flutter changed sides as wrist moved");
+    });
+    test("flight visuals advance smoothly between slower physics samples", [] {
+        WebFlightVisual visual;
+        const Vec3 start{}, end{0, 0, -300};
+        float before = 0;
+        for (int frame = 0; frame < 360; ++frame) {
+            const float physicalAge = (frame / 3) / 30.f;
+            const float progress = physicalAge / 5.f;
+            visual.update(1.f / 90, 1, 5, progress, start + (end - start) * progress, end);
+            const float advance = visual.progress() * 300 - before;
+            check(advance >= 0 && advance < .85f, "visual tip jumped between physics frames");
+            if (frame > 0)
+                check(advance > .3f, "visual tip froze between samples");
+            before = visual.progress() * 300;
+            near(length(visual.direction() - Vec3{0, 0, -1}), 0, .0001f);
+        }
+        visual.update(.01f, 0, 0, 0, {}, {});
+        check(!visual.flying(), "released web kept animating");
+    });
+    test("web speed OFF preserves the existing physics frame for frame", [] {
+        TestWorld world;
+        spidy::Swing legacy(inert()), off(inert());
+        off.webTravel(100, 0);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        Body a{{0, 0, 0}, {3, -4, 0}, false}, b = a;
+        for (int i = 0; i < 180; ++i) {
+            if (i == 120)
+                in.hands[0].grip = 0;
+            const auto x = legacy.predictNativeStep(.01f, in, world, a),
+                       y = off.predictNativeStep(.01f, in, world, b);
+            check(x.valid && y.valid, "legacy prediction failed");
+            near(length(x.target - y.target), 0, 1e-6f);
+            near(length(x.velocity - y.velocity), 0, 1e-6f);
+            if (i == 0)
+                check(off.webs()[0].ready() && off.webs()[0].coupling() == 1,
+                      "OFF delayed the old attachment");
+            a = {x.target, x.velocity, false};
+            b = {y.target, y.velocity, false};
+        }
+    });
+    test("a web with zero coupling cannot add angular momentum", [] {
+        spidy::RealisticFlip free, contact;
+        RealisticFlipSettings settings;
+        settings.enabled = true;
+        RealisticFlight flight;
+        flight.valid = true;
+        flight.velocity = {0, 0, -15};
+        flight.handMomentum = {1, 0, 0};
+        for (int i = 0; i < 50; ++i) {
+            free.update(flight, true, false, 0, .01f, settings);
+            contact.update(flight, true, false, 0, .01f, settings);
+        }
+        flight.handMomentum = {};
+        for (int i = 0; i < 20; ++i) {
+            const auto a = free.update(flight, true, false, 0, .01f, settings);
+            auto incoming = flight;
+            incoming.attached = true;
+            incoming.pull = {1, 1, 0};
+            incoming.coupling = 0;
+            const auto b = contact.update(incoming, true, false, 0, .01f, settings);
+            near(a.x, b.x, 1e-6f);
+            near(a.y, b.y, 1e-6f);
+            near(a.z, b.z, 1e-6f);
+            near(a.w, b.w, 1e-6f);
+        }
+    });
+    test("simultaneous web arrivals share the soft catch without a two-rope position snap", [] {
+        TwoAnchors world;
+        world.anchors[0] = {-10, 100, -30};
+        world.anchors[1] = {10, 100, -30};
+        spidy::Swing solver(inert());
+        solver.webTravel(500, 2);
+        Input in;
+        for (int i = 0; i < 2; ++i) {
+            in.hands[i].tracked = true;
+            in.hands[i].grip = 1;
+            in.hands[i].gripRelativeToHead = {i ? .4f : -.4f, 0, 0};
+            in.hands[i].aim.position = in.hands[i].gripRelativeToHead;
+            in.hands[i].aim.orientation =
+                arc({0, 0, -1}, normalized(world.anchors[i] - in.hands[i].aim.position));
+        }
+        Body body{{0, 0, 0}, {0, -35, 0}, false};
+        bool arrived = false;
+        for (int i = 0; i < 220; ++i) {
+            const auto next = solver.predictNativeStep(.01f, in, world, body);
+            check(next.valid && solver.webs()[0].attached && solver.webs()[1].attached, "dual shot failed");
+            check(length(next.velocity - body.velocity) < 3.202f, "dual arrival exceeded the force budget");
+            check(length(next.target - (body.position + body.velocity * .01f)) < .025f,
+                  "dual catch teleported the body");
+            arrived |= solver.webs()[0].ready() && solver.webs()[1].ready();
+            body = {next.target, next.velocity, false};
+        }
+        check(arrived, "dual shot never arrived");
+    });
+    test("the soft web catch limits acceleration and never snaps to the firing position", [] {
+        TestWorld world;
+        world.anchor = {0, 100, 0};
+        spidy::Swing solver(inert());
+        solver.webTravel(500, 1);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        Body body{{0, 0, 0}, {0, -35, 0}, false};
+        bool arrived = false, finished = false;
+        float lastGain = 0;
+        for (int i = 0; i < 300; ++i) {
+            const auto next = solver.predictNativeStep(.01f, in, world, body);
+            check(next.valid, "soft catch invalidated prediction");
+            const auto& web = solver.webs()[0];
+            check(web.attached, "soft catch lost its anchor");
+            const float delta = length(next.velocity - body.velocity);
+            check(delta <= 1.601f, "single-frame catch exceeded the acceleration budget");
+            check(length(next.target - (body.position + body.velocity * .01f)) < .021f,
+                  "catch teleported the player");
+            if (web.ready()) {
+                arrived = true;
+                check(web.coupling() + 1e-5f >= lastGain, "catch gain went backwards");
+                lastGain = web.coupling();
+                finished |= !web.catching;
+            } else
+                near(delta, 0, .001f);
+            body = {next.target, next.velocity, false};
+        }
+        check(arrived && finished, "soft catch never converged to ordinary rope physics");
+    });
+    test("a flying web exerts no force and releasing it cannot attach later", [] {
+        TestWorld world;
+        world.anchor = {0, 100, 0};
+        spidy::Swing solver(inert());
+        solver.webTravel(500, 1);
+        auto in = aimed();
+        in.hands[0].trigger = 0;
+        Body body{{0, 0, 0}, {3, -8, 0}, false};
+        for (int i = 0; i < 50; ++i) {
+            const auto next = solver.predictNativeStep(.01f, in, world, body);
+            check(next.valid && !solver.webs()[0].ready(), "flight ended early");
+            near(length(next.velocity - body.velocity), 0, .001f);
+            near(length(next.target - (body.position + body.velocity * .01f)), 0, .001f);
+            near(solver.webs()[0].tension, 0);
+            body = {next.target, next.velocity, false};
+        }
+        in.hands[0].grip = 0;
+        for (int i = 0; i < 200; ++i) {
+            const auto next = solver.predictNativeStep(.01f, in, world, body);
+            body = {next.target, next.velocity, false};
+            check(!solver.webs()[0].attached, "released shot reappeared");
+            for (const auto& event : solver.events())
+                check(event.kind != EventKind::Attach, "late ghost attachment");
+        }
+    });
+    test("web travel has distance-dependent duration and one shared visible/physical arrival", [] {
+        const float speeds[]{0, 60, 150, 350};
+        for (int mode = 1; mode <= 3; ++mode)
+            for (float distance : {10.f, 100.f, 500.f}) {
+                TestWorld world;
+                world.anchor = {0, distance, 0};
+                spidy::Swing solver(inert());
+                solver.allowAirAnchors(false);
+                solver.webTravel(1000, mode);
+                auto in = aimed();
+                in.hands[0].trigger = 0;
+                const Body body{{0, 0, 0}, {}, false};
+                float elapsed = 0;
+                unsigned attached = 0;
+                for (int frame = 0; frame < 1000; ++frame) {
+                    solver.predictNativeStep(.01f, in, world, body);
+                    elapsed += .01f;
+                    for (const auto& event : solver.events())
+                        attached += event.kind == EventKind::Attach;
+                    const auto& web = solver.webs()[0];
+                    check(web.attached, "shot missed its test surface");
+                    near(web.flightTotal, distance / speeds[mode], .001f);
+                    near(web.tip().y, std::min(distance, elapsed * speeds[mode]), .02f);
+                    if (web.ready()) {
+                        check(attached == 1, "arrival event missing or duplicated");
+                        check(elapsed >= web.flightTotal - .011f && elapsed <= web.flightTotal + .011f,
+                              "incorrect arrival time");
+                        check(web.coupling() < .011f, "arrival applied full rope force");
+                        break;
+                    }
+                    check(attached == 0, "attached before the visible tip arrived");
+                    near(web.tension, 0);
+                    check(frame < 999, "web never arrived");
+                }
+            }
+    });
+    test("web range and web speed: 100 m and off by default, kept in spidy_vr.ini", [] {
+        using namespace vr_settings;
+        for (Item item : {Item::webRange, Item::webSpeed})
+            for (int index = 0; index < static_cast<int>(steps(item).size()); ++index) {
+                Values value;
+                choose(item, index, value);
+                check(choice(item, withTabOnly({}, tabOnlyText(value))) == index, "saved setting changed");
+            }
+        check(Values{}.webRange == 100 && Values{}.webSpeed == 0, "default changed");
+        game_swing::Settings s;
+        check(s.webRange == 100 && !s.webSpeed, "the swing's settings changed the web");
+        s.webRange = 1001;
+        check(!game_swing::validSettings(s), "a web range over 1000 m accepted");
+    });
+    test("slingshot settings append to the old wire format and default off", [] {
+        game_swing::Settings s;
+        check(s.version == 20 && s.bytes == 96 && !s.webSlingshot, "wrong slingshot defaults");
+        check(offsetof(game_swing::Settings, webSlingshot) == 48, "old settings moved");
+        s.webSlingshot = 1; check(game_swing::validSettings(s), "ON refused");
+        s.webSlingshot = 2; check(!game_swing::validSettings(s), "invalid switch accepted");
+        vr_settings::Values v;
+        check(!v.webSlingshot && vr_settings::choose(vr_settings::Item::webSlingshot, 1, v) && v.webSlingshot,
+              "menu toggle failed");
+        check(vr_settings::withTabOnly({}, vr_settings::tabOnlyText(v)).webSlingshot, "toggle not saved");
+    });
+    test("slingshot cannot charge air anchors or launch after an anchor disappears or focus is lost", [] {
+        Sling air;
+        air.world.enabled = false;
+        air.solver.reset(air.body);
+        air.in.hands[0].grip = air.in.hands[1].grip = 0;
+        air.tick();
+        air.in.hands[0].grip = air.in.hands[1].grip = 1;
+        air.tick();
+        check(air.solver.webs()[0].airAnchor && air.solver.webs()[1].airAnchor, "air-anchor fixture missed");
+        air.draw(); air.release(); check(!air.fired(), "open sky charged a slingshot");
+        Sling lost; lost.draw(); lost.world.enabled = false;
+        lost.tick(); lost.release(); check(!lost.fired(), "missing surface still launched");
+        Sling focus; focus.draw(); focus.in.focused = false;
+        const auto stopped = focus.solver.predictNativeStep(.01f, focus.in, focus.world, focus.body);
+        check(!stopped.valid && focus.solver.slingshotCharge() == 0, "focus loss kept the charge");
+        focus.in.focused = true; focus.release(); check(!focus.fired(), "resuming focus launched");
     });
     test("native view conversion preserves identity and meter scale", [] {
         const Mat4 original{1,0,0,0, 0,-1,0,0, 0,0,-1,0, 10,20,30,1};
@@ -994,6 +1884,73 @@ int main() {
         near(native_view::requestScale(2016,2240,1.171f,1.1106f)/native_view::requestScale(1352,1504,1.171f,1.1106f),
              2240.f/1504);
         near(native_view::requestScale(2000,1000,1,1),1000); // the side with more pixels per tangent
+    });
+    test("the far buildings' cone holds both eyes and a margin each way, at most 80 degrees out", [] {
+        // A Quest 3's lens over both eyes (54 degrees out, 48 up and down, with
+        // headView's 5%) widened by 30 degrees: across it reaches the most, 80.
+        const float degree = .0174532925f;
+        const float out = std::tan(54 * degree) * 1.05f, up = std::tan(48 * degree) * 1.05f;
+        const native_eyes::Bounds quest{-out, out, -up, up};
+        const auto cone = native_stream::widened(quest, 30 * degree, 80 * degree);
+        near(std::atan(cone.right) / degree, 80, .01f);
+        near(std::atan(-cone.left) / degree, 80, .01f);
+        near(std::atan(cone.bottom) / degree, std::atan(up) / degree + 30, .01f);
+        near(std::atan(-cone.top) / degree, std::atan(up) / degree + 30, .01f);
+        // Each side on its own: a lopsided lens keeps its shape inside the most.
+        const native_eyes::Bounds lopsided{-std::tan(20 * degree), std::tan(40 * degree), -std::tan(10 * degree),
+                                           std::tan(30 * degree)};
+        const auto wide = native_stream::widened(lopsided, 15 * degree, 80 * degree);
+        near(std::atan(-wide.left) / degree, 35, .01f);
+        near(std::atan(wide.right) / degree, 55, .01f);
+        near(std::atan(-wide.top) / degree, 25, .01f);
+        near(std::atan(wide.bottom) / degree, 45, .01f);
+        // Never narrower: a side already past the most stays as it was.
+        const native_eyes::Bounds broad{-std::tan(85 * degree), 1, -1, 1};
+        near(native_stream::widened(broad, 30 * degree, 80 * degree).left, broad.left);
+        // No margin, a margin or most that is no number, or a broken lens: as it came.
+        const auto same = [](const native_eyes::Bounds& a, const native_eyes::Bounds& b) {
+            return a.left == b.left && a.right == b.right && a.top == b.top && a.bottom == b.bottom;
+        };
+        check(same(native_stream::widened(quest, 0, 80 * degree), quest), "a lens widened without a margin");
+        check(same(native_stream::widened(quest, std::numeric_limits<float>::quiet_NaN(), 80 * degree), quest) &&
+                  same(native_stream::widened(quest, 30 * degree, 90 * degree), quest),
+              "a lens widened by numbers that are not a margin");
+        native_eyes::Bounds broken = quest;
+        broken.right = std::numeric_limits<float>::infinity();
+        check(same(native_stream::widened(broken, 30 * degree, 80 * degree), broken), "a broken lens widened");
+    });
+    test("the cone's margin eases off as the scene's slot pool fills", [] {
+        near(native_stream::poolMargin(0, 10000, 30), 30);
+        near(native_stream::poolMargin(6000, 10000, 30), 30);    // 60%: all of it
+        near(native_stream::poolMargin(7250, 10000, 30), 15);    // halfway to 85%
+        near(native_stream::poolMargin(8500, 10000, 30), 0);     // 85%: none
+        near(native_stream::poolMargin(10000, 10000, 30), 0);
+        // A pool that does not read as one: no margin.
+        near(native_stream::poolMargin(5, 0, 30), 0);
+        near(native_stream::poolMargin(5, -1, 30), 0);
+        near(native_stream::poolMargin(-1, 10000, 30), 0);
+        near(native_stream::poolMargin(10001, 10000, 30), 0);
+        near(native_stream::poolMargin(100, 10000, 0), 0);
+    });
+    test("the texture budget doubles where the card has room and leaves an eighth of it free", [] {
+        constexpr uint64_t mb = 1ull << 20;
+        const uint64_t veryHigh = 3874 * mb;
+        // The October 26 session: a 32 GB card, 31,418 MB for the game, 9,448 used.
+        check(native_stream::textureBudget(veryHigh, 31418 * mb, 9448 * mb) == 2 * veryHigh, "not doubled");
+        // A 16 GB card in VR: what is left over 2 GB (more than an eighth of 15,000 MB).
+        check(native_stream::textureBudget(veryHigh, 15000 * mb, 10000 * mb) == veryHigh + (5000 - 2048) * mb,
+              "not raised by the room left over 2 GB");
+        // A 12 GB card in VR: no room over 2 GB, the game's own.
+        check(native_stream::textureBudget(veryHigh, 11000 * mb, 9500 * mb) == veryHigh, "raised with no room");
+        // Over the card's budget, or nothing to go by: the game's own.
+        check(native_stream::textureBudget(veryHigh, 8000 * mb, 9000 * mb) == veryHigh &&
+                  native_stream::textureBudget(veryHigh, 0, 0) == veryHigh &&
+                  native_stream::textureBudget(0, 31418 * mb, 9448 * mb) == 0,
+              "raised without a budget to go by");
+        // Short: less than 1 GB of the card's budget left.
+        check(native_stream::textureShort(31418 * mb, 30500 * mb) && native_stream::textureShort(0, 0) &&
+                  !native_stream::textureShort(31418 * mb, 9448 * mb + veryHigh),
+              "short at the wrong time");
     });
     test("game rig uses one tracking sample for head hands and both eyes", [] {
         GameTrackingRig rig;auto f=trackedFrame();
@@ -1276,6 +2233,77 @@ int main() {
         }
     };
     const auto physical=[]{auto c=inert();c.physical=true;return c;};
+
+    test("better climbing retains hand-over-hand progress without a yank impulse", [physical] {
+        TestWorld world;
+        Swing swing(physical());
+        swing.allowBetterClimbing(true);
+        auto in = aimed(); in.hands[0].trigger = 0;
+        in.hands[1] = {in.hands[0].aim, {0, .3f, 0}, true, 0, 0};
+        Body body{{}, {}, false};
+        auto intent = swing.predictNativeStep(1.f / 90, in, world, body);
+        auto step = [&] {
+            body = {intent.target, intent.velocity, false};
+            intent = swing.predictNativeStep(1.f / 90, in, world, body);
+            check(intent.valid, "climbing prediction failed");
+            for (const auto& e : swing.events())
+                check(e.kind != EventKind::Zip, "climbing became a yank impulse");
+        };
+        step(); in.hands[1].grip = 1; step();
+        check(swing.shared(), "two hands did not share the web");
+        for (int i = 0; i < 30; ++i) { in.hands[1].gripRelativeToHead.y -= .01f; step(); }
+        check(intent.target.y > .5f, "hand pull did not take in the rope");
+        const float before = intent.target.y;
+        in.hands[1].grip = 0; step();
+        for (int i = 0; i < 25; ++i) { intent.velocity = {}; step(); }
+        check(intent.target.y > before - .05f, "the remaining hand lost the gained height");
+        const float retained = swing.webs()[0].length;
+        // Reach forward with the free hand, grip the same strand and pull again.
+        in.hands[1].gripRelativeToHead.y += .4f; step();
+        in.hands[1].grip = 1; step();
+        check(swing.shared(), "free hand could not regrip the strand");
+        for (int i = 0; i < 25; ++i) { in.hands[1].gripRelativeToHead.y -= .01f; step(); }
+        check(std::min(swing.webs()[0].length, swing.webs()[1].length) < retained - .15f,
+              "another hand-over-hand stroke made no progress");
+    });
+    test("better climbing ignores repeated poses and tracking gaps, and can be switched off", [physical] {
+        TestWorld world;
+        Swing swing(physical()); swing.allowBetterClimbing(true);
+        auto in = aimed(); in.hands[0].trigger = 0;
+        in.hands[1] = {in.hands[0].aim, {0, .3f, 0}, true, 0, 0};
+        Body body{{}, {}, false};
+        swing.predictNativeStep(.01f, in, world, body);
+        in.hands[1].grip = 1;
+        swing.predictNativeStep(.01f, in, world, body);
+        check(swing.shared(), "not a shared strand");
+        const auto before = swing.webs()[1].length;
+        in.hands[1].gripRelativeToHead.y -= .3f;
+        for (int i = 0; i < 100; ++i) swing.predictNativeStep(.01f, in, world, body, 0);
+        near(swing.webs()[1].length, before);
+        swing.predictNativeStep(.01f, in, world, body, .2f);
+        near(swing.webs()[1].length, before);
+        swing.allowBetterClimbing(false);
+        const auto lengthOff = swing.webs()[1].length;
+        for (int i = 0; i < 10; ++i) {
+            in.hands[1].gripRelativeToHead.y -= .005f;
+            swing.predictNativeStep(.01f, in, world, body);
+        }
+        near(swing.webs()[1].length, lengthOff);
+        swing.releaseAll();
+        check(!swing.webs()[0].attached && !swing.webs()[1].attached, "release kept a climbing web");
+    });
+    test("better climbing switch saves and extends settings without moving old fields", [] {
+        vr_settings::Values v;
+        check(!v.betterClimbing, "better climbing must default off");
+        check(vr_settings::choose(vr_settings::Item::betterClimbing, 1, v), "ON failed");
+        check(vr_settings::withTabOnly({}, vr_settings::tabOnlyText(v)).betterClimbing, "switch not saved");
+        game_swing::Settings s;
+        check(s.version == 20 && s.bytes == 96 && offsetof(game_swing::Settings, betterClimbing) == 52,
+              "settings moved old fields");
+        s.betterClimbing = 1; check(game_swing::validSettings(s), "ON refused");
+        s.betterClimbing = 2; check(!game_swing::validSettings(s), "invalid switch accepted");
+    });
+
     test("a physical web bends round a building's corner and comes off it again", [physical] {
         Corner w;Swing s(physical());const auto in=w.held();
         Body body{{14,20,2},{-10,0,0},false};
@@ -1698,6 +2726,441 @@ int main() {
         hanging(-.2f);  // moved further down the web: the hold would have been 0.2 m too short
         hanging(.25f);  // moved up beside the other
     });
+    test("vent detection requires enclosure and retains confirmed rayless floors and shafts", [] {
+        VentCrawlMode mode;
+        for (int i = 0; i < 3; ++i)
+            check(!mode.update(true, false, false, false, .1f), "a brief roof crest became a vent");
+        check(!mode.update(false, false, false, true, .02f), "standing did not exit crawl");
+        for (int i = 0; i < 5; ++i) mode.update(true, false, false, false, .1f);
+        check(!mode.active(), "persistent ground movement flags became a vent");
+        check(mode.update(true, false, true, false, .02f), "enclosed duct floor did not enter vent");
+        for (int i = 0; i < 50; ++i)
+            check(mode.update(true, false, false, false, .02f), "confirmed rayless duct lost its mode");
+        check(mode.update(false, true, false, false, .02f), "shaft lost vent mode");
+        check(!mode.update(false, false, false, true, .02f) && !mode.active(), "ground retained vent mode");
+        check(mode.update(false, true, true, false, .02f), "enclosed wall entry needed a floor first");
+        for (int i = 0; i < 4; ++i) mode.update(false, false, false, false, .1f);
+        check(!mode.active(), "flight retained vent mode");
+    });
+    test("vent enclosure accepts a roof or paired sides but rejects open ground and one facade", [] {
+        struct Duct : TestWorld {
+            bool roof{}, sides{}, movingSides{};
+            std::optional<RayHit> raycast(Vec3 origin, Vec3 direction, float reach) const override {
+                if (roof && direction.y > .9f && 1.2f - origin.y <= reach)
+                    return RayHit{{origin.x, 1.2f, origin.z}, {0, -1, 0}, 1, true};
+                if (std::abs(direction.x) > .9f && (direction.x < 0 || sides)) {
+                    const float x = direction.x < 0 ? -.65f : .65f;
+                    const float t = (x - origin.x) / direction.x;
+                    if (t > 0 && t <= reach)
+                        return RayHit{{x, origin.y, origin.z}, {-direction.x, 0, 0}, 1, !movingSides};
+                }
+                return {};
+            }
+        } world;
+        check(!crawlEnclosed(world, {}, {0, 1, 0}), "one facade became a duct");
+        world.sides = true;
+        check(crawlEnclosed(world, {}, {0, 1, 0}), "roofless scripted duct was not recognised");
+        world.movingSides = true;
+        check(!crawlEnclosed(world, {}, {0, 1, 0}), "moving objects became a vent");
+        world.sides = false;
+        world.roof = true;
+        check(crawlEnclosed(world, {}, {0, 1, 0}), "duct roof was not recognised");
+        check(!crawlEnclosed(world, {}, {}), "invalid support became a vent");
+    });
+    test("the game's floor crawl caps the head only under a duct's roof", [] {
+        constexpr float frame = 1.f / 90;
+        // October 24's rooftop: the flag for seconds under beams 1.7 m up.
+        FloorCrawlRoof roof;
+        for (int i = 0; i < 400; ++i)
+            check(roof.update(true, frame, 1.7f) == 0, "a rooftop's beams capped the head at a crouch");
+        // The street's bursts, with nothing over the feet at all.
+        for (int i = 0; i < 400; ++i)
+            check(roof.update(i % 30 < 25, frame, 0) == 0, "a street's floor flags capped the head");
+        // A duct: its roof 1.2 m up, the cap once the crawl has settled.
+        FloorCrawlRoof duct;
+        float cap = 0;
+        int frames = 0;
+        for (; frames < 200 && cap == 0; ++frames)
+            cap = duct.update(true, frame, 1.2f);
+        check(cap == crawlRoom, "a duct's crawl was not capped");
+        near(static_cast<float>(frames) * frame, crawlSettleSeconds, 2 * frame);
+        // Its stretch with no roof the rays hit keeps the cap; the crawl's end lets it go.
+        for (int i = 0; i < 300; ++i)
+            check(duct.update(true, frame, 0) == crawlRoom, "a roofless stretch of a duct lost the cap");
+        check(duct.update(false, frame, 0) == 0 && !duct.duct(), "the cap outlived the crawl");
+        check(duct.update(true, frame, 0) == 0, "a new crawl began capped");
+    });
+    test("ground floor-flag bursts cannot acquire the vent camera or its height cap", [] {
+        TestWorld open;
+        open.enabled = false;
+        VentCrawlMode mode;
+        CrawlCameraGate gate;
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto frame = trackedFrame();
+        for (auto& hand : frame.hands) hand.squeeze = 0;
+        float floorSeconds{};
+        for (int step = 0; step < 5400; ++step) {
+            // The session shows repeated ground floor flags, interrupted at
+            // each change of direction. Also test a sustained ground run.
+            const bool floor = step > 2700 || step % 60 < 47;
+            const bool vent = mode.update(floor, false, crawlEnclosed(open, {}, {0, 1, 0}),
+                                          !floor, frame.seconds);
+            SurfaceHold support = floor ? SurfaceHold{{0, 1, 0}, {}, 3, true, vent} : SurfaceHold{};
+            support = gate.update(frame.seconds, true, false, true, support);
+            floorSeconds = support.crawl && support.normal.y > .99f ? floorSeconds + frame.seconds : 0;
+            rig.headroom(floorSeconds >= crawlSettleSeconds ? crawlRoom : 0);
+            frame.hands[0].stickX = std::sin(step * .9f);
+            frame.hands[0].stickY = std::cos(step * .9f);
+            ++frame.predictedDisplayTime;
+            const auto view = rig.update(frame, {}, {0, 0, -1}, true, {0, 1, 0}, false, support);
+            check(!view.ventCrawl && floorSeconds == 0, "ground flags acquired the vent view/height cap");
+            near(length(view.headPose.position - frame.head.position), 0, .002f);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) - Vec3{0, 0, -1}), 0, .002f);
+        }
+        // After that same ground sequence, actual enclosure must still enter
+        // the prone view, and a missing roof must not drop an established vent.
+        check(mode.update(true, false, true, false, frame.seconds), "genuine vent entry was blocked");
+        for (int step = 0; step < 180; ++step) {
+            const bool vent = mode.update(true, false, false, false, frame.seconds);
+            const auto support = gate.update(frame.seconds, true, false, true,
+                                             {{0, 1, 0}, {}, 0, true, vent});
+            ++frame.predictedDisplayTime;
+            const auto view = rig.update(frame, {}, {0, 0, -1}, true, {0, 1, 0}, false, support);
+            check(view.ventCrawl, "confirmed rayless vent lost the prone camera");
+            if (step == 179) near(view.headPose.orientation.rotate({0, 0, -1}).y, -1, .002f);
+        }
+    });
+    test("vent grips catch after squeezing before contact, pull and stop on a rayless floor", [] {
+        TestWorld world;
+        world.enabled = false;
+        CrawlHands hands;
+        Input in;
+        in.focused = true;
+        auto& h = in.hands[0];
+        h.tracked = true;
+        h.wallGrip = 1;
+        h.wallPosition = {0, .8f, -.3f};
+        const auto step = [&] { hands.update(true, 1.f / 90, in, {0, 1, 0}, {0, .4f, 0}, world); };
+        step();
+        check(!hands.hands(), "a remote floor grip attached");
+        h.wallPosition.y = .1f;
+        step();
+        check(hands.hands() == 1 && hands.contacts() == 1, "held grip did not catch on reaching floor");
+        near(length(hands.move()), 0);
+        h.gripRelativeToHead.z += .01f;
+        step();
+        check(hands.move().z < -.3f && !hands.contacts(), "pull or single contact pulse failed");
+        step();
+        near(length(hands.move()), 0);
+        h.wallGrip = 0;
+        step();
+        check(!hands.hands(), "released vent grip stayed attached");
+    });
+    test("vent support registers palms inside floor wall and ceiling, within reach only", [] {
+        TestWorld world;
+        world.enabled = false;
+        for (const Vec3 normal : {Vec3{0, 1, 0}, Vec3{0, 0, 1}, Vec3{0, -1, 0}}) {
+            for (const float depth : {.15f, -.1f, -.8f, .5f, -1.5f}) {
+                CrawlHands hands;
+                Input in;
+                in.focused = true;
+                in.hands[0].tracked = true;
+                in.hands[0].wallGrip = 1;
+                const Vec3 support{10, 20, 30};
+                in.hands[0].wallPosition = support + normal * depth;
+                hands.update(true, 1.f / 90, in, normal, support + normal * .4f, world, 0, support);
+                check(bool(hands.hands()) == (depth <= .22f && depth >= -1.2f),
+                      "inside support contact failed");
+                hands.update(true, 1.f / 90, in, normal, support + normal * .4f, world, 0, support);
+                check(!hands.contacts(), "rayless support repeated its vibration");
+            }
+        }
+    });
+    test("vent hands average pulls, reject motion into support and preserve held grips during stick use", [] {
+        TestWorld world;
+        CrawlHands hands;
+        Input in;
+        in.focused = true;
+        for (auto& h : in.hands) { h.tracked = true; h.wallGrip = 1; h.wallPosition = {0, .1f, 0}; }
+        const auto step = [&] { hands.update(true, .02f, in, {0, 1, 0}, {0, .4f, 0}, world); };
+        step();
+        for (auto& h : in.hands) h.gripRelativeToHead = {0, -.5f, .02f};
+        step();
+        near(hands.move().z, -1.f / 2.6f);
+        near(hands.move().y, 0);
+        in.move = {1, 0, 0};
+        in.hands[0].gripRelativeToHead.z += .3f;
+        step();
+        check(hands.hands() == 3 && !hands.contacts(), "stick use dropped the hands");
+        near(length(hands.move()), 0);
+        in.move = {};
+        step();
+        near(length(hands.move()), 0);
+    });
+    test("a vent wall pull approaches a floor-to-shaft bend and continues up after the native turn", [] {
+        struct Shaft : TestWorld {
+            std::optional<RayHit> raycast(Vec3 origin, Vec3 direction, float distance) const override {
+                if (origin.z > 0 && direction.z < -.01f) {
+                    const float at = -origin.z / direction.z;
+                    if (at <= distance) return RayHit{origin + direction * at, {0, 0, 1}, 1, true};
+                }
+                return {};
+            }
+        } world;
+        CrawlHands hands;
+        Input in;
+        in.focused = true;
+        auto& h = in.hands[0];
+        h.tracked = true; h.wallGrip = 1;
+        h.wallPosition = {0, .6f, .05f};
+        hands.update(true, .02f, in, {0, 1, 0}, {0, .4f, .4f}, world);
+        check(hands.hands() == 1, "next shaft wall was not grippable from the floor");
+        h.gripRelativeToHead.y -= .02f;
+        hands.update(true, .02f, in, {0, 1, 0}, {0, .4f, .4f}, world);
+        check(hands.move().z < -.3f, "wall pull was discarded instead of approaching the bend");
+        near(hands.move().y, 0);
+        h.gripRelativeToHead.y -= .02f;
+        hands.update(true, .02f, in, {0, 0, 1}, {0, .4f, .4f}, world);
+        check(hands.move().y > .3f && !hands.contacts(), "native turn broke the held pull");
+        near(hands.move().z, 0);
+    });
+    test("vent wrist rolls never create a pull or leave accumulated displacement", [] {
+        TestWorld world;
+        CrawlHands hands;
+        Input in;
+        in.focused = true;
+        auto& h = in.hands[0];
+        h.tracked = true; h.wallGrip = 1; h.wallPosition = {0, .1f, 0};
+        const auto step = [&] { hands.update(true, .02f, in, {0, 1, 0}, {0, .4f, 0}, world); };
+        step();
+        in.wallRotate = true;
+        h.gripRelativeToHead.z += .5f;
+        step();
+        near(length(hands.move()), 0);
+        in.wallRotate = false;
+        step();
+        near(length(hands.move()), 0);
+        check(hands.hands() == 1, "rolling dropped a held palm");
+    });
+    test("vent holds release on focus tracking and context loss, and cannot use a web hand", [] {
+        TestWorld world;
+        for (int loss = 0; loss < 6; ++loss) {
+            CrawlHands hands;
+            Input in;
+            in.focused = true;
+            auto& h = in.hands[0];
+            h.tracked = true; h.wallGrip = 1; h.wallPosition = {0, .1f, 0};
+            hands.update(true, .02f, in, {0, 1, 0}, {0, .4f, 0}, world);
+            check(hands.hands() == 1, "initial hold failed");
+            if (loss == 0) in.focused = false;
+            if (loss == 1) h.tracked = false;
+            if (loss == 2) in.jump = true;
+            if (loss == 3) h.wallPosition.x = std::numeric_limits<float>::quiet_NaN();
+            hands.update(loss != 4, .02f, in, {0, 1, 0}, {0, .4f, 0}, world, loss == 5 ? 1 : 0);
+            check(!hands.hands() && length(hands.move()) == 0, "invalid vent hold survived");
+        }
+    });
+    test("vent camera stays low on floor and never enters wall running for any stick direction", [] {
+        for (const Vec3 n : {Vec3{0, 1, 0}, Vec3{0, 0, 1}, Vec3{0, -1, 0}}) {
+            GameTrackingRig rig;
+            rig.handClimb(true);
+            auto frame = trackedFrame();
+            for (auto& h : frame.hands) h.squeeze = 0;
+            const Vec3 feet{10, 20, 30};
+            const SurfaceHold hold{n, feet, 0, true, true};
+            holdFor(rig, frame, feet, {}, .3f);
+            auto view = holdFor(rig, frame, feet, hold, 1, n);
+            check(view.ventCrawl && !view.standing, "vent did not use climbing view");
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) + n), 0, .002f);
+            near(dot(view.headPose.position - feet, n), .4f, .02f);
+            const Quat before = view.headPose.orientation;
+            for (const Vec3 stick : {Vec3{0, 0, 1}, Vec3{0, 0, -1}, Vec3{1, 0, 0}, Vec3{-1, 0, 0}}) {
+                frame.hands[0].stickX = stick.x;
+                frame.hands[0].stickY = stick.z;
+                view = holdFor(rig, frame, feet, hold, .3f, n);
+                check(!view.standing && view.ventCrawl, "stick switched vent into running view");
+                near(length(view.headPose.orientation.rotate({0, 0, -1}) - before.rotate({0, 0, -1})), 0);
+            }
+        }
+    });
+    test("vent entry faces the floor from any standing head heading and exits facing the same way", [] {
+        for (const float yaw : {-2.1f, -.5f, 0.f, 1.5707963f, 2.8f}) {
+            GameTrackingRig rig;
+            rig.handClimb(true);
+            auto f = trackedFrame();
+            for (auto& h : f.hands) h.squeeze = 0;
+            f.head.orientation = Quat::yaw(yaw);
+            holdFor(rig, f, {}, {}, .3f);
+            const SurfaceHold floor{{0, 1, 0}, {}, 0, true, true};
+            auto view = holdFor(rig, f, {}, floor, .8f);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) - Vec3{0, -1, 0}), 0);
+            near(length(view.headPose.orientation.rotate({0, 1, 0}) - Vec3{0, 0, -1}), 0);
+            f.hands[0].stickY = 1;
+            view = holdFor(rig, f, {}, floor, .2f);
+            near(view.walkForward, 1);
+            near(view.walkRight, 0);
+            f.hands[0].stickY = 0;
+            view = holdFor(rig, f, {}, {}, 1);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) - Vec3{0, 0, -1}), 0);
+        }
+    });
+    test("vent edge handovers retain native support while outdoor air and invalid states cannot", [] {
+        VentCrawlMode mode;
+        near(length(mode.turningSurface({0, 1, 0}, 0x80, true)), 0);
+        mode.update(true, false, true, false, .1f);
+        for (int i = 0; i < 90; ++i) {
+            const Vec3 up = Quat::around({1, 0, 0}, i * 1.5707963f / 89).rotate({0, 1, 0});
+            const Vec3 support = mode.turningSurface(up, 0x80, true);
+            near(length(support - up), 0);
+            check(mode.update(false, true, false, false, 1.f / 90), "native edge turn lost vent context");
+        }
+        near(length(mode.turningSurface({0, 1, 0}, 0x10008020, true)), 0);
+        near(length(mode.turningSurface({0, 1, 0}, 0x80000080, true)), 0);
+        near(length(mode.turningSurface({}, 0x80, true)), 0);
+        near(length(mode.turningSurface({0, 1, 0}, 0x80, false)), 0);
+    });
+    test("vent camera smoothly follows floor wall ceiling and angled edges about the eyes", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands) h.squeeze = 0;
+        holdFor(rig, f, {}, {}, .3f);
+        auto view = holdFor(rig, f, {}, {{0, 1, 0}, {}, 0, true, true}, .8f);
+        for (const Vec3 n : {Vec3{0, 0, 1}, normalized(Vec3{1, 0, 1}), Vec3{1, 0, 0},
+                             Vec3{0, -1, 0}, Vec3{0, 0, -1}, Vec3{0, 1, 0}}) {
+            const SurfaceHold hold{n, {}, 0, true, true};
+            Vec3 previous = view.headPose.orientation.rotate({0, 0, -1});
+            for (int i = 0; i < 70; ++i) {
+                view = holdFor(rig, f, {}, hold, 1.f / 90, n);
+                const Vec3 look = view.headPose.orientation.rotate({0, 0, -1});
+                check(length(look - previous) <= 4.f / 90 + .0001f, "edge camera snapped");
+                check(!view.standing && view.ventCrawl, "edge switched into wall running");
+                const Vec3 left{view.eyes[0][12], view.eyes[0][13], view.eyes[0][14]};
+                const Vec3 right{view.eyes[1][12], view.eyes[1][13], view.eyes[1][14]};
+                near(length(left - right), .064f);
+                near(length((left + right) * .5f - view.headPose.position), 0);
+                previous = look;
+            }
+            near(length(previous + n), 0, .002f);
+            near(dot(view.headPose.position, n), .4f, .002f);
+        }
+    });
+    test("prone vent frame keeps physical head and hand motion together without gaze steering the body", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands) h.squeeze = 0;
+        const SurfaceHold floor{{0, 1, 0}, {}, 0, true, true};
+        holdFor(rig, f, {}, {}, .3f);
+        const auto neutral = holdFor(rig, f, {}, floor, .8f);
+        const Quat bodyBefore = neutral.bodyTilt();
+        f.head.orientation = Quat::yaw(.4f) * Quat::around({1, 0, 0}, .3f);
+        const auto looking = holdFor(rig, f, {}, floor, .2f);
+        const Vec3 expected = (neutral.headPose.orientation * f.head.orientation).rotate({0, 0, -1});
+        near(length(looking.headPose.orientation.rotate({0, 0, -1}) - expected), 0);
+        near(length(looking.bodyTilt().rotate({0, 1, 0}) - bodyBefore.rotate({0, 1, 0})), 0);
+        f.head.orientation = {};
+        f.hands[0].grip.position.y -= .05f;
+        const auto moved = holdFor(rig, f, {}, floor, .1f);
+        const Vec3 actual = moved.grips[0].position - neutral.grips[0].position;
+        near(length(actual - neutral.headPose.orientation.rotate({0, -.05f, 0})), 0);
+    });
+    test("vent stick follows the prone crown around edges and rolling transports the selected angle", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands) h.squeeze = 0;
+        holdFor(rig, f, {}, {}, .3f);
+        const SurfaceHold floor{{0, 1, 0}, {}, 0, true, true};
+        holdFor(rig, f, {}, floor, .8f);
+        for (auto& h : f.hands) h.squeeze = 1;
+        holdFor(rig, f, {}, floor, .1f);
+        for (auto& h : f.hands) h.grip.orientation = Quat::around({0, 0, -1}, .6f);
+        auto view = holdFor(rig, f, {}, floor, .6f);
+        const float selected = view.wallRoll;
+        check(std::abs(selected) > .5f, "test roll failed");
+        for (auto& h : f.hands) h.squeeze = 0;
+        for (const Vec3 n : {Vec3{0, 1, 0}, Vec3{0, 0, 1}, Vec3{1, 0, 0}, Vec3{0, -1, 0}}) {
+            const SurfaceHold hold{n, {}, 0, true, true};
+            f.hands[0].stickY = 0;
+            view = holdFor(rig, f, {}, hold, .8f, n);
+            near(view.wallRoll, selected);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) + n), 0, .002f);
+            const Vec3 forward = view.headPose.orientation.rotate({0, 1, 0});
+            f.hands[0].stickY = 1;
+            view = holdFor(rig, f, {}, hold, .2f, n);
+            const Vec3 walked = view.walkForwardAxis * view.walkForward + view.walkRightAxis * view.walkRight;
+            near(length(walked - forward), 0, .002f);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) + n), 0, .002f);
+        }
+    });
+    test("vent floor roll follows the wrists and locks on release while head pitch stays independent", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands) h.squeeze = 0;
+        const SurfaceHold vent{{0, 1, 0}, {}, 0, true, true};
+        holdFor(rig, f, {}, {}, .3f);
+        holdFor(rig, f, {}, vent, .7f);
+        for (auto& h : f.hands) h.squeeze = 1;
+        holdFor(rig, f, {}, vent, .1f);
+        for (auto& h : f.hands) h.grip.orientation = Quat::around({0, 0, -1}, .6f);
+        auto view = holdFor(rig, f, {}, vent, .8f);
+        check(std::abs(view.wallRoll) > .5f && view.wallRotate, "vent floor wrist roll failed");
+        const float locked = view.wallRoll;
+        f.hands[0].squeeze = 0;
+        view = holdFor(rig, f, {}, vent, .2f);
+        near(view.wallRoll, locked);
+        check(!view.wallRotate, "one grip release did not lock roll");
+        f.head.orientation = Quat::around({1, 0, 0}, .7f);
+        view = holdFor(rig, f, {}, vent, .3f);
+        near(view.wallRoll, locked);
+        near(view.headPose.position.y, .4f, .02f);
+        check(!view.standing, "head pitch switched the vent view");
+    });
+    test("vent crawl exits restore outdoor wall-run transitions and normal floor camera", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands) h.squeeze = 0;
+        holdFor(rig, f, {}, {}, .3f);
+        const SurfaceHold vent{{0, 1, 0}, {}, 0, true, true};
+        auto view = holdFor(rig, f, {}, vent, .7f);
+        near(view.headPose.position.y, .4f, .02f);
+        view = holdFor(rig, f, {}, {}, 1);
+        check(!view.ventCrawl && !view.standing, "floor retained vent mode");
+        near(view.headPose.position.y, 1.7f, .02f);
+        f.hands[0].stickY = 1;
+        const SurfaceHold wall{{0, 0, 1}, {0, 0, -1}, 0, false};
+        view = holdFor(rig, f, {}, wall, 1);
+        check(view.standing && !view.ventCrawl, "outdoor wall running was disabled");
+    });
+    test("slow vent hand pulls reach native pad axes and expire safely", [] {
+        for (const Vec3 n : {Vec3{0, 1, 0}, Vec3{0, 0, 1}, Vec3{0, -1, 0}}) {
+            GameTrackingRig rig;
+            rig.handClimb(true);
+            auto f = trackedFrame();
+            for (auto& h : f.hands) h.squeeze = 0;
+            const SurfaceHold hold{n, {}, 0, true, true};
+            holdFor(rig, f, {}, {}, .3f);
+            const auto view = holdFor(rig, f, {}, hold, 1, n);
+            game_swing::ClimbData d;
+            d.status = d.crawl = d.hands = 1;
+            d.sampleTimeNs = 1'000'000'000;
+            d.crawlMove = view.walkForwardAxis * .08f; // 21 cm/s pull
+            const Vec3 pull = game_swing::crawlPull(d, view.ventCrawl, d.sampleTimeNs + 10'000'000);
+            const Vec3 stick = game_swing::crawlStick(pull, view.walkForwardAxis, view.walkRightAxis);
+            game_pad::Walk walk;
+            walk.right = stick.x; walk.forward = stick.z;
+            const auto pad = game_pad::fromControllers(f, game_pad::Mapping::gameplay, walk);
+            check(pad.thumbLY > 7849 && pad.rightTrigger == 0, "slow pull hit dead zone or started running");
+            near(static_cast<float>(pad.thumbLX), 0, 1);
+            near(length(game_swing::crawlPull(d, true, d.sampleTimeNs + 100'000'001)), 0);
+            near(length(game_swing::crawlPull(d, false, d.sampleTimeNs)), 0);
+            near(length(game_swing::crawlStick({}, view.walkForwardAxis, view.walkRightAxis)), 0);
+        }
+    });
     test("hand climbing: either grip pulls up, sideways and down without firing webs", [] {
         constexpr float dt = 1.f / 60;
         for (int hand = 0; hand < 2; ++hand) {
@@ -1716,6 +3179,7 @@ int main() {
             auto& h = in.hands[hand];
             h.tracked = true;
             h.wallPosition = {4.95f, 10, 0};
+            h.aim.orientation = arc({0, 0, -1}, {1, 0, 0}); // reaching for the wall
             h.gripRelativeToHead = {.4f, 0, 0};
             advance(); // release once after coming onto the wall
             h.wallGrip = h.grip = 1;
@@ -1765,6 +3229,7 @@ int main() {
         for (auto& h : in.hands) {
             h.tracked = true;
             h.wallPosition = {4.95f, 10, 0};
+            h.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
         }
         advance();
         for (auto& h : in.hands)
@@ -1803,6 +3268,7 @@ int main() {
         auto& h = in.hands[0];
         h.tracked = true;
         h.wallGrip = 1;
+        h.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
         h.wallPosition = {4, 10, 0};
         check(!s.wallHand(0, in, w), "a distant grip caught the wall");
         h.wallPosition.x = 5.2f;
@@ -1866,6 +3332,7 @@ int main() {
             auto& h = in.hands[0];
             h.tracked = true;
             h.wallPosition = {4.95f, 10, 0};
+            h.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
             in.look = direction;
             step();
             h.wallGrip = h.grip = 1;
@@ -1896,6 +3363,7 @@ int main() {
         auto& hand = in.hands[0];
         hand.tracked = true;
         hand.wallPosition = {5.2f, 10, 0};
+        hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
         const Vec3 from = body.position;
         for (int i = 0; i < 30; ++i) {
             hand.gripRelativeToHead.y -= .01f;
@@ -1940,6 +3408,7 @@ int main() {
                     auto& hand = in.hands[0];
                     hand.tracked = true;
                     hand.wallPosition = {4.95f, 10, body.position.z};
+                    hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
                     step();
                     hand.wallGrip = 1;
                     step();
@@ -2028,6 +3497,7 @@ int main() {
                 auto& hand = in.hands[0];
                 hand.tracked = true;
                 hand.wallPosition = {4.95f, 10, body.position.z};
+                hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
                 step();
                 hand.wallGrip = 1;
                 step();
@@ -2128,6 +3598,7 @@ int main() {
             auto& h = in.hands[0];
             h.tracked = true;
             h.wallPosition = {4.95f, 10, body.position.z};
+            h.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
             step();
             h.wallGrip = 1;
             step();
@@ -2163,10 +3634,10 @@ int main() {
     });
     test("grip climbing settings keep old packets and reject invalid versions, sizes and switches", [] {
         using namespace game_swing;
-        for (uint32_t version = 3; version <= 8; ++version) {
+        for (uint32_t version = 3; version <= 20; ++version) {
             Settings s;
             s.version = version;
-            s.bytes = 16 + 4 * version; // official v3=28 through custom v8=48
+            s.bytes = 16 + 4 * version; // official v3=28 through custom v20=96
             check(validSettings(s), "compatible settings packet was refused");
             ++s.bytes;
             check(!validSettings(s), "wrong settings length was accepted");
@@ -2183,7 +3654,7 @@ int main() {
     test("merged settings keep phone suppression, arcade webs and hand climbing independent", [] {
         using namespace game_swing;
         Settings s;
-        check(s.version == 8 && s.bytes == 48, "updated settings did not append the climbing field");
+        check(s.version == 20 && s.bytes == 96, "updated settings did not append the climbing field");
         check(offsetof(Settings, noBlows) == 36 && offsetof(Settings, arcade) == 40 &&
               offsetof(Settings, handClimb) == 44, "upstream phone or arcade fields moved");
         s.noBlows = 3;
@@ -2220,6 +3691,7 @@ int main() {
             auto& hand = in.hands[0];
             hand.tracked = true;
             hand.wallPosition = {5.1f, 10, 0};
+            hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
             step();
             hand.wallGrip = 1;
             step();
@@ -2234,10 +3706,492 @@ int main() {
             near(body.position.y - before, .2f, .012f);
         }
     });
+    test("solid hands stop at the face while pressing gradually moves the viewpoint away", [] {
+        constexpr float dt = 1.f / 90;
+        for (float yaw : {0.f, .7f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                HandCollision collision;
+                const Quat turn = Quat::yaw(yaw) * Quat::around({0, 0, 1}, roll);
+                const Vec3 n = turn.rotate({0, 0, 1});
+                const Pose head{turn.rotate({0, 1, .4f}), turn};
+                std::array<Pose, 2> hands{{{turn.rotate({-.25f, .8f, -.15f}), turn},
+                                            {turn.rotate({.25f, .8f, .2f}), turn}}};
+                const std::array<HeadClearance::Surface, 2> faces{{{{}, n}, {{}, n}}};
+                Vec3 push = collision.update(dt, true, head, hands, {true, true});
+                for (unsigned frame = 1; frame <= 180; ++frame) {
+                    const auto rays = collision.next(head.position + push);
+                    collision.feedback(handRayBatch(frame, rays, faces), 1000, 10000);
+                    const Vec3 before = push;
+                    push = collision.update(dt, true, head, hands, {true, true});
+                    check(length(push - before) <= HandCollision::pushSpeed * dt + .0001f,
+                          "hand contact snapped the camera instead of gradually pushing it");
+                    Pose placed = hands[0]; placed.position += push;
+                    const Vec3 stopped = placed.position + collision.correction(0, placed);
+                    check(dot(stopped, n) >= HandCollision::clearance(placed, 0, n) - .0001f,
+                          "the visible hand passed into the building while the camera caught up");
+                    near(length(stopped - hands[0].position - n * dot(stopped - hands[0].position, n)),
+                         0, .0001f);
+                    if (frame > 40)
+                        near(dot(push, n), .15f + HandCollision::clearance(hands[0], 0, n), .0001f);
+                }
+                // Continuing to press increases displacement, without a grip button.
+                hands[0].position -= n * .1f;
+                for (unsigned frame = 181; frame <= 240; ++frame) {
+                    collision.feedback(handRayBatch(frame, collision.next(head.position + push), faces),
+                                       1000, 10000);
+                    push = collision.update(dt, true, head, hands, {true, true});
+                }
+                near(dot(push, n), .25f + HandCollision::clearance(hands[0], 0, n), .0001f);
+            }
+    });
+    test("solid hand outlines include raised fingertips and the mirrored wrist", [] {
+        const Vec3 n{0, 0, 1};
+        for (unsigned i = 0; i < 2; ++i)
+            for (float pitch : {-1.5707963f, 0.f, 1.5707963f}) {
+                Pose hand{{0, 0, -.1f}, Quat::around({1, 0, 0}, pitch)};
+                const float margin = HandCollision::clearance(hand, i, n);
+                hand.position = n * margin;
+                const Vec3 wrist = hand.position +
+                    hand.orientation.rotate({i ? .02f : -.02f, .09f, 0});
+                const Vec3 fingers = hand.position + hand.orientation.rotate({0, -.1f, 0});
+                check(dot(wrist, n) >= .035f - .0001f && dot(fingers, n) >= .018f - .0001f,
+                      "clamping the palm left the fingertips or wrist inside the face");
+            }
+    });
+    test("two solid palms share one push and clear differently angled building faces", [] {
+        constexpr float dt = 1.f / 90;
+        for (float angle : {0.f, .5235988f, 1.0471976f, 1.5707963f, 2.0943951f}) {
+            const Vec3 first{0, 0, 1}, second{std::sin(angle), 0, std::cos(angle)};
+            const std::array<HeadClearance::Surface, 2> faces{{{{}, first}, {{}, second}}};
+            const Pose head{normalized(first + second) * 1.2f + Vec3{0, .8f, 0}, {}};
+            std::array<Pose, 2> hands{{{{0, .8f, -.1f}, {}}, {second * -.1f + Vec3{0, .8f, 0}, {}}}};
+            HandCollision collision;
+            Vec3 push = collision.update(dt, true, head, hands, {true, true});
+            for (unsigned frame = 1; frame <= 120; ++frame) {
+                collision.feedback(handRayBatch(frame, collision.next(head.position + push), faces),
+                                   1000, 10000);
+                push = collision.update(dt, true, head, hands, {true, true});
+            }
+            for (unsigned i = 0; i < 2; ++i)
+                check(dot(hands[i].position + push, faces[i].normal) >=
+                      HandCollision::clearance(hands[i], i, faces[i].normal) - .001f,
+                      "one hand's camera push put the other hand inside its wall");
+            if (angle == 0) near(push.z, .135f, .0001f);
+            check(length(push) <= HandCollision::maxPush + .0001f, "unbounded corner camera push");
+        }
+    });
+    test("hand collision drops missed stale moving and departed faces instead of inventing walls", [] {
+        constexpr float dt = 1.f / 90;
+        const Pose head{{0, 1, .4f}, {}};
+        std::array<Pose, 2> hands{{{{-.25f, .8f, -.15f}, {}}, {{.25f, .8f, .2f}, {}}}};
+        for (int mode = 0; mode < 7; ++mode) {
+            HandCollision collision;
+            collision.update(dt, true, head, hands, {true, true});
+            auto sample = handRayBatch(1, collision.next(head.position));
+            if (mode == 0) sample.qpc = 1; // Expired before it arrived.
+            if (mode == 1) sample.hits[0].motionId = 2; // A moving prop is not a building.
+            if (mode == 2) sample.hits[0].normal = {0, 0, -1}; // Back face.
+            if (mode == 3) sample.hits[0].fraction = std::numeric_limits<float>::quiet_NaN();
+            if (mode == 4) sample.status = 4; // Failed batch.
+            if (mode == 5) sample.qpc = 1001; // Future batch.
+            if (mode == 6) sample.hits[0].count = 0; // An opening, with no confirmed plane.
+            collision.feedback(sample, mode == 0 ? 3000 : 1000, 10000);
+            near(length(collision.update(dt, true, head, hands, {true, true})), 0, .0001f);
+        }
+        HandCollision collision;
+        collision.update(dt, true, head, hands, {true, true});
+        const auto sample = handRayBatch(1, collision.next(head.position));
+        collision.feedback(sample, 1000, 10000);
+        check(collision.update(dt, true, head, hands, {true, true}).z > 0, "contact did not begin");
+        for (int frame = 0; frame < 90; ++frame) {
+            collision.feedback(sample, 1000, 10000); // Re-reading a batch cannot keep a phantom plane alive.
+            collision.update(dt, true, head, hands, {true, true});
+        }
+        near(length(collision.push()), 0, .0001f);
+        collision.feedback(handRayBatch(2, collision.next(head.position)), 1000, 10000);
+        collision.update(dt, true, head, hands, {true, true});
+        collision.feedback(handRayBatch(3, {}), 1000, 10000); // A new miss clears the edge immediately.
+        near(length(collision.correction(0, hands[0])), 0, .0001f);
+        collision.feedback(handRayBatch(4, collision.next(head.position)), 1000, 10000);
+        hands[0].position.x += .5f;
+        collision.update(dt, true, head, hands, {true, true});
+        near(length(collision.correction(0, hands[0])), 0, .0001f);
+        collision.update(dt, true, head, hands, {false, false});
+        near(length(collision.correction(0, hands[0])), 0, .0001f);
+        near(length(collision.update(dt, false, head, hands, {true, true})), 0, .0001f);
+    });
+    test("hand collision probes preserve web aiming roof and head coverage within eight rays", [] {
+        std::array<HeadClearance::Ray, 5> head;
+        for (auto& ray : head) ray = {{0, 1, .4f}, {0, 0, -1}, 1};
+        const std::array<native_rays::Ray, 2> hands{{{{0, 1, .4f}, 1, {0, 0, -1}, 8},
+                                                    {{0, 1, .4f}, 1, {0, 0, -1}, 9}}};
+        const native_rays::Ray roof{{0, .1f, 0}, 3, {0, 1, 0}, 7};
+        unsigned covered = 0;
+        for (unsigned phase = 0; phase < 3; ++phase) {
+            Input input;
+            for (auto& hand : input.hands) hand.tracked = true;
+            auto command = controllerAimRays(input, phase + 1);
+            appendTrackingRays(command, head, hands, roof, phase);
+            check(native_rays::valid(command) && command.count == 8, "hand probes broke the ray protocol");
+            unsigned mask = 0;
+            for (unsigned i = 0; i < command.count; ++i) mask |= 1u << command.rays[i].tag;
+            check((mask & 0x38f) == 0x38f, "a hand probe displaced aiming roof or essential head probes");
+            covered |= mask;
+        }
+        check((covered & 0x3ff) == 0x3ff, "rotating head side/up probes lost a direction");
+        // The head's, the hands' contact and the roof stand in for the body; the hands' aim, for the webs, not.
+        {
+            Input aiming;
+            for (auto& hand : aiming.hands) hand.tracked = true;
+            auto command = controllerAimRays(aiming, 9);
+            appendTrackingRays(command, head, hands, roof, 0);
+            for (unsigned i = 0; i < command.count; ++i)
+                check(((command.bodyRays >> i) & 1) == (command.rays[i].tag >= 2 ? 1u : 0u),
+                      "a ray stood in for the body, or did not, wrongly");
+            command.bodyRays |= 1u << command.count;
+            check(!native_rays::valid(command), "a body bit past the rays was accepted");
+        }
+        Input input;
+        for (auto& hand : input.hands) hand.tracked = true;
+        auto stock = controllerAimRays(input, 4);
+        appendTrackingRays(stock, head, {}, roof, 0);
+        check(stock.count == 8 && native_rays::valid(stock), "ordinary head/roof probing changed");
+    });
+    test("solid hand placement preserves stereo physical pull input and climb orientation", [] {
+        GameTrackingRig rig, baseline;
+        rig.handClimb(true); baseline.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& hand : f.hands) hand.squeeze = hand.trigger = 0;
+        f.hands[0].grip.position = {-.25f, 1.5f, -.55f};
+        f.hands[1].grip.position = {.25f, 1.5f, -.2f};
+        const Vec3 feet{0, 0, .9f};
+        const SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+        GameMotionFrame view, old;
+        uint64_t serial = 0;
+        const auto step = [&](bool feedback) {
+            if (feedback)
+                rig.handFeedback(handRayBatch(++serial, rig.handCollisionRays(view.headPose.position)),
+                                 1000, 10000);
+            ++f.predictedDisplayTime;
+            for (auto* active : {&rig, &baseline}) {
+                active->bodyCentre({0, 1, .9f}); active->surfaceFound({{}, {0, 0, 1}}, true);
+            }
+            view = rig.update(f, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+            old = baseline.update(f, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+        };
+        for (int frame = 0; frame < 100; ++frame) step(false);
+        for (int frame = 0; frame < 180; ++frame) {
+            step(true);
+            for (int i = 0; i < 2; ++i) {
+                near(length(view.swing.hands[i].gripRelativeToHead - old.swing.hands[i].gripRelativeToHead),
+                     0, .0001f);
+                const auto nozzle = webShooter(view.grips[i], i);
+                near(length(nozzle.position - view.swing.hands[i].aim.position), 0, .0001f);
+            }
+            near(length(view.swing.move - old.swing.move), 0, .0001f);
+            near(view.headPose.orientation.w, old.headPose.orientation.w, .0001f);
+            check(!view.standing && !view.wallRotate,
+                  "solid touch changed climbing mode or rotated the view");
+            const Vec3 left{view.eyes[0][12], view.eyes[0][13], view.eyes[0][14]};
+            const Vec3 right{view.eyes[1][12], view.eyes[1][13], view.eyes[1][14]};
+            near(length(left - right), .064f, .0001f);
+        }
+        near(view.headPose.position.z - old.headPose.position.z, .185f, .001f);
+        near(view.grips[0].position.z, .035f, .001f);
+        check(view.wallTouches == 1, "a resting collision did not count without squeezing grip");
+        f.hands[0].grip.position.y -= .1f;
+        step(true);
+        near(length(view.swing.hands[0].gripRelativeToHead - old.swing.hands[0].gripRelativeToHead),
+             0, .0001f);
+        f.hands[0].grip.position.z = -.1f;
+        step(true);
+        check(view.wallTouches == 0, "a returning camera offset counted as a hand still touching");
+        for (int frame = 0; frame < 100; ++frame) step(true);
+        near(length(view.headPose.position - old.headPose.position), 0, .001f);
+        near(length(view.handPush), 0, .001f);
+    });
+    test("hand collision: off the wall the camera's push eases back, it does not snap", [] {
+        constexpr float dt = 1.f / 90;
+        HandCollision collision;
+        const Pose head{{0, 1, .25f}, {}};
+        const std::array<Pose, 2> hands{{{{-.22f, .7f, -.16f}, {}}, {{.22f, .7f, -.02f}, {}}}};
+        Vec3 push = collision.update(dt, true, head, hands, {true, true});
+        for (unsigned frame = 1; frame <= 100; ++frame) {
+            collision.feedback(handRayBatch(frame, collision.next(head.position + push)), 1000, 10000);
+            push = collision.update(dt, true, head, hands, {true, true});
+        }
+        check(length(push) > .05f, "the palms pushed nothing");
+        for (int frame = 0; frame < 200 && length(push) > 0; ++frame) {
+            const Vec3 next = collision.update(dt, false, head, hands, {true, true});
+            check(length(next) <= length(push) &&
+                      length(push) - length(next) <= HandCollision::returnSpeed * dt + 1e-4f,
+                  "the push snapped back");
+            push = next;
+        }
+        near(length(push), 0, .0001f);
+    });
+    test("both ray-confirmed pressing palms remain contacts under unequal shared camera push", [] {
+        HandCollision collision;
+        const Pose head{{0, 1, .25f}, {}};
+        const std::array<Pose, 2> hands{{{{-.22f, .7f, -.16f}, {}}, {{.22f, .7f, -.02f}, {}}}};
+        Vec3 push = collision.update(1.f / 90, true, head, hands, {true, true});
+        for (unsigned frame = 1; frame <= 100; ++frame) {
+            collision.feedback(handRayBatch(frame, collision.next(head.position + push)), 1000, 10000);
+            push = collision.update(1.f / 90, true, head, hands, {true, true});
+            auto visible = hands;
+            for (int i = 0; i < 2; ++i) {
+                visible[i].position += push;
+                visible[i].position += collision.correction(i, visible[i]);
+            }
+            check(collision.contacts(visible) == 3, "shared camera push lost a confirmed pressing palm");
+        }
+    });
+    test("real hand departure and recontact after a shoulder look start the native body turn", [] {
+        const auto b = longFootBody(.22f);
+        for (float direction : {-1.f, 1.f}) for (unsigned held : {0u, 1u, 2u, 3u}) {
+            GameTrackingRig tracking;
+            tracking.handClimb(true); tracking.wallDistance(.25f);
+            auto frame = trackedFrame();
+            frame.hands[0].squeeze = held & 1 ? 1.f : 0.f;
+            frame.hands[1].squeeze = held & 2 ? 1.f : 0.f;
+            frame.hands[0].grip.position = {-.22f, 1.4f, -.4f};
+            frame.hands[1].grip.position = {.22f, 1.4f, -.28f};
+            const Vec3 feet{0, 0, .9f};
+            const SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+            GameMotionFrame motion;
+            body::State state; state.weight = state.crawlWeight = 1;
+            unsigned serial = 0, bothFrames = 0;
+            for (int step = 0; step < 650; ++step) {
+                if (step >= 100) frame.head.orientation = Quat::yaw(step < 370 ?
+                    direction * 2.9670597f : direction * .34906585f);
+                const bool reaching = (step >= 150 && step < 210) || (step >= 400 && step < 460);
+                frame.hands[1].grip.position.z = reaching ? .15f : step >= 460 ? -.43f : -.28f;
+                ++frame.predictedDisplayTime;
+                tracking.handFeedback(handRayBatch(++serial, tracking.handCollisionRays(
+                    motion.headPose.position)), 1000, 10000);
+                tracking.outwardCrawl(state.crawlTurn.outwardWeight(state.crawlTurn.angle()));
+                motion = tracking.update(frame, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.crawlNormal = wall.normal;
+                t.crawlAhead = t.crawlStep = {0, 1, 0}; t.crawlOrigin = feet;
+                t.floor = wall.anchor - feet; t.eyes = motion.headPose.position - feet;
+                t.facing = motion.headPose.orientation; t.crawlHands = held;
+                t.crawlTouches = motion.wallTouches;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, motion.grips[i].position - feet, motion.grips[i].orientation};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const auto result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                for (int i = 0; i < 2; ++i) if (held & (1u << i))
+                    check(result.handError[i] < .025f, ("turn lost held wrist " + std::to_string(i) +
+                        " by " + std::to_string(result.handError[i]) + " at step " +
+                        std::to_string(step)).c_str());
+                if (step > 100 && motion.wallTouches == 3) ++bothFrames;
+                if (step < 210)
+                    check(!state.crawlTurn.engaged(), "an old palm placement or a head turn fired the cue");
+                if (step >= 370 && step < 460)
+                    check(state.crawlTurn.outward(), "looking toward the wall used an old contact");
+                if (step == 340) {
+                    check(state.crawlTurn.outward(), "the returning free palm did not turn outward");
+                    check(state.crawlTurn.angle() * direction > 0, "real-contact turn used the wrong side");
+                }
+            }
+            check(bothFrames > 30, "two intended palm collisions did not survive placement");
+            check(!state.crawlTurn.engaged(), ("a real-contact return failed in direction " +
+                std::to_string(direction) + " held " + std::to_string(held) +
+                " pending " + std::to_string(state.crawlReach.pending) +
+                " angle " + std::to_string(state.crawlTurn.angle())).c_str());
+        }
+    });
+    test("downward handoff keeps the tracked view high enough to clear the outward chest", [] {
+        const auto b = longFootBody(.22f);
+        for (float pitch : {-.7f, -1.4f, 0.f, .45f}) for (float direction : {-1.f, 1.f})
+        for (float pressure : {-.4f, -.45f}) {
+            GameTrackingRig tracking;
+            tracking.handClimb(true); tracking.wallDistance(.25f);
+            auto frame = trackedFrame();
+            for (auto& hand : frame.hands) hand.squeeze = 0;
+            frame.hands[0].grip.position = {-.22f, 1.4f, pressure};
+            frame.hands[1].grip.position = {.22f, 1.4f, -.28f};
+            const Vec3 feet{0, 0, .9f}, n{0, 0, 1};
+            const SurfaceHold wall{n, {}, 0, false};
+            GameMotionFrame motion;
+            body::State state; state.weight = state.crawlWeight = 1;
+            body::Config config; config.hideHead = false;
+            body::Pose rest(const_cast<float*>(b.rest.data()), static_cast<int>(b.rig.parent.size()));
+            float eyeY = 0;
+            for (int step = 0; step < 400; ++step) {
+                frame.head.orientation = Quat::yaw(step < 100 ? 0.f : direction * 2.9670597f) *
+                                         Quat::around({1, 0, 0}, pitch);
+                for (int i = 0; i < 2; ++i) {
+                    frame.eyes[i].pose = frame.head;
+                    frame.eyes[i].pose.position += frame.head.orientation.rotate({i ? .032f : -.032f, 0, 0});
+                }
+                frame.hands[1].grip.position.z = step >= 150 && step < 210 ? .15f : -.28f;
+                ++frame.predictedDisplayTime;
+                tracking.handFeedback(handRayBatch(step + 1, tracking.handCollisionRays(
+                    motion.headPose.position)), 1000, 10000);
+                tracking.outwardCrawl(state.crawlTurn.outwardWeight(state.crawlTurn.angle()));
+                motion = tracking.update(frame, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+                if (step == 90) eyeY = motion.headPose.position.y;
+                if (step > 100) near(motion.headPose.position.y, eyeY, .002f);
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                t.crawlOrigin = feet; t.floor = wall.anchor - feet;
+                t.eyes = motion.headPose.position - feet; t.facing = motion.headPose.orientation;
+                t.crawlTouches = motion.wallTouches;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, motion.grips[i].position - feet, motion.grips[i].orientation};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                const float outward = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                const Vec3 neck = t.eyes - F * b.rig.eyesFromHead.x - U * b.rig.eyesFromHead.y -
+                                  cross(U, F) * b.rig.eyesFromHead.z;
+                if (pitch < -.2f && outward > .01f) {
+                    const Vec3 target = neck - Vec3{0, config.crawlEyeLift * (1 - outward), 0};
+                    const float error = length(view.position(b.rig.head) - target);
+                    check(error < .025f, ("turning left the tracked neck by " + std::to_string(error) +
+                        " at angle " + std::to_string(state.crawlTurn.angle()) +
+                        " pitch " + std::to_string(pitch) + " pressure " + std::to_string(pressure)).c_str());
+                }
+                if (step < 340) continue;
+                check(state.crawlTurn.outward(), "pitched handoff did not finish its body turn");
+                if (pitch < -.6f) {
+                    const int chest = b.rig.spine.back();
+                    const Vec3 front = view.position(chest) + normalized(view.direction(chest,
+                        rest.local(chest, {0, 0, 1}))) * .12f;
+                    const float gap = dot(t.eyes - front, n);
+                    check(gap > .04f, ("downward-turn chest crowded the view by gap " + std::to_string(gap) +
+                        " pitch " + std::to_string(pitch)).c_str());
+                }
+                near(length(view.position(b.rig.head) - neck), 0, .025f);
+            }
+        }
+    });
+    test("back-facing camera reaches forty centimetres without dropping or changing other modes", [] {
+        for (int mode = 0; mode < 5; ++mode) {
+            GameTrackingRig tracking, baseline;
+            tracking.handClimb(true); baseline.handClimb(true);
+            tracking.wallDistance(.25f); baseline.wallDistance(.25f);
+            auto frame = trackedFrame();
+            Vec3 feet{0, 0, .9f};
+            SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+            if (mode == 1) wall.normal = {0, 1, 0};
+            if (mode == 2) frame.hands[0].stickY = 1;
+            if (mode == 3) wall.crawl = wall.vent = true;
+            if (mode == 4) wall = {};
+            GameMotionFrame view, old;
+            Vec3 previous;
+            for (int step = 0; step < 350; ++step) {
+                ++frame.predictedDisplayTime;
+                if (step >= 150 && step < 250) feet.y += .003f;
+                tracking.outwardCrawl(step >= 100 && step < 270 ? 1.f : 0.f);
+                view = tracking.update(frame, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+                old = baseline.update(frame, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+                const Vec3 change = view.headPose.position - old.headPose.position;
+                near(change.y, 0, .0001f); near(change.x, 0, .0001f);
+                if (step > 190 && step < 260) near(change.z, mode == 0 ? .15f : 0.f, .001f);
+                if (step > 345) near(length(change), 0, .003f);
+                if (step > 90) check(length(change - previous) < .01f, "outward clearance jumped");
+                previous = change;
+            }
+        }
+    });
+    test("deep hand penetration has bounded camera displacement and clears the visible palm", [] {
+        constexpr float dt = 1.f / 90;
+        HandCollision collision;
+        const Pose head{{0, 1, .4f}, {}};
+        const std::array<Pose, 2> hands{{{{-.25f, .8f, -.8f}, {}}, {{.25f, .8f, .2f}, {}}}};
+        Vec3 push = collision.update(dt, true, head, hands, {true, true});
+        for (unsigned frame = 1; frame <= 100; ++frame) {
+            collision.feedback(handRayBatch(frame, collision.next(head.position + push)), 1000, 10000);
+            push = collision.update(dt, true, head, hands, {true, true});
+            check(length(push) <= HandCollision::maxPush + .0001f, "deep palm overextended the camera");
+            Pose visible = hands[0]; visible.position += push;
+            visible.position += collision.correction(0, visible);
+            check(visible.position.z >= .035f - .0001f, "deep palm escaped the collision limit");
+        }
+        near(push.z, HandCollision::maxPush, .0001f);
+    });
+    test("solid hand push never carries into ground wall running or a tracking break", [] {
+        for (int mode = 0; mode < 4; ++mode) {
+            GameTrackingRig rig, baseline;
+            rig.handClimb(true); baseline.handClimb(true);
+            auto f = trackedFrame();
+            const Vec3 feet{0, 0, .9f};
+            SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+            auto view = holdFor(rig, f, feet, wall, 1);
+            holdFor(baseline, f, feet, wall, 1);
+            rig.handFeedback(handRayBatch(1, rig.handCollisionRays(view.headPose.position)), 1000, 10000);
+            if (mode == 0) wall = {};
+            if (mode == 1) f.hands[0].stickY = 1;
+            if (mode == 2) f.focused = false;
+            if (mode == 3) { wall.speed = 5; for (auto& hand : f.hands) hand.squeeze = 0; }
+            ++f.predictedDisplayTime;
+            view = rig.update(f, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+            const auto old = baseline.update(f, feet, {0, 0, -1}, true, {0, 1, 0}, true, wall);
+            near(length(view.handPush), 0, .0001f);
+            near(length(view.headPose.position - old.headPose.position), 0, .0001f);
+            for (const auto& ray : rig.handCollisionRays(view.headPose.position)) near(ray.distance, 0);
+        }
+    });
+    test("ground dodge cannot acquire a prone vent camera from transient crawl flags", [] {
+        CrawlCameraGate gate;
+        GameTrackingRig rig; rig.handClimb(true);
+        auto frame = trackedFrame();
+        for (auto& hand : frame.hands) hand.squeeze = 0;
+        const SurfaceHold vent{{0, 1, 0}, {}, 0, true, true};
+        auto support = gate.update(frame.seconds, true, false, true, {});
+        GameMotionFrame view;
+        for (int step = 0; step < 70; ++step) {
+            support = gate.update(frame.seconds, true, step == 0, step == 0, vent);
+            ++frame.predictedDisplayTime;
+            const Vec3 animatedUp = Quat::around({1, 0, 0}, 2.f * std::sin(step * .08f)).rotate({0, 1, 0});
+            view = rig.update(frame, {}, {0, 0, -1}, true, animatedUp, false, support);
+            check(!support.crawl && !view.ventCrawl, "ground evade acquired a crawl view");
+            check(!view.onSurface, "the animated ground roll became climbing support");
+            near(length(view.headPose.position - frame.head.position), 0, .002f);
+            near(length(view.headPose.orientation.rotate({0, 0, -1}) - Vec3{0, 0, -1}), 0, .002f);
+        }
+        for (int step = 0; step < 30; ++step)
+            support = gate.update(frame.seconds, true, false, false, vent);
+        check(support.vent, "genuine vent entry remained blocked after the evade");
+        check(gate.update(frame.seconds, true, true, true, vent).vent, "B interrupted an established vent");
+        CrawlCameraGate off;
+        check(off.update(frame.seconds, false, true, true, vent).vent, "disabled mod changed native support");
+    });
+    test("vent solid palms stop at floors walls and ceilings and pressure moves tracking together", [] {
+        for (const Vec3 n : {Vec3{0, 1, 0}, Vec3{0, 0, 1}, Vec3{0, -1, 0}}) {
+            GameTrackingRig rig; rig.handClimb(true); rig.wallDistance(.25f);
+            auto frame = trackedFrame();
+            for (auto& hand : frame.hands) hand.squeeze = 0;
+            const SurfaceHold vent{n, {}, 0, true, true};
+            GameMotionFrame view;
+            for (int step = 0; step < 220; ++step) {
+                ++frame.predictedDisplayTime;
+                rig.handFeedback(handRayBatch(step + 1, rig.handCollisionRays(view.headPose.position),
+                    {{{{}, n}, {{}, n}}}), 1000, 10000);
+                view = rig.update(frame, {}, {0, 0, -1}, true, n, true, vent);
+            }
+            check(view.ventCrawl && !view.standing && view.wallTouches,
+                  "vent palm collision was not registered");
+            check(dot(view.handPush, n) > .01f, "vent palm pressure did not displace the tracking placement");
+            for (unsigned i = 0; i < 2; ++i)
+                check(dot(view.grips[i].position, n) >= HandCollision::clearance(view.grips[i], i, n) - .002f,
+                      "vent palm penetrated its supporting face");
+        }
+    });
     test("merged head clearance protects a rolled climb and keeps camera distance when clear", [] {
         for (float distance : {.1f, .3f, .75f}) {
             GameTrackingRig rig;
             rig.handClimb(true);
+            rig.wallHands(3); // both hands hold the wall
             rig.wallDistance(distance);
             auto f = trackedFrame();
             for (auto& hand : f.hands) hand.squeeze = 0;
@@ -2267,6 +4221,79 @@ int main() {
             near(length(eyeL - eyeR), .064f, .001f);
         }
     });
+    test("native climbing: head motion leaves held controllers still; real pulls climb and step", [] {
+        constexpr float dt = 1.f / 90;
+        Building world;
+        Swing s(walled()); s.allowHandClimb(true);
+        Body body{{4.1f, 10, 0}, {1, 0, 0}, false};
+        auto motion = s.predictNativeStep(dt, {}, world, body);
+        body = {motion.target, motion.velocity, false};
+        GameTrackingRig rig; rig.handClimb(true); rig.wallDistance(.25f);
+        auto f = trackedFrame();
+        const Vec3 headAt = f.head.position;
+        f.hands[1].valid = false;
+        f.hands[0].grip.position = {.55f, 1.2f, -.5f};
+        // The fist ahead, at the wall (the web shooter aims along the grip's -y).
+        f.hands[0].grip.orientation = Quat::around({1, 0, 0}, 1.5707963f);
+        WallCrawlBody visual;
+        CrawlHandSteps legacy;
+        GameMotionFrame placed;
+        Vec3 heldAt{};
+        float headMotion = 0;
+        for (int frame = 0; frame < 500; ++frame) {
+            const float time = static_cast<float>(std::max(0, frame - 130));
+            f.predictedDisplayTime += 11'111'111;
+            f.hands[0].squeeze = frame >= 100 ? 1.f : 0.f;
+            f.head.position = headAt + Vec3{.08f * std::sin(time * .04f), .05f * std::sin(time * .03f), 0};
+            f.head.orientation = Quat::yaw(1.3f * std::sin(time * .02f)) *
+                                 Quat::around({1, 0, 0}, -.8f * std::sin(time * .03f));
+            if (frame >= 430) f.hands[0].grip.position.y -= .003f;
+            const auto wall = s.wall();
+            const Vec3 feet = body.position - Vec3{0, 1, 0};
+            const SurfaceHold hold{wall.normal, feet - wall.normal * wall.distance, 0, false};
+            placed = rig.update(f, feet, {1, 0, 0}, true, {0, 1, 0}, true, hold);
+            const auto input = wallClimbInput(placed);
+            motion = s.predictNativeStep(dt, input, world, body);
+            body = {motion.target, motion.velocity, false};
+            visual.update(placed, hold, true, dt, s.climbingHands());
+            auto legacyInput = placed.swing;
+            legacyInput.hands[0].wallGrip = f.hands[0].squeeze;
+            legacy.update(legacyInput, s.climbingHands(), wall.normal, dt);
+            if (frame == 129) heldAt = body.position;
+            if (frame < 130) continue;
+            check(s.climbingHands() == 1, "the fixed physical reference lost the held hand");
+            headMotion = std::max(headMotion, length(f.head.position - headAt));
+            near(length(placed.swing.hands[0].gripRelativeToHead -
+                        (f.hands[0].grip.position - f.head.position)), 0, .0001f);
+            if (frame < 430) {
+                const Vec3 delta = body.position - heldAt;
+                near(length(delta - wall.normal * dot(delta, wall.normal)), 0, .004f);
+                check(visual.handSteps()[0] == 0, "head motion counted as a hand-pull stroke");
+                if (frame == 429)
+                    check(legacy.strokes()[0] > 0, "the old head-relative cue did not reproduce the problem");
+            }
+        }
+        check(headMotion > .06f, "the regression did not move the tracked head");
+        check(body.position.y > heldAt.y + .15f && visual.handSteps()[0] > 0,
+              "real tracked controller pulls no longer climbed or cued a step");
+        // Let go: the reference eases back to the head (0.5 m/s), the head's
+        // travel since the hold no hand speed of its own.
+        f.hands[0].squeeze = 0;
+        const auto wall = s.wall();
+        const Vec3 feet = body.position - Vec3{0, 1, 0};
+        Vec3 before = wallClimbInput(placed).hands[0].gripRelativeToHead;
+        for (int frame = 0; frame < 90 && placed.climbTracking; ++frame) {
+            ++f.predictedDisplayTime;
+            placed = rig.update(f, feet, {1, 0, 0}, true, {0, 1, 0}, true,
+                                {wall.normal, feet - wall.normal * wall.distance, 0, false});
+            const Vec3 now = wallClimbInput(placed).hands[0].gripRelativeToHead;
+            check(length(now - before) <= .5f * dt + 1e-4f, "release jumped the held hand's input");
+            before = now;
+        }
+        check(!placed.climbTracking, "release did not restore ordinary head-relative input");
+        near(length(wallClimbInput(placed).hands[0].gripRelativeToHead -
+                    placed.swing.hands[0].gripRelativeToHead), 0, .0001f);
+    });
     test("sticky palms round both outside edges without losing the wall or blocking clearance", [] {
         constexpr float dt = 1.f / 60;
         for (float side : {-1.f, 1.f}) {
@@ -2283,6 +4310,7 @@ int main() {
             auto& h = in.hands[0];
             h.tracked = true;
             h.wallPosition = {4.95f, 10, body.position.z};
+            h.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
             step();
             h.wallGrip = 1;
             step();
@@ -2315,6 +4343,8 @@ int main() {
         f.hands[1].valid = false;
         f.hands[0].squeeze = 0;
         f.hands[0].grip.position.x = .55f;
+        // The fist ahead, at the wall (the web shooter aims along the grip's -y).
+        f.hands[0].grip.orientation = Quat::around({1, 0, 0}, 1.5707963f);
         GameMotionFrame placed;
         for (int i = 0; i < 450; ++i) {
             const auto wall = s.wall();
@@ -2413,6 +4443,7 @@ int main() {
     test("wall roll rig: eyes pivot in place, distance stays fixed, release locks and recenter resets", [] {
         GameTrackingRig rig;
         rig.handClimb(true);
+        rig.wallHands(3); // both hands hold the wall
         auto f = trackedFrame();
         for (auto& h : f.hands)
             h.squeeze = 0;
@@ -2453,10 +4484,66 @@ int main() {
         out = holdFor(rig, f, feet, {}, .3f);
         near(out.wallRoll, 0);
     });
+    test("wall roll rig: back-facing stance suspends input and preserves the existing wall orientation", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true); rig.wallDistance(.25f);
+        rig.wallHands(3); // both hands hold the wall
+        auto f = trackedFrame();
+        const Vec3 feet{0, 9, -4.1f};
+        const SurfaceHold wall{{0, 0, 1}, {0, 10, -5}, 0, false};
+        holdFor(rig, f, feet, wall, .7f);
+        for (auto& hand : f.hands)
+            hand.grip.orientation = Quat::around({0, 0, -1}, .78539816f);
+        auto out = holdFor(rig, f, feet, wall, .4f);
+        const float locked = out.wallRoll;
+        check(locked > .4f && out.wallRotate, "wall-facing roll did not start");
+        for (float weight : {.05f, .5f, 1.f, .5f, .05f}) {
+            rig.outwardCrawl(weight);
+            for (auto& hand : f.hands)
+                hand.grip.orientation = Quat::around({0, 0, -1}, -1.2f);
+            out = holdFor(rig, f, feet, wall, .3f);
+            near(out.wallRoll, locked, .001f);
+            check(!out.wallRotate, "back-facing wrists kept rotating the view or reserving grip actions");
+        }
+        rig.outwardCrawl(0);
+        out = holdFor(rig, f, feet, wall, .2f);
+        near(out.wallRoll, locked, .001f);
+        for (auto& hand : f.hands)
+            hand.grip.orientation = Quat::around({0, 0, -1}, -.4f);
+        out = holdFor(rig, f, feet, wall, .3f);
+        check(std::abs(out.wallRoll - locked) > .3f && out.wallRotate,
+              "wall-facing return could not use a fresh wrist-roll neutral");
+    });
+    test("wall climbing: let go, the grips' fixed reference eases back to the head with no jump", [] {
+        constexpr float dt = 1.f / 90;
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        const Vec3 feet{0, 9, -4.1f};
+        const SurfaceHold wall{{0, 0, 1}, {0, 10, -5}, 0, false};
+        auto out = holdFor(rig, f, feet, wall, .3f);
+        check(out.climbTracking, "a hold on the wall took no fixed reference");
+        const Vec3 head = f.head.position;
+        f.head.position += Vec3{.2f, 0, 0};
+        out = holdFor(rig, f, feet, wall, .1f);
+        Vec3 before = wallClimbInput(out).hands[1].gripRelativeToHead;
+        near(length(before - (f.hands[1].grip.position - head)), 0, .0001f);
+        for (auto& h : f.hands)
+            h.squeeze = 0;
+        for (int frame = 0; frame < 60; ++frame) {
+            out = holdFor(rig, f, feet, wall, dt);
+            const Vec3 now = wallClimbInput(out).hands[1].gripRelativeToHead;
+            check(length(now - before) <= .5f * dt + 1e-4f, "the grips jumped back to the head's reference");
+            before = now;
+        }
+        check(!out.climbTracking, "the fixed reference never came back to the head");
+        near(length(before - (f.hands[1].grip.position - f.head.position)), 0, .0001f);
+    });
     test("wall run input follows the rolled view throughout transition and returns to a fresh climb view", [] {
         for (float angle : {0.f, 1.5707963f, 3.14159265f, -1.5707963f}) {
             GameTrackingRig rig;
             rig.handClimb(true);
+            rig.wallHands(3); // both hands hold the wall
             auto f = trackedFrame();
             for (auto& h : f.hands) h.squeeze = 0;
             const Vec3 feet{0, 9, -4.1f};
@@ -2520,6 +4607,42 @@ int main() {
             }
         }
     });
+    test("rapid ground reversals cannot turn animated actor lean into a climbing camera", [] {
+        for (Vec3 support : {Vec3{}, Vec3{0, 1, 0}, normalized(Vec3{.2f, 1, 0})}) {
+            for (bool crawl : {false, true}) {
+                GameTrackingRig rig;
+                rig.handClimb(true);
+                auto frame = trackedFrame();
+                for (auto& hand : frame.hands) hand.squeeze = 0;
+                Vec3 feet{};
+                for (int step = 0; step < 720; ++step) {
+                    const float angle = step * 1.37f;
+                    frame.hands[0].stickX = std::sin(angle);
+                    frame.hands[0].stickY = std::cos(angle);
+                    feet += Vec3{frame.hands[0].stickX, 0, -frame.hands[0].stickY} * .03f;
+                    const Vec3 actorUp = Quat::around({std::cos(angle), 0, std::sin(angle)},
+                                                     2.f * std::sin(step * .31f)).rotate({0, 1, 0});
+                    ++frame.predictedDisplayTime;
+                    const SurfaceHold floor{support, feet, 6, crawl};
+                    const auto out = rig.update(frame, feet, {0, 0, -1}, true, actorUp, false, floor);
+                    check(out.active && !out.onSurface && !out.standing && !out.ventCrawl,
+                          "ground animation acquired a wall camera");
+                    near(length(out.headPose.position - feet - frame.head.position), 0, .002f);
+                    near(length(out.headPose.orientation.rotate({0, 0, -1}) - Vec3{0, 0, -1}), 0, .002f);
+                    near(length(out.standOff), 0, .002f);
+                    near(out.viewTilt, 0, .002f);
+                }
+                // The same stick still starts the intended transition on a
+                // genuine wall, even while native animation remains upright.
+                frame.hands[0].stickX = 0;
+                frame.hands[0].stickY = 1;
+                const SurfaceHold wall{{0, 0, 1}, feet, 0, false};
+                const auto out = holdFor(rig, frame, feet, wall, .6f);
+                check(out.standing && out.viewTilt > 1.5f,
+                      "confirmed wall support no longer enabled wall running");
+            }
+        }
+    });
     test("landing after wall running keeps later ground stick movement from turning the view", [] {
         GameTrackingRig rig;
         rig.handClimb(true);
@@ -2551,6 +4674,7 @@ int main() {
             for (int neutralFrames : {0, 1, 6}) {
                 GameTrackingRig rig;
                 rig.handClimb(true);
+                rig.wallHands(3); // both hands hold the wall
                 auto f = trackedFrame();
                 for (auto& h : f.hands) h.squeeze = 0;
                 const Vec3 feet{0, 9, -4.1f};
@@ -2614,6 +4738,7 @@ int main() {
         for (float angle : {0.f, 1.5707963f, 3.14159265f}) {
             GameTrackingRig rig;
             rig.handClimb(true);
+            rig.wallHands(3); // both hands hold the wall
             auto f = trackedFrame();
             for (auto& h : f.hands) h.squeeze = 0;
             const Vec3 feet{0, 9, -4.1f};
@@ -2717,6 +4842,7 @@ int main() {
     test("climb camera follows the next building face smoothly with roll retained", [] {
         GameTrackingRig rig;
         rig.handClimb(true);
+        rig.wallHands(3); // both hands hold the wall
         auto f = trackedFrame();
         for (auto& h : f.hands) h.squeeze = 0;
         const Vec3 feet{4.1f, 9, -4.1f};
@@ -2819,6 +4945,7 @@ int main() {
         auto& hand = in.hands[0];
         hand.tracked = true;
         hand.wallPosition = {4.95f, 10, 0};
+        hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
         step();
         hand.wallGrip = hand.grip = 1;
         step();
@@ -2838,6 +4965,143 @@ int main() {
         hand.wallGrip = hand.grip = 1;
         step();
         check(s.climbingHands() == 1, "fresh wall touch after running failed");
+    });
+    test("hand climbing: a squeeze at the wall shoots a web where the hand points away or along it", [] {
+        constexpr float dt = 1.f / 60;
+        // The palm 10 cm off the wall. Away from it and up, up the facade,
+        // along it, up it a hair into it (its aim meets the wall 2 m up):
+        // webs. Into it, as a reach for a hold: holds.
+        const auto squeeze = [&](Vec3 way, bool web) {
+            Building w;
+            Swing s(walled());
+            s.allowHandClimb(true);
+            Input in;
+            Body body{{4.1f, 10, 0}, {1, 0, 0}, false};
+            const auto advance = [&] {
+                const auto motion = s.predictNativeStep(dt, in, w, body);
+                body = {motion.target, motion.velocity, false};
+            };
+            advance();
+            check(s.wall().on, "the test body did not reach the wall");
+            auto& h = in.hands[0];
+            h.tracked = true;
+            h.wallPosition = {4.9f, 10, 0};
+            h.aim = {h.wallPosition, arc({0, 0, -1}, way)};
+            advance();
+            h.wallGrip = h.grip = 1;
+            check(s.wallHand(0, in, w) == !web, web ? "a web's squeeze was kept for climbing"
+                                                     : "a reach into the wall was not kept for climbing");
+            advance();
+            if (web)
+                check(!s.climbingHands() && s.webs()[0].attached, "a squeeze pointed off the wall shot no web");
+            else
+                check(s.climbingHands() == 1 && !s.webs()[0].attached, "a reach into the wall did not hold it");
+        };
+        for (const Vec3 way : {normalized(Vec3{-1, 1, 0}), Vec3{0, 1, 0}, Vec3{0, 0, 1}, normalized(Vec3{.05f, 1, 0})})
+            squeeze(way, true);
+        for (const Vec3 way : {Vec3{1, 0, 0}, normalized(Vec3{1, 1, 0}), normalized(Vec3{.3f, 1, 0})})
+            squeeze(way, false);
+    });
+    test("a web shot from a wall at rest takes the body off it to swing; one up the wall keeps it there", [] {
+        constexpr float dt = 1.f / 60;
+        for (const bool out : {true, false}) {
+            Building w;
+            Swing s(walled());
+            Input in;
+            Body body{{4.1f, 10, 0}, {1, 0, 0}, false};
+            const auto advance = [&] {
+                const auto motion = s.predictNativeStep(dt, in, w, body);
+                body = {motion.target, motion.velocity, false};
+            };
+            for (int i = 0; i < 30; ++i)
+                advance();
+            check(s.wall().on && length(body.velocity) < .05f, "the test body did not come to rest on the wall");
+            // Out from the wall and up, at the sky; or up the wall, at it 6 m up.
+            auto& h = in.hands[0];
+            h.tracked = true;
+            h.aim = {body.position + Vec3{.3f, .3f, 0},
+                     arc({0, 0, -1}, out ? normalized(Vec3{-1, 1, 0}) : normalized(Vec3{.1f, 1, 0}))};
+            advance();
+            h.grip = 1;
+            advance();
+            check(s.webs()[0].attached, "the web from the wall did not attach");
+            const Vec3 from = body.position;
+            for (int i = 0; i < 30; ++i)
+                advance();
+            if (out) {
+                check(!s.wall().on, "a web out from the wall left the body on it");
+                check(from.x - body.position.x > .3f && body.velocity.x < -1, "the body did not swing off the wall");
+            } else {
+                check(s.wall().on && length(body.position - from) < .05f, "a web up the wall took the body off it");
+            }
+        }
+    });
+    test("a web shot from a hand inside the wall starts out of it", [] {
+        // The game's rays meet a face from inside too: one from inside the
+        // building leaves through its facade and meets it there.
+        struct Solid : Building {
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+                const bool inside = o.x > low.x && o.x < high.x && o.y > low.y && o.y < high.y && o.z > low.z &&
+                                    o.z < high.z;
+                if (!inside)
+                    return Building::raycast(o, d, distance);
+                if (!(d.x < 0) || (low.x - o.x) / d.x > distance)
+                    return {};
+                return RayHit{o + d * ((low.x - o.x) / d.x), {-1, 0, 0}, 7, true};
+            }
+        };
+        constexpr float dt = 1.f / 60;
+        Solid w;
+        Swing s(walled());
+        s.allowHandClimb(true);
+        Input in;
+        Body body{{4.1f, 10, 0}, {1, 0, 0}, false};
+        const auto advance = [&] {
+            const auto motion = s.predictNativeStep(dt, in, w, body);
+            body = {motion.target, motion.velocity, false};
+        };
+        advance();
+        check(s.wall().on, "the test body did not reach the wall");
+        // The palm at the wall, the web shooter behind it inside the wall,
+        // aimed away from it and up.
+        auto& h = in.hands[0];
+        h.tracked = true;
+        h.wallPosition = {4.98f, 10, 0};
+        h.aim = {{5.06f, 9.93f, 0}, arc({0, 0, -1}, normalized(Vec3{-1, 1, 0}))};
+        advance();
+        h.wallGrip = h.grip = 1;
+        advance();
+        check(s.webs()[0].attached && s.webs()[0].anchor.x < 4.f, "the shot met the wall it started inside");
+    });
+    test("wall roll: two grips that do not both hold the wall are webs, not a roll", [] {
+        GameTrackingRig rig;
+        rig.handClimb(true);
+        auto f = trackedFrame();
+        for (auto& h : f.hands)
+            h.squeeze = 0;
+        const Vec3 feet{0, 9, -4.1f};
+        const SurfaceHold wall{{0, 0, 1}, {0, 10, -5}, 0, false};
+        holdFor(rig, f, feet, wall, .7f);
+        for (const unsigned holding : {0u, 1u, 2u, 3u}) {
+            rig.wallHands(holding);
+            for (auto& h : f.hands)
+                h.squeeze = 1;
+            holdFor(rig, f, feet, wall, 1.f / 90);
+            for (auto& h : f.hands)
+                h.grip.orientation = Quat::around({0, 0, -1}, .78539816f);
+            const auto out = holdFor(rig, f, feet, wall, .5f);
+            if (holding == 3)
+                check(out.wallRotate && out.wallRoll > .5f, "both hands on the wall did not roll the view");
+            else {
+                check(!out.wallRotate, "two web grips were kept for the wall roll");
+                near(out.wallRoll, 0);
+            }
+            for (auto& h : f.hands) {
+                h.squeeze = 0;
+                h.grip.orientation = {};
+            }
+            holdFor(rig, f, feet, wall, .1f);
+        }
     });
     test("climb haptics: one pulse per hand contact, no repeat while holding or on missing samples", [] {
         game_swing::ClimbData data;
@@ -2873,33 +5137,19 @@ int main() {
         pose = poser.update(.05f, in);
         check(pose.fist > .9f && pose.shoot > .5f, "normal hand poses did not resume");
     });
-    test("wall camera distance: every menu choice applies, survives reset and stays in range", [] {
-        using namespace vr_settings;
-        Values values;
-        check(values.wallDistance == 40, "unexpected default wall distance");
+    test("wall camera distance: fixed at 25 cm, and kept through a reset", [] {
         GameTrackingRig rig;
         rig.handClimb(true);
+        rig.wallDistance(static_cast<float>(vr_settings::fixedWallDistance) / 100);
         auto f = trackedFrame();
         const Vec3 feet{4.1f, 10, 0};
         const SurfaceHold wall{{-1, 0, 0}, {5, 11, 0}, 0, false};
         holdFor(rig, f, feet, {}, .3f);
-        for (unsigned i = 0; i < std::size(wallDistances); ++i) {
-            choose(Item::wallDistance, static_cast<int>(i), values);
-            check(choice(Item::wallDistance, values) == static_cast<int>(i), "distance menu did not round-trip");
-            rig.wallDistance(static_cast<float>(values.wallDistance) / 100);
-            auto out = holdFor(rig, f, feet, wall, .7f);
-            near(dot(out.headPose.position - wall.anchor, wall.normal),
-                 static_cast<float>(wallDistances[i]) / 100, .005f);
-            rig.reset();
-            out = holdFor(rig, f, feet, wall, .7f);
-            near(dot(out.headPose.position - wall.anchor, wall.normal),
-                 static_cast<float>(wallDistances[i]) / 100, .005f);
-        }
-        values.wallDistance = -100;
-        check(sanitized(values).wallDistance == 20, "minimum distance not clamped");
-        values.wallDistance = 999;
-        check(sanitized(values).wallDistance == 100, "maximum distance not clamped");
-        check(!choose(Item::wallDistance, 100, values), "invalid distance choice accepted");
+        auto out = holdFor(rig, f, feet, wall, .7f);
+        near(dot(out.headPose.position - wall.anchor, wall.normal), .25f, .005f);
+        rig.reset();
+        out = holdFor(rig, f, feet, wall, .7f);
+        near(dot(out.headPose.position - wall.anchor, wall.normal), .25f, .005f);
     });
     test("wall contact: palms inside the facade attach, pull and pulse once without pushing the body through", [] {
         constexpr float dt = 1.f / 60;
@@ -2917,6 +5167,7 @@ int main() {
             auto& hand = in.hands[0];
             hand.tracked = true;
             hand.wallPosition = {5 + depth, 10, 0};
+            hand.aim.orientation = arc({0, 0, -1}, {1, 0, 0});
             step();
             hand.wallGrip = hand.grip = 1;
             step();
@@ -3388,6 +5639,97 @@ int main() {
         crawl.predictNativeStep(1.f/60,none,w,{{4.7f,10.8f,0},{-7,-12,0},false});
         check(crawl.wall().on,"the mount's jump did not end on the wall");
     });
+    test("hand climbing: floor approaches never start a joystick mount or wall camera", [] {
+        Building world;
+        for (Vec3 direction : {Vec3{1, 0, 0}, normalized(Vec3{1, 0, .8f}),
+                               Vec3{0, 0, 1}, Vec3{-1, 0, 0}, Vec3{}}) {
+            Swing swing(mounted());
+            swing.allowHandClimb(true);
+            GameTrackingRig rig;
+            rig.handClimb(true);
+            auto frame = trackedFrame();
+            for (auto& h : frame.hands) h.squeeze = 0;
+            frame.hands[0].stickY = direction.x;
+            frame.hands[0].stickX = direction.z;
+            Input input;
+            input.move = direction;
+            for (int i = 0; i < 120; ++i) {
+                const Body floor{{4.5f, 1, 0}, direction * 6, true};
+                swing.predictNativeStep(1.f / 60, input, world, floor);
+                check(!swing.mounting() && !swing.mountBegun() && !swing.wall().on,
+                      "floor stick movement requested an automatic wall mount");
+                const Vec3 feet = floor.position - Vec3{0, 1, 0};
+                frame.seconds = 1.f / 60;
+                ++frame.predictedDisplayTime;
+                const auto out = rig.update(frame, feet, {0, 0, -1}, true);
+                check(!out.standing && !out.onSurface && !out.ventCrawl,
+                      "floor approach entered a wall view");
+                near(out.viewTilt, 0, .002f);
+                near(length(out.headPose.position - feet - frame.head.position), 0, .002f);
+            }
+        }
+    });
+    test("hand climbing: enabling on the floor cancels pending mounts but keeps airborne catches", [] {
+        Building world;
+        Swing swing(mounted());
+        Input input;
+        input.move = {1, 0, 0};
+        const Body floor{{4.5f, 1, 0}, {}, true};
+        for (int i = 0; i < 8; ++i)
+            swing.predictNativeStep(1.f / 60, input, world, floor);
+        check(swing.mounting(), "test did not establish an old pending mount");
+        swing.allowHandClimb(true);
+        swing.predictNativeStep(1.f / 60, input, world, floor);
+        check(!swing.mounting() && !swing.mountBegun(), "pending ground mount survived");
+        // A jump beside the wall still catches it, then a deliberate grip
+        // and pull retain the established hand-climbing behavior.
+        Body air{{4.5f, 1.5f, 0}, {0, 5, 0}, false};
+        auto advance = [&] {
+            const auto step = swing.predictNativeStep(1.f / 60, input, world, air);
+            check(step.valid, "airborne prediction failed");
+            air = {step.target, step.velocity, false};
+        };
+        advance();
+        check(swing.wall().on, "floor guard blocked an airborne wall catch");
+        input.move = {};
+        auto& hand = input.hands[0];
+        hand.tracked = true;
+        hand.wallPosition = {4.95f, 1.5f, 0};
+        hand.aim.orientation = Quat::around({0, 1, 0}, -1.5707963f);
+        hand.gripRelativeToHead = {.4f, 0, 0};
+        advance();
+        hand.wallGrip = hand.grip = 1;
+        advance();
+        check(swing.climbingHands() == 1 && !swing.webs()[0].attached,
+              "grip climbing was lost after approaching from the floor");
+        const float height = air.position.y;
+        for (int i = 0; i < 15; ++i) {
+            hand.gripRelativeToHead.y -= .02f;
+            advance();
+        }
+        check(air.position.y > height + .25f, "hand pull no longer climbs");
+    });
+    test("hand climbing: an existing native wall crawl can still start a joystick run", [] {
+        Building world;
+        const RayHit wall{{5, 10, 0}, {-1, 0, 0}, 7, true};
+        const Body supported{{5, 11, 0}, {}, true};
+        Input input;
+        input.move = {0, 1, 0};
+        Swing swing(mounted());
+        swing.allowHandClimb(true);
+        swing.offerWall(wall);
+        swing.predictNativeStep(1.f / 60, input, world, supported);
+        check(swing.mounting(), "native wall support was mistaken for ordinary floor support");
+        swing.predictNativeStep(1.f / 60, input, world,
+                                {{4.7f, 10.8f, 0}, {-7, -12, 0}, false});
+        check(swing.wall().on, "native crawl did not hand over to the running wall");
+        Swing vent(mounted());
+        vent.allowHandClimb(true);
+        vent.allowMounts(false);
+        vent.offerWall(wall);
+        vent.predictNativeStep(1.f / 60, input, world, supported);
+        check(!vent.mounting() && !vent.mountBegun(), "vent acquired a wall run");
+    });
     test("walked at a wall the standing body mounts it by the game's jump", [] {
         // The wall x = 5 faces -x; the body stands against it, its centre a metre up.
         Building w;Swing s(mounted());Input in;
@@ -3434,6 +5776,34 @@ int main() {
         check(!late.mounting(),"the mount went on without the stick");
         body=fly(late,w,{{4.5f,1.2f,0},{0,11,0},false},in,1);
         check(late.wall().on&&length(body.velocity)<.05f,"the jump did not end on its wall");
+    });
+    test("a pane the game lets the body through - a broken glass one - is no wall to walk up, nor the ground", [] {
+        // The game's own test of the player's mover profile (3: categories 0x004, types 0xe7, measured) against
+        // what Spidy's rays met: the burning office's broken glass (0x10) is passed, its floor and walls (0x43f,
+        // 0x63f) met; a body of a type the profile has not (0x7000: type 7 is, type 3 not) passed; no profile
+        // read: every hit, as before.
+        const native_rays::BodyFilter player{0x004,0xe7};
+        check(!native_rays::meets(player,0x10),"the broken glass met the player's body");
+        check(native_rays::meets(player,0x43f)&&native_rays::meets(player,0x63f),"the building passed the body");
+        check(native_rays::meets(player,0x7004)&&!native_rays::meets(player,0x3004),"a type was taken wrongly");
+        check(native_rays::meets({},0x10)&&native_rays::meets(player,0),"an unknown profile or category passed");
+        // A pane at x = 5 that rays meet and the body passes: walked at, no mount; the same pane solid, a mount.
+        struct Pane : Building {
+            bool passes = true;
+            std::optional<RayHit> bodyRaycast(Vec3 o,Vec3 d,float distance) const override {
+                return passes ? std::nullopt : raycast(o,d,distance);
+            }
+        } pane;
+        Input in;in.move={1,0,0};
+        const Body stands{{4.5f,1,0},{},true};
+        Swing s(mounted());
+        bool wants{};
+        for(int i=0;i<30;++i){s.predictNativeStep(1.f/60,in,pane,stands);wants|=s.mounting()||s.mountBegun();}
+        check(!wants&&!s.wall().on,"a pane the body passes was walked up");
+        pane.passes=false;
+        Swing solid(mounted());
+        for(int i=0;i<30;++i){solid.predictNativeStep(1.f/60,in,pane,stands);wants|=solid.mounting();}
+        check(wants,"the same pane solid was no wall");
     });
     test("a stroll past a wall, a glance at it, a kerb and a far wall mount nothing", [] {
         Building w;Input in;
@@ -4436,6 +6806,74 @@ int main() {
         tracked[1]=true;
         check(step(d,front,1)&&d.draws()==3,"a draw begun with the hand lost did not open the phone");
         step(d,front,0);
+        // A hand the headset loses at the side of the hip on its way back (the cameras see no further), squeezed
+        // a moment later: carried on its way, it is at the pocket (October 25: "I cannot find the damn phone").
+        {
+            PocketDraw way;
+            const Vec3 from{.25f,.95f,-.1f};
+            // 1.2 m/s back, lost 10 cm behind the eyes: short of `behind` where it was last seen.
+            for(int i=0;i<=15;++i)step(way,Pose{from+Vec3{0,0,.2f}*(i/15.f),{}},0);
+            tracked[1]=false;
+            for(int i=0;i<12;++i)step(way,Pose{},0);
+            check(!step(way,Pose{},1)&&way.hands()==2u,"a hand lost on its way to the pocket began no draw");
+            tracked[1]=true;
+            check(step(way,front,1)&&way.draws()==1,"a draw begun on the way to the pocket did not open the phone");
+            step(way,front,0);
+            // Lost while hanging still at the side, it stays there: a squeeze is a web's.
+            PocketDraw still;
+            for(int i=0;i<20;++i)step(still,side,0);
+            tracked[1]=false;
+            for(int i=0;i<12;++i)step(still,Pose{},0);
+            check(!step(still,Pose{},1)&&still.hands()==0u,"a hand lost hanging at the side began a draw");
+            tracked[1]=true;
+        }
+        // The head turned 60 degrees to look at the pocket for a second, the eyes going round the neck with it
+        // (October 25: "it's based on where your head is pointing"): the pocket stays the body's.
+        {
+            const Vec3 neck{0,1.6f,.09f};
+            const auto eyes=[&](Quat q){return Pose{neck+q.rotate({0,PocketDraw::neckUp,-PocketDraw::neckAhead}),q};};
+            const Pose looking=eyes(Quat::yaw(-1.05f)),nodding=eyes(Quat::around({1,0,0},-1.05f));
+            check(length(eyes(Quat{}).position-head.position)<1e-4f,"the test's neck is not under the eyes");
+            const Pose rightPocket{{.15f,.9f,.2f},{}};
+            PocketDraw turned;
+            for(int i=0;i<30;++i)step(turned,side,0);
+            for(int i=0;i<90;++i)step(turned,side,0,1.f/90,true,&looking);
+            check(!step(turned,rightPocket,1,1.f/90,true,&looking)&&turned.hands()==2u,
+                  "a look at the pocket turned it away from the hand");
+            check(step(turned,front,1)&&turned.draws()==1,"the draw begun with the head turned did not open");
+            step(turned,front,0);
+            // A nod, the eyes going forward and down, does not put the hand hanging at the side in the pocket.
+            PocketDraw nod;
+            for(int i=0;i<30;++i)step(nod,side,0);
+            for(int i=0;i<30;++i)step(nod,side,0,1.f/90,true,&nodding);
+            check(!step(nod,side,1,1.f/90,true,&nodding)&&nod.hands()==0u,"a nod made a pocket of the side");
+            // The report's count: that squeeze, not behind the neck, its hand and the look.
+            const auto& s=nod.stats();
+            check(s.presses==1&&s.begun==0&&s.missed[PocketDraw::ahead]==1&&s.lastMiss==PocketDraw::ahead,
+                  "the miss at the side was not counted as not behind");
+            check(std::abs(s.lastHand.x-.25f)<.01f&&std::abs(s.lastHand.z-.01f)<.005f&&s.lastLost==0,
+                  "the miss's hand is not where it was from the neck");
+            const auto& t=turned.stats();
+            check(t.presses==1&&t.begun==1&&t.draws==1&&t.lastMiss==PocketDraw::misses,"the draw was not counted");
+            check(t.lastLook==0,"a draw left a look in the report");
+            // A squeeze up in front (a web's) is no press for the phone; one with the hand lost long is, as lost.
+            PocketDraw counted;
+            step(counted,front,1);
+            step(counted,front,0);
+            tracked[1]=false;
+            for(int i=0;i<60;++i)step(counted,Pose{},0);
+            step(counted,Pose{},1);
+            tracked[1]=true;
+            check(counted.stats().presses==1&&counted.stats().missed[PocketDraw::lost]==1,
+                  "a squeeze in front was counted, or one with the hand lost long was not");
+            // Too slow and let go of are counted too.
+            step(counted,front,0);
+            step(counted,pocket,1);
+            step(counted,pocket,0);
+            step(counted,pocket,1);
+            for(int i=0;i<20;++i)step(counted,pocket,1,.1f);
+            check(counted.stats().letGo==1&&counted.stats().tooSlow==1,"the draws that ended were not counted");
+        }
         // A game hitch on the way (a moment out of play) does not end a draw.
         step(d,pocket,1);
         step(d,pocket,1,1.f/90,false);
@@ -4615,6 +7053,22 @@ int main() {
         f.buttons=buttonB;
         check(p.take(f,0).action==PhoneAction::close&&!p.open()&&!p.live(),"B on the home screen did not put it away");
         check(!(f.buttons&buttonB),"the B that put the phone away reached the game");
+        // A on CAMERA (up from MUSIC) puts it away too, for the game's camera, and that A reaches nothing either.
+        check(p.update(frame,true,head,grips,tracked,0,grips[0].position)&&p.live(),"the phone did not open again");
+        f=XrFrame{};p.take(f,0);
+        f=XrFrame{};f.hands[1].stickY=1;p.take(f,0);
+        f=XrFrame{};p.take(f,0);
+        f=XrFrame{};f.buttons=buttonA;f.jump=true;
+        check(p.take(f,0).action==PhoneAction::camera&&!p.open()&&!p.live(),"A on CAMERA did not put the phone away");
+        check(!(f.buttons&buttonA)&&!f.jump,"the A that took the game's camera out reached the game as a jump");
+        // So does A on MENU (down from MUSIC), for the game's menu.
+        check(p.update(frame,true,head,grips,tracked,0,grips[0].position)&&p.live(),"the phone did not open a third time");
+        f=XrFrame{};p.take(f,0);
+        f=XrFrame{};f.hands[1].stickY=-1;p.take(f,0);
+        f=XrFrame{};p.take(f,0);
+        f=XrFrame{};f.buttons=buttonA;f.jump=true;
+        check(p.take(f,0).action==PhoneAction::menu&&!p.open()&&!p.live(),"A on MENU did not put the phone away");
+        check(!(f.buttons&buttonA)&&!f.jump,"the A that opened the game's menu reached the game as a jump");
     });
     test("phone: home screen apps, MUSIC's buttons, GEAR's scroll; A, B, stick and triggers once per press", [] {
         PhoneControls c;
@@ -4654,13 +7108,22 @@ int main() {
         const auto step=[&](E ev,int rows=0){return ui.update(ev,rows);};
         check(ui.screen()==PhoneScreen::home&&ui.app()==0,"it did not open home, MUSIC picked");
         step(E{0,-1});
-        check(ui.app()==1,"down did not pick MAP");
+        check(ui.app()==phoneMenuApp,"down did not pick MENU");
+        // MENU has no screen: A on it is the game's menu, the home screen left as it is.
+        check(step(E{0,0,true})==PhoneAction::menu&&ui.screen()==PhoneScreen::home,
+              "A on MENU did not ask for the game's menu");
         step(E{0,1});step(E{0,1});
         check(ui.app()==phoneFnsmApp,"up from MUSIC did not wrap to FNSM APP");
         check(step(E{0,0,true})==PhoneAction::fnsm&&ui.screen()==PhoneScreen::home,
               "A on FNSM APP did not ask for the game's app");
         step(E{0,1});
         check(ui.app()==2,"up from FNSM APP did not pick GEAR");
+        check(ui.app()==phoneCameraApp,"up from MUSIC did not wrap to CAMERA");
+        // CAMERA has no screen: A on it is the game's camera, the home screen left as it is.
+        check(step(E{0,0,true})==PhoneAction::camera&&ui.screen()==PhoneScreen::home,
+              "A on CAMERA did not ask for the game's camera");
+        step(E{0,1});
+        check(ui.app()==2,"up from CAMERA did not pick GEAR");
         step(E{0,0,true});
         check(ui.screen()==PhoneScreen::gear,"A did not open GEAR");
         step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);step(E{0,-1},9);
@@ -4696,10 +7159,40 @@ int main() {
             v.screen=s;
             change(v);
             std::vector<Vertex> out;
-            appendPhone(out,v);
+            appendPhoneScreen(out,v);
             check(out.size()%3==0,"a screen not in triangles");
+            // The picture stays inside the screen's own size, in its plane.
+            for(const auto& p:out)
+                if(std::abs(p.position.x)>phoneScreenHalfWidth+1e-4f||std::abs(p.position.y)>phoneScreenHalfHeight+1e-4f)
+                    check(false,"the screen's picture ran off the screen");
             return out.size();
         };
+        // The body: inside its own box, its face the part of it nearest the eyes.
+        {
+            PhoneView v=view;
+            v.frame={{0,0,-.4f},{1,0,0},{0,1,0},{0,0,1}};
+            std::vector<Vertex> body;
+            appendPhone(body,v,{0,0,0});
+            check(!body.empty()&&body.size()%3==0,"no body, or not in triangles");
+            float nearest=-1;
+            for(const auto& p:body){
+                const Vec3 d=p.position-v.frame.centre;
+                check(std::abs(d.x)<=.0435f+1e-4f&&std::abs(d.y)<=.0855f+1e-4f&&d.z>=-.0062f&&d.z<=.0046f,
+                      "the body left its box");
+                nearest=std::max(nearest,d.z);
+            }
+            near(nearest,.0045f,1e-4f);
+            const auto corners=phoneScreenCorners(v);
+            near(corners[2].x-corners[0].x,2*phoneScreenHalfWidth,1e-5f);
+            near(corners[2].y-corners[0].y,2*phoneScreenHalfHeight,1e-5f);
+            check(corners[0].z-v.frame.centre.z>nearest,"the screen lies under the glass");
+            PhoneView closed=v;
+            closed.open=false;
+            std::vector<Vertex> none;
+            appendPhone(none,closed,{0,0,0});
+            appendPhoneScreen(none,closed);
+            check(none.empty(),"a closed phone was drawn");
+        }
         const auto nothing=[](PhoneView&){};
         const auto songs=[](PhoneView& v){
             v.tracks=2;
@@ -4720,8 +7213,6 @@ int main() {
                   v.gear[0].most=4;
               }),
               "GEAR showed no gadgets");
-        // MAP shows the same whatever else the phone has: more than a phone with no screen at all.
-        check(drawn(PhoneScreen::map,nothing)>drawn(static_cast<PhoneScreen>(phoneApps+1),nothing),"MAP showed nothing");
     });
     test("sky anchors respect body occlusion and later world obstruction", [] {
         struct Occluded : TestWorld {
@@ -6349,7 +8840,7 @@ int main() {
         bad=c; bad.rays[0].direction={0,-2,0}; check(!native_rays::valid(bad),"scaled ray accepted");
         bad=c; bad.rays[0].origin.x=std::numeric_limits<float>::infinity();
         check(!native_rays::valid(bad),"infinite origin accepted");
-        bad=c; bad.rays[0].distance=151; check(!native_rays::valid(bad),"excessive range accepted");
+        bad=c; bad.rays[0].distance=1001; check(!native_rays::valid(bad),"excessive range accepted");
         c.count=0; c.leaseMs=0; check(native_rays::valid(c),"cancel command rejected");
     });
     test("controller rays retain hand identity and disappear on tracking loss", [] {
@@ -6836,6 +9327,71 @@ int main() {
         check(game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,hidden).buttons==game_pad::dpadUp,
               "Camouflage is not the game's D-pad up");
     });
+    test("both hands at the chest with both triggers pulled are the game's suit power, those triggers the gesture's", [] {
+        using game_pad::SuitPowerPress;
+        const float dt=1.f/90;
+        const Pose head{{0,1.7f,0},{}};
+        const bool both[2]{true,true};
+        // Both hands a fist's width apart before the chest: 38 cm under the eyes, 15 cm ahead.
+        Pose grips[2]{{{-.06f,1.33f,-.15f},{}},{{.06f,1.33f,-.15f},{}}};
+        float triggers[2]{};
+        SuitPowerPress power;
+        check(!power.update(dt,true,head,grips,both,triggers),"hands at the chest alone were the suit power");
+        triggers[0]=1;
+        check(!power.update(dt,true,head,grips,both,triggers)&&power.hands()==1,
+              "one trigger at the chest was the suit power, or not the gesture's");
+        for(int i=0;i<9;++i)power.update(dt,true,head,grips,both,triggers);
+        triggers[1]=1;
+        check(power.update(dt,true,head,grips,both,triggers)&&power.hands()==3&&power.powers()==1,
+              "both triggers at the chest were no suit power");
+        int frames{1};
+        while(power.update(dt,true,head,grips,both,triggers))++frames;
+        check(frames>=13&&frames<=15,"the suit power's L3 + R3 was not a press");
+        check(power.hands()==3,"the gesture let go of triggers still held");
+        // Held on, no second power; let go and pulled again, another.
+        for(int i=0;i<30;++i)power.update(dt,true,head,grips,both,triggers);
+        check(power.powers()==1,"a held gesture asked twice");
+        triggers[0]=triggers[1]=0;power.update(dt,true,head,grips,both,triggers);
+        check(!power.hands(),"released triggers are still the gesture's");
+        triggers[0]=triggers[1]=1;
+        check(power.update(dt,true,head,grips,both,triggers)&&power.powers()==2,"a second gesture asked for nothing");
+        // Half a second apart: none, though each trigger at the chest stays the gesture's.
+        SuitPowerPress slow;
+        float late[2]{1,0};
+        for(int i=0;i<46;++i)slow.update(dt,true,head,grips,both,late);
+        late[1]=1;
+        check(!slow.update(dt,true,head,grips,both,late)&&!slow.powers()&&slow.hands()==3,
+              "triggers half a second apart were the suit power");
+        // Hands at the belt are not at the chest; a turned head's chest is where it looks, level.
+        SuitPowerPress low;
+        Pose belt[2]{{{-.06f,1.f,-.15f},{}},{{.06f,1.f,-.15f},{}}};
+        float pull[2]{1,1};
+        check(!low.update(dt,true,head,belt,both,pull)&&!low.hands(),"hands at the belt were the suit power");
+        SuitPowerPress turned;
+        const Pose looking{{0,1.7f,0},Quat::yaw(1.5708f)};
+        Vec3 ahead=looking.orientation.rotate({0,0,-1});ahead.y=0;ahead=normalized(ahead);
+        const Vec3 at=looking.position+Vec3{0,-.38f,0}+ahead*.15f;
+        Pose chest[2]{{at,{}},{at,{}}};
+        check(turned.update(dt,true,looking,chest,both,pull),"no suit power at a turned head's chest");
+        // Not outside VR play, and triggers held into play must be let go first.
+        SuitPowerPress menu;
+        check(!menu.update(dt,false,head,grips,both,pull),"a suit power on the game screen");
+        check(!menu.update(dt,true,head,grips,both,pull),"triggers held into play were the suit power");
+        // An untracked hand counts for nothing.
+        SuitPowerPress lost;
+        const bool one[2]{true,false};
+        check(!lost.update(dt,true,head,grips,one,pull),"an untracked hand made the suit power");
+        game_pad::Walk walk;
+        auto pad=game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,walk);
+        check(!(pad.buttons&(game_pad::leftThumb|game_pad::rightThumb)),"the pad clicks both sticks by itself");
+        // What the gesture holds reaches the game as its L3 + R3, in play only. Until October 23 nothing
+        // sent it: the hands buzzed and the game got nothing (21 tries in one session).
+        walk.suit=true;
+        pad=game_pad::fromControllers(XrFrame{},game_pad::Mapping::gameplay,walk);
+        check(pad.buttons==(game_pad::leftThumb|game_pad::rightThumb),"the suit power is not the game's L3 + R3");
+        check(!game_pad::fromControllers(XrFrame{},game_pad::Mapping::menus,walk).buttons,
+              "the suit power went out on the game screen");
+    });
     test("called blows: the flow calls its next blow, and the call stands until a fist answers it", [] {
         Cues cues;
         const Vec3 ahead{0,0,-1}; // the player looks down -z at him: his right is +x
@@ -7109,6 +9665,132 @@ int main() {
         for(int i=0;i<10;++i)waits.update(dt,warned,throwAt({0,1,-3},3.5f),head,chest);
         for(int i=0;i<120;++i)waits.update(dt,{},{},head,chest);
         check(!waits.blow(7,{},chest,byBlow)&&!waits.countered(7),"a counter's blow two seconds on");
+    });
+    test("dodging by moving: a quick step or lean out of a warned attack's way, a step back or a duck is the game's B, that way", [] {
+        const float dt=1.f/90;
+        const Quat level{};
+        // The player at the origin looks down -z; the attacker three metres ahead.
+        const DodgeThreat red{9,{0,1.8f,-3},SenseAnswer::Dodge},blue{8,{0,1.8f,-3},SenseAnswer::Counter},
+                          yellow{7,{0,1.8f,-3},SenseAnswer::Jump};
+        // Half a second at rest, then the head moves `by` over `seconds` (the world's axes those of the
+        // tracking space turned by `turn`): true once the game's B went out.
+        const auto move=[&](MoveDodge& d,const DodgeThreat& t,Vec3 by,float seconds,Quat turn=Quat{},bool play=true){
+            Vec3 room{0,1.7f,0};
+            for(int i=0;i<45;++i)d.update(dt,play,turn.rotate(room),room,turn,{&t,1});
+            const int steps=std::max(1,static_cast<int>(std::lround(seconds*90)));
+            for(int i=0;i<steps;++i){
+                room+=by/static_cast<float>(steps);
+                if(d.update(dt,play,turn.rotate(room),room,turn,{&t,1}))return true;
+            }
+            return false;
+        };
+        MoveDodge right;
+        check(move(right,red,{.22f,0,0},.2f)&&right.dodges()==1,"a quick step aside out of a red warning's way was no dodge");
+        check(right.way().x>.99f&&std::abs(right.way().y)<1e-4f,"the dodge did not go the way the step went");
+        int held{1};
+        while(right.update(dt,true,{.22f,1.7f,0},{.22f,1.7f,0},level,{&red,1}))++held;
+        check(held>=9&&held<=12,"the dodge's B was not a press");
+        // That warning is answered: a second step at it is no second dodge, a new one after it is.
+        for(int i=0;i<90;++i)right.update(dt,true,{.22f,1.7f,0},{.22f,1.7f,0},level,{&red,1});
+        check(!move(right,red,{-.22f,0,0},.2f),"a warning a dodge answered was dodged again");
+        right.update(dt,true,{0,1.7f,0},{0,1.7f,0},level,{});
+        check(move(right,red,{-.22f,0,0},.2f)&&right.way().x<-.99f&&right.dodges()==2,"the next warning went undodged");
+        // A blue warning too: a step back from him.
+        MoveDodge back;
+        check(move(back,blue,{0,0,.25f},.2f)&&back.way().z>.99f,"a step back from a blue warning was no dodge");
+        // A duck: the game chooses the way.
+        MoveDodge duck;
+        check(move(duck,red,{0,-.2f,0},.2f)&&length(duck.way())==0,"a duck was no dodge, or chose a way");
+        // None: a lean toward him (a counter leans in), a yellow warning (A's), a slow drift, out of play.
+        MoveDodge in,jump,drift,menu;
+        check(!move(in,red,{0,0,-.3f},.2f),"a lean toward him dodged");
+        check(!move(jump,yellow,{.25f,0,0},.2f),"a step from a jump's warning dodged");
+        check(!move(drift,red,{.2f,0,0},1.f),"a slow drift aside dodged");
+        check(!move(menu,red,{.25f,0,0},.2f,Quat{},false)&&!menu.pressing(),"a step out of VR play dodged");
+        // The tracking space turned: the way is the world's, and so is his line.
+        MoveDodge turnedRoom;
+        const Quat turn=Quat::yaw(1.f);
+        const Vec3 world=turn.rotate({1,0,0});
+        const Vec3 aside=normalized(cross(Vec3{0,1,0},world));
+        const DodgeThreat ahead{6,Vec3{0,1.8f,0}+aside*3.f,SenseAnswer::Dodge};
+        check(move(turnedRoom,ahead,{.22f,0,0},.2f,turn)&&dot(turnedRoom.way(),world)>.99f,
+              "a step in a turned tracking space dodged the wrong way");
+        // A jump of the tracking (the view re-placed) is no move of the player's.
+        MoveDodge placed;
+        Vec3 room{0,1.7f,0};
+        for(int i=0;i<45;++i)placed.update(dt,true,room,room,level,{&red,1});
+        room.x+=.3f;
+        bool dodged=placed.update(dt,true,room,room,level,{&red,1});
+        for(int i=0;i<20;++i)dodged|=placed.update(dt,true,room,room,level,{&red,1});
+        check(!dodged,"the view re-placed was taken for a dodge");
+        bool refused{};
+        try{MoveDodgeConfig c;c.window=0;MoveDodge bad(c);}catch(const std::invalid_argument&){refused=true;}
+        check(refused,"a move measured over no time accepted");
+    });
+    test("dodging on a web: a warned blow about to land on a player a web carries starts the game's dodge, ended after it", [] {
+        const float dt=1.f/90;
+        using Ask=WebDodge::Ask;
+        // Swinging down and on along -z at 12 m/s.
+        const Vec3 swinging{0,-2,-12};
+        WebDodgeThreat blow{5,.8f,.2f,true,false};
+        WebDodge d;
+        check(d.update(dt,true,true,swinging,{&blow,1},GameDodge::none)==Ask::none,"a blow 0.8 s off dodged at once");
+        blow.toImpact=.3f;
+        check(d.update(dt,true,true,swinging,{&blow,1},GameDodge::none)==Ask::start&&d.dodging()&&d.dodges()==1,
+              "a blow 0.3 s off a swinging player went undodged");
+        check(std::abs(d.way().z+1)<1e-4f&&std::abs(d.way().y)<1e-4f,"the dodge's way is not the swing's, level");
+        // It lasts 0.6 s, the blow passed by then.
+        const auto until=[&](WebDodge& w,std::span<WebDodgeThreat> threats,GameDodge game=GameDodge::ours) {
+            int frames{};
+            for(;frames<400;++frames){
+                if(w.update(dt,true,true,swinging,threats,game)==Ask::end)return frames+1;
+                for(auto& t:threats)t.toImpact-=dt;
+            }
+            return 0;
+        };
+        const int held=until(d,{&blow,1});
+        check(held>=53&&held<=56&&!d.dodging(),"the dodge did not end 0.6 s on");
+        // A rest, then the next warning: a blow still to come keeps it on, to 1.5 s at most.
+        std::array<WebDodgeThreat,2> two{{{6,.3f,.1f,true,false},{7,1.f,.1f,true,false}}};
+        for(int i=0;i<9;++i)d.update(dt,true,true,swinging,{},GameDodge::none);
+        check(d.update(dt,true,true,swinging,two,GameDodge::none)==Ask::start,"the next warning went undodged");
+        const int longer=until(d,two);
+        check(longer>=103&&longer<=107,"a dodge did not hold for the blow still to come");
+        two={{{6,.3f,.1f,true,false},{7,5.f,.1f,true,false}}};
+        for(int i=0;i<9;++i)d.update(dt,true,true,swinging,{},GameDodge::none);
+        check(d.update(dt,true,true,swinging,two,GameDodge::none)==Ask::start,"a third warning went undodged");
+        const int most=until(d,two);
+        check(most>=134&&most<=137,"a dodge held past 1.5 s");
+        // None: on the ground, hanging still on a web, a warning the game answered, a game dodge on already.
+        WebDodge ground,hanging,answered,busy;
+        WebDodgeThreat soon{8,.2f,.3f,true,false},done{8,.2f,.3f,true,true};
+        check(ground.update(dt,false,false,swinging,{&soon,1},GameDodge::none)==Ask::none,"a player on the ground dodged");
+        check(hanging.update(dt,true,true,{0,.5f,1},{&soon,1},GameDodge::none)==Ask::none,"a player hanging still dodged");
+        check(answered.update(dt,true,true,swinging,{&done,1},GameDodge::none)==Ask::none,"an answered warning dodged");
+        check(busy.update(dt,true,true,swinging,{&soon,1},GameDodge::other)==Ask::none,"a dodge over the game's own");
+        // The flight a web left him in counts for a second; a warning with no time set, a tenth on.
+        WebDodge coast,late;
+        coast.update(dt,true,true,swinging,{},GameDodge::none);
+        for(int i=0;i<45;++i)coast.update(dt,false,true,swinging,{},GameDodge::none);
+        check(coast.update(dt,false,true,swinging,{&soon,1},GameDodge::none)==Ask::start,"the flight after a web dodged nothing");
+        late.update(dt,true,true,swinging,{},GameDodge::none);
+        for(int i=0;i<100;++i)late.update(dt,false,true,swinging,{},GameDodge::none);
+        check(late.update(dt,false,true,swinging,{&soon,1},GameDodge::none)==Ask::none,"a fall long after a web dodged");
+        WebDodge untimed;
+        WebDodgeThreat open{9,0,.05f,false,false};
+        check(untimed.update(dt,true,true,swinging,{&open,1},GameDodge::none)==Ask::none,"an untimed warning dodged at once");
+        open.warned=.1f;
+        check(untimed.update(dt,true,true,swinging,{&open,1},GameDodge::none)==Ask::start,"an untimed warning went undodged");
+        // The game ended it first: nothing to end; one it did not take is no dodge.
+        check(untimed.update(dt,true,true,swinging,{&open,1},GameDodge::none)==Ask::none&&!untimed.dodging()&&
+              untimed.cutShort()==1,"a dodge the game ended was asked to end");
+        WebDodge refusedDodge;
+        refusedDodge.update(dt,true,true,swinging,{&soon,1},GameDodge::none);
+        refusedDodge.refused();
+        check(!refusedDodge.dodging()&&refusedDodge.dodges()==0,"a dodge the game did not take counted");
+        bool refused{};
+        try{WebDodgeConfig c;c.most=.3f;WebDodge bad(c);}catch(const std::invalid_argument&){refused=true;}
+        check(refused,"a dodge whose most is under its least accepted");
     });
     test("spider-sense's sightline: an attacker over 31 degrees off the look, kept to 26, on his side, behind too", [] {
         const Pose head{{0,1.6f,0},{}};
@@ -7576,34 +10258,35 @@ int main() {
         // Full deflection, a stick at rest a few percent off centre, analog triggers.
         check(menus.thumbLX==-32767 && menus.thumbLY==0 && menus.thumbRX==0 && menus.thumbRY==19660,"sticks");
         check(menus.leftTrigger==128 && menus.rightTrigger==255,"triggers");
-        // In VR the controllers swing: of their own buttons only pause (menu) and the game menu (X) pass.
+        // In VR the controllers swing: of their own buttons only pause (menu) passes. X is the gadget
+        // wheel's; it was the game menu (Back) until October 23, the phone's MENU since.
         check(fromControllers(f,Mapping::gameplay)==game_pad::State{static_cast<uint16_t>(start)},"Y alone reached the game in play");
         f.buttons=buttonA|buttonX|buttonMenu;
         const auto play=fromControllers(f,Mapping::gameplay);
-        check(play==game_pad::State{static_cast<uint16_t>(start|back)},"gameplay passes only Start and Back");
+        check(play==game_pad::State{static_cast<uint16_t>(start)},"gameplay passes only Start");
         // Walking and jumping come as the swing leaves them: the October 6
         // session could not move at all while they went to the keyboard only.
         const auto walking=fromControllers(f,Mapping::gameplay,{.5f,-1,true});
-        check(walking.buttons==(start|back|a),"native jump is not A");
+        check(walking.buttons==(start|a),"native jump is not A");
         check(walking.thumbLX==16384 && walking.thumbLY==-32767 && !walking.thumbRX && !walking.thumbRY,"walk stick");
         check(!walking.leftTrigger && !walking.rightTrigger,"triggers leaked into gameplay");
         check(fromControllers(f,Mapping::gameplay,{.05f,0,false})==play,"stick noise walked");
         check(fromControllers(f,Mapping::none,{1,1,true})==game_pad::State{},"nothing without the headset");
         // Y is the game's Y in VR (interact, web strike) and B its B (the dodge), as the swing leaves them.
-        check(fromControllers(f,Mapping::gameplay,{0,0,false,true}).buttons==(start|back|y),"interact is not the game's Y");
-        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,true}).buttons==(start|back|b),"dodge is not the game's B");
+        check(fromControllers(f,Mapping::gameplay,{0,0,false,true}).buttons==(start|y),"interact is not the game's Y");
+        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,true}).buttons==(start|b),"dodge is not the game's B");
         // A dodge goes the way the stick points: both reach the game together.
         const auto dodging=fromControllers(f,Mapping::gameplay,{-1,0,false,false,true});
-        check(dodging.buttons==(start|back|b) && dodging.thumbLX==-32767 && !dodging.thumbLY,"a dodge lost its way");
+        check(dodging.buttons==(start|b) && dodging.thumbLX==-32767 && !dodging.thumbLY,"a dodge lost its way");
         // The game's web pull is its LB and RB together; the grips alone are no bumpers in VR.
-        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,false,true}).buttons==(start|back|leftShoulder|rightShoulder),
+        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,false,true}).buttons==(start|leftShoulder|rightShoulder),
               "a pull is not the game's LB + RB");
         // The right stick pushed down is the game's D-pad down (heal), pushed up its LT and RT together (the zip
         // to a point): until October 12 neither reached the game in VR play.
-        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,false,false,true}).buttons==(start|back|dpadDown),
+        check(fromControllers(f,Mapping::gameplay,{0,0,false,false,false,false,true}).buttons==(start|dpadDown),
               "a heal is not the game's D-pad down");
         const auto zipping=fromControllers(f,Mapping::gameplay,{0,0,false,false,false,false,false,true});
-        check(zipping.buttons==(start|back) && zipping.leftTrigger==255 && zipping.rightTrigger==255,
+        check(zipping.buttons==start && zipping.leftTrigger==255 && zipping.rightTrigger==255,
               "a zip is not the game's LT + RT");
         XrFrame gripping;gripping.hands[0].squeeze=gripping.hands[1].squeeze=1;
         check(fromControllers(gripping,Mapping::gameplay)==game_pad::State{},"the grips were bumpers in VR play");
@@ -7637,9 +10320,10 @@ int main() {
         check(fromControllers(o.filtered(f,Mapping::gameplay),Mapping::gameplay).buttons==back,"View and X in play");
         o.update(f.buttons,false);
         check(fromControllers(o.filtered(f,Mapping::menus),Mapping::menus).buttons==back,"View let go by the switch");
-        // The Frame's X and Y are Spidy's X and Y: the game menu and the interact, as Touch's.
+        // The Frame's X and Y are Spidy's X and Y, as Touch's: X the gadget wheel's, sending the game
+        // nothing in play (the game menu until October 23), Y the interact.
         XrFrame face;face.buttons=buttonX;
-        check(fromControllers(face,Mapping::gameplay).buttons==back,"X is not the game menu");
+        check(!fromControllers(face,Mapping::gameplay).buttons,"X sent the game something in play");
         check(fromControllers(face,Mapping::menus).buttons==x,"X on the game screen is not the game's X");
     });
     // The prompt and button work of October 13: the game names the button of
@@ -7675,9 +10359,10 @@ int main() {
             // controller has them, and its own test covers them).
             const uint32_t faces[]={0,buttonA,buttonB,buttonX,buttonY,buttonMenu};
             // The swing's leave, as game_xr fills it: every flag on its own.
-            Walk walks[9]{};
+            Walk walks[11]{};
             walks[1].jump=true;walks[2].interact=true;walks[3].dodge=true;walks[4].pull=true;
             walks[5].heal=true;walks[6].zip=true;walks[7].scan=true;walks[8].right=1;
+            walks[9].suit=true;walks[10].menu=true;
             for(uint32_t face:faces)
                 for(const auto& walk:walks)
                     for(int grips=0;grips<4;++grips)
@@ -8020,6 +10705,22 @@ int main() {
             s ? appendSlowMotionMeter(v, slow, hand, viewer, pixel, 1, *s)
               : appendSlowMotionMeter(v, slow, hand, viewer, pixel, 1);
         });
+        three("the pad layer's sign", [&](std::vector<Vertex>& v, const UiStyle* s) {
+            const Pose hand{{.2f, 1.2f, -.4f}, {}};
+            s ? appendPadLayerSign(v, hand, viewer, pixel, *s) : appendPadLayerSign(v, hand, viewer, pixel);
+        });
+        // The sign over the back of the wrist, in either style; nothing for a hand that is no number.
+        for (const auto style : {UiStyle::comic, UiStyle::tech}) {
+            const Pose hand{{.2f, 1.2f, -.4f}, {}};
+            const Vec3 over = hand.position + Vec3{0, .07f, .065f};
+            std::vector<Vertex> v;
+            appendPadLayerSign(v, hand, viewer, pixel, style);
+            for (const auto& x : v)
+                check(length(x.position - over) < .13f, "the pad layer's sign is not over the wrist");
+            std::vector<Vertex> lost;
+            appendPadLayerSign(lost, {{std::nanf(""), 1, 0}, {}}, viewer, pixel, style);
+            check(lost.empty(), "the pad layer's sign drew for a hand that is no number");
+        }
         three("a blow", [&](std::vector<Vertex>& v, const UiStyle* s) {
             const ImpactView blow{point, .5f, BlowKind::Hit, 3, .1f};
             s ? appendImpact(v, blow, viewer, pixel, *s) : appendImpact(v, blow, viewer, pixel);
@@ -8444,6 +11145,13 @@ int main() {
         run(idle,.2f,true,false,false);
         check(run(idle,PadLayer::idleSeconds-1,true,false,false,true),"a busy layer let go");
         check(!run(idle,PadLayer::idleSeconds+1,true,false,false,false),"an idle layer did not let go");
+        // The phone drawn lets it go however busy it is, and a click latches it again.
+        PadLayer drawn;
+        click(drawn);
+        check(run(drawn,5.f,true,false,false,true),"the busy layer did not stay");
+        drawn.leave();
+        check(!drawn.latched() && !run(drawn,1.f,true,false,false,true),"the phone drawn did not let it go");
+        check(click(drawn) && drawn.entries()==2,"a click after the phone did not latch it again");
     });
     test("both thumbsticks held in are the game's Start, once a hold, where the runtime keeps the menu button",
          [] {
@@ -8519,6 +11227,21 @@ int main() {
         P vaccine;
         check(step(vaccine,both,Demand{prompt_buttons::padLeftShoulder})==State{leftShoulder},"LB did not go out");
         check(vaccine.claimed()==P::leftBall,"the right ball was claimed for a prompt that names none of it");
+        // The throw by every trash can on a street, "[ACTION_WEB_YANK] (Hold) Throw": both bumpers, X's to send
+        // (October 24), and the web-ball buttons stay the webs'.
+        const Demand throwing{static_cast<uint16_t>(prompt_buttons::padLeftShoulder|prompt_buttons::padRightShoulder),
+                              false,false,true};
+        P pair;
+        check(step(pair,face(buttonX),throwing)==State{static_cast<uint16_t>(leftShoulder|rightShoulder)},
+              "X did not send the game's LB + RB");
+        check(pair.claimed()==P::controlX,"the pair was not X's");
+        P street;
+        check(step(street,both,throwing)==State{} && !street.claimed(),"a web ball went to the game for a throw");
+        // The game's own X named beside the pair: X is that X.
+        P mixed;
+        const Demand both3{static_cast<uint16_t>(prompt_buttons::padX|prompt_buttons::padLeftShoulder|
+                                                 prompt_buttons::padRightShoulder)};
+        check(step(mixed,face(buttonX),both3)==State{x},"X was not the game's X with the pair named too");
         // "Press [BTN_R2] to zip to ceiling while aiming": the right ball is RT.
         P zip;
         check(step(zip,both,Demand{0,false,true}).rightTrigger==255,"RT did not go out");
@@ -8602,6 +11325,18 @@ int main() {
         check(throwHand(none,{},{0,0,-1},3.5f,.1f)==State{} && !none.blows(),"a fist was an X with nothing named");
         P webbed;
         check(throwHand(webbed,takedown,{0,0,-1},3.5f,.1f,false,true)==State{},"a hand on its web threw an X");
+        // throwHand's busy hand holds its web through the throw: let go just before it, still no X.
+        P letGo;
+        {
+            P::Input in;in.tracked[0]=true;in.busy[0]=true;Vec3 at{.15f,-.35f,-.2f};
+            for(float t=0;t<.2f;t+=dt){in.hands[0]=at;letGo.update(dt,true,in,takedown);}
+            in.busy[0]=false;
+            State most;
+            for(float t=0;t<.1f-1e-4f;t+=dt){
+                at=at+Vec3{0,0,-1}*(3.5f*dt);in.hands[0]=at;most.buttons|=letGo.update(dt,true,in,takedown).buttons;
+            }
+            check(most==State{} && !letGo.blows(),"a hand that had just let go of its web threw an X");
+        }
         // The recoil: from the arm out, straight back toward the head.
         P back;
         const Vec3 out{.15f,-.3f,-.65f};
@@ -8635,6 +11370,83 @@ int main() {
         P::Input untracked;untracked.hands[0]={0,0,-3};
         check(lost.update(dt,true,untracked,takedown)==State{} && !lost.blows(),"an untracked hand threw an X");
     });
+    test("both free fists slammed down together in the air are the game's Ground Strike with nothing named; the "
+         "game's camera out, the triggers are its aim and shutter and the stick up puts it away", [] {
+        using namespace game_pad;
+        using prompt_buttons::Demand;
+        using P=NamedPress;
+        const float dt=1.f/90;
+        P::Input in;
+        Vec3 at[2]{};
+        // Both hands at rest by the body; then each thrown along `way` at 3.5 m/s for 0.1 s, the right `lag`
+        // seconds after the left. What went out meanwhile, together.
+        // freeFor: both hands held webs until this long before the throw.
+        const auto slam=[&](P& p,Vec3 way,float lag,bool airborne=true,bool slams=true,bool busy=false,
+                            float freeFor=-1){
+            in=P::Input{};in.tracked[0]=in.tracked[1]=true;in.airborne=airborne;in.slams=slams;in.busy[1]=busy;
+            at[0]={-.2f,-.35f,-.2f};at[1]={.2f,-.35f,-.2f};
+            if(freeFor>=0)in.busy[0]=in.busy[1]=true;
+            for(float t=0;t<.2f;t+=dt){in.hands[0]=at[0];in.hands[1]=at[1];p.update(dt,true,in,{});}
+            if(freeFor>=0){
+                in.busy[0]=in.busy[1]=false;
+                for(float t=0;t<freeFor-1e-4f;t+=dt)p.update(dt,true,in,{});
+            }
+            State most;
+            for(float t=0;t<lag+.1f-1e-4f;t+=dt){
+                for(int h=0;h<2;++h){
+                    const float start=h?lag:0.f;
+                    if(t>=start&&t<start+.1f-1e-4f)at[h]=at[h]+way*(3.5f*dt);
+                }
+                in.hands[0]=at[0];in.hands[1]=at[1];
+                most.buttons|=p.update(dt,true,in,{}).buttons;
+            }
+            return most;
+        };
+        const auto rest=[&](P& p,float seconds){
+            State last;
+            for(float t=0;t<seconds-1e-4f;t+=dt)last=p.update(dt,true,in,{});
+            return last;
+        };
+        const State strike{static_cast<uint16_t>(x|a)};
+        P both;
+        check(slam(both,{0,-1,0},0)==strike && both.slams()==1 && both.blows()==1 && both.presses()==1,
+              "both fists slammed down in the air were not the Ground Strike, once");
+        check((both.claimed()&P::fist)!=0,"the slam's X + A went out unclaimed: the swing would not yield");
+        check(rest(both,P::holdSeconds-.2f)==strike,"the Ground Strike's X + A let go early");
+        check(rest(both,.3f)==State{},"the Ground Strike's X + A never let go");
+        P lagged;
+        check(slam(lagged,{0,-1,0},.2f)==strike,"the second fist a moment after the first was no slam");
+        // Not one fist alone (the other too late), nor on the ground, nor while REALISTIC FLIPS turns the player
+        // by his arms, nor with a hand on its web, nor thrown level.
+        P late;
+        check(slam(late,{0,-1,0},.4f)==State{} && !late.slams(),"two fists far apart were a slam");
+        P ground;
+        check(slam(ground,{0,-1,0},0,false)==State{} && !ground.slams(),"a slam on the ground was the Ground Strike");
+        P flips;
+        check(slam(flips,{0,-1,0},0,true,false)==State{},"both arms swung down for a realistic flip were a slam");
+        P webbed;
+        check(slam(webbed,{0,-1,0},0,true,true,true)==State{},"a hand on its web made half a slam");
+        // Two webs pulled down hard and let go mid-pull (October 26: "it slams me on the ground while I swing"):
+        // no slam until the arms have been free a moment.
+        P pulled;
+        check(slam(pulled,{0,-1,0},0,true,true,false,0)==State{} && !pulled.slams(),
+              "both webs let go mid-pull were a slam");
+        P freed;
+        check(slam(freed,{0,-1,0},0,true,true,false,P::letGoSeconds+.05f)==strike,
+              "fists thrown down a moment after the webs let go were no slam");
+        P level;
+        check(slam(level,{0,0,-1},0)==State{},"both fists thrown level were a slam");
+        // The game's camera, its overlay up: LT held raises the viewfinder, RB takes the photo, D-pad up puts
+        // it away. The left web-ball button, the right one and the right stick up send them; X is not taken.
+        const Demand camera=prompt_buttons::cameraDemand;
+        const auto aim=P::sends(P::leftBall,camera),shutter=P::sends(P::rightBall,camera);
+        check(aim.leftTrigger==255 && !aim.buttons,"the left trigger did not aim the game's camera (its LT)");
+        check(shutter.buttons==rightShoulder && !shutter.rightTrigger,"the right trigger was not the camera's RB");
+        check(P::sends(P::stickUp,camera).buttons==dpadUp,"the stick up did not put the camera away");
+        check(P::sends(P::controlX,camera)==State{} && P::sends(P::controlA,camera)==State{},
+              "the camera took a button it does not ask for");
+        check(prompt_buttons::unpack(prompt_buttons::pack(camera))==camera,"the camera's demand did not pack");
+    });
     test("every button the game can name is sent in VR play: by its own control while it is named, or as play sends "
          "it anyway", [] {
         using namespace game_pad;
@@ -8660,11 +11472,93 @@ int main() {
                 answered=answered||(s.buttons==d.buttons&&(s.leftTrigger>200)==d.leftTrigger&&
                                     (s.rightTrigger>200)==d.rightTrigger);
             }
-            // What play sends anyway: the menu button's Start, X's Back, the heal's D-pad down.
+            // What play sends anyway: the menu button's Start, the phone MENU's Back, the heal's D-pad down.
             answered=answered||prompt_buttons::reachableInPlay(d);
             if(!answered)missing+=std::string(missing.empty()?"":", ")+control.name;
         }
         check(missing.empty(),("VR play cannot send what the game names: "+missing).c_str());
+    });
+    test("the game's throw goes where the free hand points: at the character it is on, or that way", [] {
+        using namespace throw_aim;
+        const Vec3 player{10, 0, 10};
+        game_swing::Aim at;
+        // On a character 8 m ahead and a little to the right: at him.
+        at.kind = static_cast<uint32_t>(game_swing::AimKind::character);
+        at.point = {13, 1.2f, 2};
+        auto r = fromHand(at, {0, 0, -1}, player);
+        check(r.flags == (active | character), "a hand on a character aims at him");
+        const float across = 3 / std::sqrt(73.f), ahead = 8 / std::sqrt(73.f);
+        check(std::abs(r.direction.x - across) < 1e-4f && std::abs(r.direction.z + ahead) < 1e-4f &&
+                  r.direction.y == 0,
+              "the way to a character is the way from the player to him, level");
+        check(length(r.point - at.point) < 1e-6f, "the character's centre goes along");
+        // On a wall to the left: that way, no character.
+        at.kind = static_cast<uint32_t>(game_swing::AimKind::anchor);
+        at.point = {0, 6, 10};
+        r = fromHand(at, {0, 0, -1}, player);
+        check(r.flags == active && std::abs(r.direction.x + 1) < 1e-5f, "a hand on a surface aims that way");
+        // Its web busy (no aim): the way the hand points.
+        at.kind = static_cast<uint32_t>(game_swing::AimKind::none);
+        r = fromHand(at, normalized(Vec3{1, -.5f, 1}), player);
+        check(r.flags == active && std::abs(r.direction.x - std::sqrt(.5f)) < 1e-4f,
+              "no aim: the hand's own way");
+        // Pointing at the player's own feet from overhead: nothing to aim.
+        at.kind = static_cast<uint32_t>(game_swing::AimKind::anchor);
+        at.point = {10, -1, 10};
+        r = fromHand(at, {0, -1, 0}, player);
+        check(r.flags == 0, "straight down aims nothing");
+        // A handle the way the game makes one.
+        check(handle(0x12345, 0x801) == ((1u << 20) | 0x12345), "generation's 11 bits over the index's 20");
+        // The character nearest the hand's point, his body from his feet up 2 m.
+        const Vec3 feet[] = {{0, 0, 0}, {3, 0, 0}, {1.5f, 0, 4}};
+        check(nearest(feet, 3, {2.6f, 1.3f, 0}, 2) == 1, "the nearest body");
+        check(nearest(feet, 3, {1.5f, 3.5f, 4}, 2) == 2, "a point over a head is his");
+        check(nearest(feet, 3, {8, 1, 8}, 2) == -1, "nobody within 2 m");
+    });
+    test("the HUD's throw marker over a prop is drawn as X, and no other marker changes", [] {
+        using namespace prompt_buttons;
+        // AddPOI(id, category, subtype) as the game made them by the trash cans of
+        // the user's second profile on October 24.
+        check(markerSubtype(poiInteract, poiThrowable)==poiLeftFace,"a throwable's marker");
+        check(markerSubtype(poiInteract, 1)==1&&markerSubtype(poiInteract, 0)==0,
+              "a pedestrian's talk marker");
+        check(markerSubtype(poiInteract, poiLeftFace)==poiLeftFace,"a marker that is X already");
+        check(markerSubtype(3, poiThrowable)==poiThrowable,"an objective's marker of the same number");
+    });
+    test("the game's action words say their buttons, and its LB + RB is put as X", [] {
+        using namespace prompt_buttons;
+        const Demand pair{padLeftShoulder|padRightShoulder};
+        // As the game resolved them for Spidy's virtual pad on October 24.
+        const auto thrown=forText("[ACTION_WEB_YANK] (Hold) Throw");
+        check(thrown.buttons==pair.buttons&&thrown.hold,"the throw's word");
+        const auto yank=forText("While in the air, hold [ACTION_WEB_YANK_BOT] to yank enemies up to you");
+        check(yank.buttons==padY&&yank.hold,"the yank up to you was read as the throw's");
+        check(forText("press [ACTION_ACTIVE_FINISHER] to instantly finish").buttons==(padB|padY),"the finisher");
+        check(forText("[ACTION_SUIT_POWER]").buttons==(padLeftThumb|padRightThumb),"the suit power");
+        check(forText("[ACTION_ZIP_TO_POINT]")==Demand{0,true,true},"the zip to a point");
+        check(forText("[BTN_LT]")==Demand{0,true,false}&&forText("[BTN_RT]")==Demand{0,false,true},"LT and RT");
+        check(!forText("[ACTION_MENU_X] Reset").any(),"a menu's action was read for play");
+        char out[256];
+        // The game's LB + RB as [BTN_X], which it draws as its X; nothing else changes.
+        check(pairOnX("[ACTION_WEB_YANK] (Hold) Throw",out,sizeof out)&&!std::strcmp(out,"[BTN_X] (Hold) Throw"),
+              "the throw's word was not put as X");
+        check(pairOnX("Hold [BTN_LB] + [BTN_RB] to pull",out,sizeof out)&&!std::strcmp(out,"Hold [BTN_X] to pull"),
+              "the bumpers' tokens were not put as X");
+        check(pairOnX("[BTN_L1] + [BTN_R1]",out,sizeof out)&&!std::strcmp(out,"[BTN_X]"),"the PlayStation pair");
+        check(!pairOnX("Press [BTN_LB] to disperse vaccine",out,sizeof out),"a bumper alone was put as X");
+        check(!pairOnX("hold [ACTION_WEB_YANK_BOT] to yank",out,sizeof out),"the yank up to you was put as X");
+        check(!pairOnX("[BTN_Y] Interact",out,sizeof out),"a text naming no pair was rewritten");
+        check(!pairOnX("[ACTION_WEB_YANK] (Hold) Throw",out,12),"a text cut short was handed out");
+        // The HUD's own prompt lines: a kind's demand from its show until its hide.
+        LiveDemands live;
+        live.prompt(1000,4,pack(thrown),false);
+        check(live.demand(2000).buttons==pair.buttons,"a shown line's demand was not live");
+        live.prompt(3000,4,0,true);
+        check(!live.demand(3000).any(),"a hidden line's demand stayed live");
+        live.prompt(4000,21,pack(thrown),false);
+        check(!live.demand(4000).any(),"a kind beyond the widget's own was kept");
+        live.prompt(5000,2,pack(thrown),false);
+        check(!live.demand(5000+LiveDemands::standMs+1).any(),"a line never hidden lived on");
     });
     test("the game's icon ids say what a prompt asks of the pad, in every device family", [] {
         using namespace prompt_buttons;
@@ -8724,7 +11618,7 @@ int main() {
         check(!forText("Climb the ladder").any(),"a text with no button named one");
         char out[256];
         // Rewritten for a VR player: the control they have, not the pad's name.
-        check(rewrite("LB + RB (Hold) Throw",out,sizeof out,false)&&!std::strcmp(out,"RIGHT STICK CLICK (Hold) Throw"),
+        check(rewrite("LB + RB (Hold) Throw",out,sizeof out,false)&&!std::strcmp(out,"X (Hold) Throw"),
               "the hint line was not rewritten for VR");
         check(rewrite("Press LT + RT to enter",out,sizeof out,false)&&
                   !std::strcmp(out,"Press RIGHT STICK UP to enter"),"the vent line was not rewritten");
@@ -8736,8 +11630,7 @@ int main() {
         // for becomes Y; what it does have keeps the control's own name.
         check(rewrite("Tap LB to aim",out,sizeof out,true)&&!std::strcmp(out,"Tap Y to aim"),
               "the interact button was not offered for a bumper VR play cannot send");
-        check(rewrite("LB + RB (Hold) Throw",out,sizeof out,true)&&
-                  !std::strcmp(out,"RIGHT STICK CLICK (Hold) Throw"),
+        check(rewrite("LB + RB (Hold) Throw",out,sizeof out,true)&&!std::strcmp(out,"X (Hold) Throw"),
               "a control VR play has was replaced by the interact button");
         // A text that names no button is left to the game.
         check(!rewrite("Open the door",out,sizeof out,false),"a text with no button was rewritten");
@@ -8745,7 +11638,7 @@ int main() {
         check(!rewrite("Press MkbKeyboardEnter",out,sizeof out,false),"a keyboard prompt was rewritten");
         check(!rewrite("LB + RB",out,1,false),"a rewrite wrote into no room");
         // What the player is told matches what the mapping sends.
-        check(!std::strcmp(vrControl(shoulders),"RIGHT STICK CLICK"),"the pull's VR control");
+        check(!std::strcmp(vrControl(shoulders),"X"),"the pull's VR control");
         check(!std::strcmp(vrControl(Demand{padX}),"PAD + X"),"the game's X needs the pad layer");
         check(!std::strcmp(vrControl(Demand{padY}),"Y"),"the game's Y is the interact");
         check(vrControl({})==nullptr,"an empty demand has a control");
@@ -8843,6 +11736,40 @@ int main() {
         check(both.buttons==(padX|padY)&&!both.leftTrigger,"the two together, or a channel out of range taken");
         d.clear();
         check(!d.demand(200600).any(),"clear left something live");
+    });
+    test("a button another of the UI's calls names stays live otherMs after that call, beside the prompts' own",
+         [] {
+        using namespace prompt_buttons;
+        LiveDemands d;
+        const auto camera=forText("Press [DPAD_UP] to equip the camera.");
+        const uint32_t x=pack(Demand{padX});
+        d.other(1000,pack(camera));
+        check(d.demand(1000+LiveDemands::otherMs)==camera,"another call's text went before otherMs");
+        check(!d.demand(1001+LiveDemands::otherMs).any(),"another call's text outlived otherMs");
+        // Its next call keeps it; a call that names nothing changes nothing.
+        d.other(20000,pack(camera));d.other(26000,pack(camera));d.other(27000,0);
+        check(d.demand(26000+LiveDemands::otherMs)==camera,"a later call did not keep it");
+        check(!d.demand(26001+LiveDemands::otherMs).any(),"a call that named nothing kept it");
+        // A prompt call's clear and a channel's HideText are theirs alone.
+        d.other(40000,pack(camera));d.call(40000,x,false);d.call(40100,0,true);d.text(40100,7,0,true);
+        check(d.demand(40200)==camera,"a prompt call's clear or a HideText ended another call's text");
+        // Together with a channel's text; clear ends it too.
+        d.text(41000,7,x,false);
+        const auto both=d.demand(41000);
+        check(both.buttons==(padX|padDpadUp),"another call's text and a channel's were not both live");
+        d.clear();
+        check(!d.demand(41001).any(),"clear left another call's text");
+        // A state that asks for buttons with no text, the game's camera out: until its own end, standMs at most,
+        // whatever the prompts' calls and channels do meanwhile.
+        d.stand(50000,pack(cameraDemand),false);
+        d.call(50000,x,false);d.call(50100,0,true);d.text(50100,7,0,true);d.other(50100,0);
+        check(d.demand(50000+LiveDemands::liveMs+LiveDemands::otherMs+1)==cameraDemand,
+              "the camera's demand went before its overlay did");
+        d.stand(400000,0,true);
+        check(!d.demand(400001).any(),"the camera put away left its demand standing");
+        d.stand(500000,pack(cameraDemand),false);
+        check(d.demand(500000+LiveDemands::standMs)==cameraDemand && !d.demand(500001+LiveDemands::standMs).any(),
+              "a camera whose end never came stood past standMs");
     });
     test("the QTE's own handles: the D-pad, a stick to move, and the keyboard's keys", [] {
         using namespace prompt_buttons;
@@ -9171,17 +12098,21 @@ int main() {
         check(!(o.play()&buttonB) && o.screen()==buttonB,"Back held into play dodged");
         o.update(0,true);
         check(!o.play() && !o.screen(),"a button let go stayed held");
-        // X opens the game menu from VR; held on into the menu it is no X there.
+        // X in VR is the gadget wheel's and sends the game nothing (a tap of it was the game menu until
+        // October 23; the phone's MENU is now); held on into a menu the game opened it is no X there.
         o.update(buttonX,true);
-        check(sent(o,buttonX,Mapping::gameplay)==back,"X in VR is not the game menu");
+        check(!sent(o,buttonX,Mapping::gameplay),"X in VR sent the game something");
         o.update(buttonX,false);
-        check(!sent(o,buttonX,Mapping::menus),"the game menu's press was X in that menu");
-        // X pressed in the menu is X there, and opens no menu when play is back.
+        check(!sent(o,buttonX,Mapping::menus),"an X pressed in VR was X in the game's menu");
+        // X pressed in the menu is X there, and sends nothing when play is back.
         o.update(0,false);
         o.update(buttonX,false);
         check(sent(o,buttonX,Mapping::menus)==x,"X on the game screen is not the game's X");
         o.update(buttonX,true);
-        check(!sent(o,buttonX,Mapping::gameplay),"X held from a menu opened the game menu");
+        check(!sent(o,buttonX,Mapping::gameplay),"X held from a menu sent something in play");
+        // The phone's MENU is the game's Back in VR play.
+        Walk menu;menu.menu=true;
+        check(sent(o,0,Mapping::gameplay,menu)==back,"the phone's MENU is not the game's Back");
         // Y interacts in VR; held into the game's Settings it resets no tab. A second button
         // pressed meanwhile is the screen's own; A and the menu button pass as they are.
         o.update(buttonY,true);
@@ -9326,54 +12257,6 @@ int main() {
               "the look is not the right stick's X");
         check(!fromControllers(f,Mapping::menus,walk).thumbRX && !fromControllers(f,Mapping::none,walk).thumbRX,
               "the camera was turned on the game screen");
-    });
-    test("the right thumbstick's click is the game's LB + RB, and not half of clicking both", [] {
-        using game_pad::PullPress;
-        PullPress press;
-        // Held, it holds from the chord's time on, for as long as the stick is down.
-        float began = -1;
-        for (int i = 0; i < 60; ++i)
-            if (press.update(.011f, true, true, false) && began < 0)
-                began = i * .011f;
-        check(began >= PullPress::chordSeconds - .012f && began <= PullPress::chordSeconds + .012f,
-              "a held click began to pull at the wrong time");
-        check(press.update(.011f, true, true, false), "a held click let go of the pull");
-        check(!press.update(.011f, true, false, false), "the pull outlasted the stick");
-        // A short click holds for a moment after it.
-        PullPress tap;
-        check(!tap.update(.011f, true, true, false) && !tap.update(.011f, true, true, false), "a click pulled at once");
-        float held = 0;
-        for (int i = 0; i < 60; ++i)
-            held += tap.update(.011f, true, false, false) ? .011f : 0;
-        check(held >= PullPress::tapSeconds - .012f && held <= PullPress::tapSeconds + .012f,
-              "a short click did not hold for its time");
-        // Both sticks, either first, switch the screen and pull nothing.
-        for (const bool rightFirst : {false, true}) {
-            PullPress chord;
-            bool any = chord.update(.011f, true, rightFirst, !rightFirst);
-            for (int i = 0; i < 30; ++i)
-                any = chord.update(.011f, true, true, true) || any;
-            for (int i = 0; i < 30; ++i)
-                any = chord.update(.011f, true, false, false) || any;
-            check(!any, "clicking both sticks pulled");
-        }
-        // The left stick joining a pull ends it, until the right one is let go.
-        PullPress joined;
-        for (int i = 0; i < 20; ++i)
-            joined.update(.011f, true, true, false);
-        check(joined.update(.011f, true, true, false), "a held click did not pull");
-        check(!joined.update(.011f, true, true, true) && !joined.update(.011f, true, true, false),
-              "a pull went on after the left stick joined");
-        // Outside VR play nothing pulls, and a stick held through it waits for a release.
-        PullPress screen;
-        for (int i = 0; i < 30; ++i)
-            check(!screen.update(.011f, false, true, false), "a click on the game screen pulled");
-        for (int i = 0; i < 30; ++i)
-            check(!screen.update(.011f, true, true, false), "a click held into play pulled");
-        check(!screen.update(.011f, true, false, false), "letting go of a click held into play pulled");
-        for (int i = 0; i < 20; ++i)
-            screen.update(.011f, true, true, false);
-        check(screen.update(.011f, true, true, false), "a new click after the screen did not pull");
     });
     test("the right stick pushed down heals and pushed up is the game's LT + RT; a turn, a diagonal and a flick are neither", [] {
         using game_pad::StickPush;
@@ -10566,6 +13449,5851 @@ int main() {
         check(bad([](GrabConfig& c){c.gravity=std::numeric_limits<float>::quiet_NaN();}),"NaN gravity accepted");
         check(!bad([](GrabConfig&){}),"defaults rejected");
     });
+    test("outdoor crawl stride advances with native travel and rests through head movement or teleports", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+        check(gait.update(frame, wall, true, .02f), "outdoor crawl did not activate");
+        near(gait.phase(), 0);
+        frame.anchor.y += .14f;
+        check(gait.update(frame, wall, true, .02f), "travel dropped the visual crawl");
+        near(gait.phase(), 6.2831853f * .2f);
+        const float phase = gait.phase();
+        frame.headPose.orientation = Quat::around({1, 0, 0}, 1.f);
+        frame.headPose.position = {0, -.5f, 0};
+        for (int i = 0; i < 20; ++i) gait.update(frame, wall, true, .02f);
+        near(gait.phase(), phase);
+        frame.anchor.y += 100;
+        gait.update(frame, wall, true, .02f);
+        near(gait.phase(), phase);
+        near(length(gait.ahead() - Vec3{0, 1, 0}), 0);
+        for (int i = 0; i < 15; ++i) {
+            frame.anchor.x += .02f;
+            gait.update(frame, wall, true, .02f);
+        }
+        near(length(gait.step() - Vec3{1, 0, 0}), 0);
+        for (int i = 0; i < 20; ++i) {
+            frame.anchor.y -= .02f;
+            gait.update(frame, wall, true, .02f);
+        }
+        near(length(gait.step() - Vec3{0, -1, 0}), 0);
+    });
+    test("outdoor crawl is off for vents running ground and jumps, and follows gesture roll at corners", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+        gait.update(frame, wall, true, .02f);
+        const Quat roll = Quat::around({0, 0, 1}, 1.5707963f);
+        frame.swing.tilt = roll;
+        gait.update(frame, wall, true, .02f);
+        near(length(gait.ahead() - roll.rotate({0, 1, 0})), 0);
+        near(length(gait.step() - gait.ahead()), 0);
+        frame.swing.tilt = {};
+        wall.normal = {1, 0, 0};
+        gait.update(frame, wall, true, .02f);
+        near(dot(gait.step(), wall.normal), 0);
+        for (int mode = 0; mode < 5; ++mode) {
+            auto f = frame;
+            auto h = wall;
+            f.ventCrawl = mode == 0;
+            f.standing = mode == 1;
+            f.swing.jump = mode == 2;
+            if (mode == 3) h.normal = {0, 1, 0};
+            check(!gait.update(f, h, mode != 4, .02f), "crawl visual affected another locomotion mode");
+        }
+    });
+    test("momentum wall runs keep their legs with a neutral stick until slowed or caught by a palm", [] {
+        for (bool native : {false, true}) {
+            WallCrawlBody gait;
+            GameMotionFrame frame;
+            frame.active = true;
+            SurfaceHold wall{{0, 0, 1}, {}, 12, native};
+            check(!gait.update(frame, wall, true, .02f), "neutral-stick run took the crawling crouch");
+            wall.speed = 2;
+            check(!gait.update(frame, wall, true, .02f), "decelerating run flickered into crawling");
+            wall.speed = 1;
+            check(gait.update(frame, wall, true, .02f), "slow wall contact did not regain the idle pose");
+            wall.speed = 12;
+            check(gait.update(frame, wall, true, .02f, true), "sticky palm did not interrupt the visual run");
+            check(!gait.update(frame, wall, true, .02f), "released fast run kept the crouch");
+            wall.speed = 0;
+            frame.anchor.x += 10;
+            check(gait.update(frame, wall, true, .02f), "stopped run never resumed the static pose");
+            near(gait.motion(), 0);
+            near(gait.phase(), 0);
+        }
+    });
+    test("only fresh real outdoor wall contacts can interrupt the momentum run pose", [] {
+        using game_swing::outdoorClimbGrip;
+        game_swing::ClimbData d;
+        d.status = 1; d.hands = 1; d.sampleTimeNs = 1'000'000'000;
+        check(outdoorClimbGrip(d, d.sampleTimeNs + 10'000'000), "fresh wall grip ignored");
+        check(!outdoorClimbGrip(d, d.sampleTimeNs - 1), "future wall grip accepted");
+        check(!outdoorClimbGrip(d, d.sampleTimeNs + 100'000'001), "stale wall grip accepted");
+        for (int invalid = 0; invalid < 7; ++invalid) {
+            auto bad = d;
+            if (invalid == 0) bad.hands = 0;
+            if (invalid == 1) bad.hands = 4;
+            if (invalid == 2) bad.crawl = 1;
+            if (invalid == 3) bad.status = 0;
+            if (invalid == 4) bad.version = 1;
+            if (invalid == 5) bad.bytes = 48;
+            if (invalid == 6) bad.magic = 0;
+            check(!outdoorClimbGrip(bad, d.sampleTimeNs), "invalid wall grip overrode the running pose");
+        }
+    });
+    test("moving crawl stance follows actual travel and eases back to compact when stopped", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 1, false};
+        gait.update(frame, wall, true, .02f, true);
+        for (int i = 0; i < 20; ++i) {
+            const float before = gait.motion();
+            frame.anchor.y += .02f;
+            gait.update(frame, wall, true, .02f, true);
+            check(gait.motion() >= before && gait.motion() - before <= .121f, "moving stance snapped");
+        }
+        near(gait.motion(), 1);
+        const float phase = gait.phase();
+        for (int i = 0; i < 20; ++i) {
+            frame.headPose.position.y += .01f;
+            frame.headPose.orientation = Quat::yaw(i * .1f);
+            const float before = gait.motion();
+            gait.update(frame, wall, true, .02f, true);
+            check(before >= gait.motion() && before - gait.motion() <= .081f, "idle stance snapped");
+        }
+        near(gait.motion(), 0);
+        near(gait.phase(), phase);
+        frame.anchor.y += 100;
+        gait.update(frame, wall, true, .02f, true);
+        near(gait.motion(), 0);
+        near(gait.phase(), phase);
+        for (int i = 0; i < 20; ++i) {
+            frame.anchor.x += .0002f;
+            gait.update(frame, wall, true, .02f, true);
+        }
+        near(gait.motion(), 0);
+    });
+    test("crawl feet stay on fixed contacts as the body moves and alternate one reaching foot", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        check(feet.update(f), "contacts did not initialize");
+        int lastStep = -1, steps = 0;
+        for (int frame = 0; frame < 180; ++frame) {
+            const auto before = feet.feet();
+            const int previous = feet.swinging();
+            f.origin.y += .01f; f.floor.y += .01f;
+            for (int i = 0; i < 2; ++i) { f.rest[i].y += .01f; f.hips[i].y += .01f; }
+            check(feet.update(f), "travel lost the contacts");
+            for (int i = 0; i < 2; ++i)
+                if (previous != i && feet.swinging() != i)
+                    near(length(feet.feet()[i] - before[i]), 0, .00001f);
+            if (previous < 0 && feet.swinging() >= 0) {
+                check(feet.swinging() != lastStep, "the same foot reached twice in a row");
+                lastStep = feet.swinging(); ++steps;
+            }
+        }
+        check(steps >= 6, "the feet never made alternating progress");
+        for (int frame = 0; frame < 40; ++frame) feet.update(f);
+        check(feet.swinging() < 0, "stopping left a foot floating mid-step");
+        const auto stopped = feet.feet();
+        for (int frame = 0; frame < 40; ++frame) {
+            for (auto& p : f.rest) p.x += .001f; // head/hip offsets, no native travel
+            feet.update(f);
+            for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - stopped[i]), 0);
+        }
+        near(stopped[0].z, .08f); near(stopped[1].z, .08f);
+    });
+    test("crawl contacts follow corners and roll, and reset on teleport or calibration", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        feet.update(f);
+        for (const Quat turn : {Quat::yaw(1.2f), Quat::around({1, 0, 0}, 1.5707963f)}) {
+            const auto before = feet.feet();
+            f.normal = turn.rotate(f.normal); f.ahead = turn.rotate(f.ahead);
+            for (int i = 0; i < 2; ++i) {
+                f.rest[i] = turn.rotate(f.rest[i]); f.hips[i] = turn.rotate(f.hips[i]);
+            }
+            feet.update(f);
+            for (int i = 0; i < 2; ++i) {
+                near(dot(feet.feet()[i] - f.floor, f.normal), .08f);
+                near(length(feet.feet()[i] - turn.rotate(before[i])), 0, .001f);
+            }
+            check(feet.swinging() < 0, "view rotation invented a step");
+        }
+        f.origin.x += 10; f.floor.x += 10;
+        for (int i = 0; i < 2; ++i) { f.rest[i].x += 10; f.hips[i].x += 10; }
+        feet.update(f);
+        for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - f.rest[i]), 0);
+        f.scale = .85f;
+        feet.update(f);
+        for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - f.rest[i]), 0);
+    });
+    test("crawl foot contacts reject invalid data and restart without stale anchors", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0};
+        f.reach = {.87f, .87f}; f.seconds = .01f;
+        check(feet.update(f), "valid contacts rejected");
+        auto bad = f; bad.origin.x = std::numeric_limits<float>::quiet_NaN();
+        check(!feet.update(bad), "nonfinite foot origin accepted");
+        bad = f; bad.seconds = 1;
+        check(!feet.update(bad), "stale interval accepted");
+        bad = f; bad.reach[0] = 0;
+        check(!feet.update(bad), "broken leg reach accepted");
+        f.origin.y = f.rest[0].y = f.rest[1].y = 10;
+        check(feet.update(f), "contacts did not recover");
+        near(feet.feet()[0].y, 10);
+    });
+    test("climbing hand strokes require attached tracked motion and count a continuous pull once", [] {
+        CrawlHandSteps strokes;
+        Input in;
+        for (auto& hand : in.hands) {
+            hand.tracked = true; hand.wallGrip = 1; hand.gripRelativeToHead = {0, 1, -.3f};
+        }
+        const Vec3 n{0, 0, 1};
+        strokes.update(in, 1, n, .01f);
+        for (int i = 0; i < 10; ++i) {
+            in.hands[0].gripRelativeToHead.y -= .01f;
+            in.hands[1].gripRelativeToHead.y -= .01f; // the free hand is not a wall pull
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 1 && strokes.strokes()[1] == 0, "pull stroke was miscounted");
+        for (int i = 0; i < 20; ++i) {
+            in.trackingYaw += .02f; in.tilt = Quat::around(n, i * .02f);
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 1, "artificial view turns counted as hand pulls");
+        strokes.update(in, 0, n, .01f);
+        in.hands[0].gripRelativeToHead.y += .5f;
+        strokes.update(in, 1, n, .01f); // recontact seeds the hand rather than treating the reach as a pull
+        for (int i = 0; i < 4; ++i) {
+            in.hands[0].gripRelativeToHead.y -= .01f;
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 2, "new attached pull did not start another stroke");
+        in.focused = false;
+        in.hands[0].gripRelativeToHead.y -= .1f;
+        strokes.update(in, 1, n, .01f);
+        check(strokes.strokes()[0] == 2, "unfocused tracking produced a step cue");
+    });
+    test("a left hand stroke cues the right foot and a right hand stroke cues the left foot", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.handSync = true; f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        {
+            CrawlFeet entering;
+            auto caught = f;
+            caught.strokes[0] = 1; // first left-hand pull began before the visible pose finished blending
+            entering.update(caught);
+            caught.origin.y += .002f;
+            entering.update(caught);
+            check(entering.swinging() == 1, "wall-entry blend lost the first opposite-hand cue");
+        }
+        feet.update(f);
+        const auto move = [&] {
+            f.origin.y += .002f; f.floor.y += .002f;
+            for (int i = 0; i < 2; ++i) { f.rest[i].y += .002f; f.hips[i].y += .002f; }
+            feet.update(f);
+        };
+        ++f.strokes[0]; move();
+        check(feet.swinging() == 1, "left hand did not cue the right foot");
+        for (int i = 0; i < 130; ++i) feet.update(f);
+        check(feet.swinging() < 0, "right foot failed to settle");
+        move();
+        check(feet.swinging() < 0, "the same held stroke replayed a step");
+        ++f.strokes[0]; move();
+        check(feet.swinging() < 0, "the same hand replayed a short step out of alternation");
+        ++f.strokes[1]; move();
+        for (int i = 0; i < 300 && feet.swinging() < 0; ++i) move();
+        check(feet.swinging() == 0, "right hand did not cue the next left-foot reach");
+        for (int i = 0; i < 130; ++i) feet.update(f);
+        move();
+        check(feet.swinging() < 0, "a queued hand cue replayed a tiny corrective step");
+    });
+    test("hand-synced crawl uses large alternating strides and an extended supporting leg", [] {
+        for (float speed : {.25f, .6f, 1.2f}) {
+            CrawlFeet feet;
+            CrawlFeet::Frame f;
+            f.handSync = true; f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+            f.rest = {Vec3{-.38f, .065f, .14f}, Vec3{.38f, .065f, .14f}};
+            f.hips = {Vec3{-.1f, .5f, .51f}, Vec3{.1f, .5f, .51f}};
+            f.reach = {.87f, .87f}; f.clearance = {.14f, .14f}; f.maxUp = {-.15f, -.15f};
+            feet.update(f);
+            int last = -1, steps = 0, landings = 0, supportFrames = 0;
+            Vec3 start{};
+            for (int frame = 0; frame < 600; ++frame) {
+                if (frame % 50 == 0) ++f.strokes[(frame / 50) % 2];
+                const auto before = feet.feet();
+                const int previous = feet.swinging();
+                const float moved = speed * f.seconds;
+                f.origin.y += moved; f.floor.y += moved;
+                for (int i = 0; i < 2; ++i) { f.rest[i].y += moved; f.hips[i].y += moved; }
+                feet.update(f);
+                const int swing = feet.swinging();
+                if (previous < 0 && swing >= 0) {
+                    check(swing != last, "large reaches did not alternate feet");
+                    if (!steps) check(swing == 1, "first left-hand pull did not cue the right foot");
+                    else if (length(before[swing] - f.hips[swing]) <= f.reach[swing] * .98f)
+                        throw std::runtime_error("early extension: speed " + std::to_string(speed) +
+                            " frame " + std::to_string(frame) + " ratio " +
+                            std::to_string(length(before[swing] - f.hips[swing]) / f.reach[swing]));
+                    last = swing; ++steps; start = before[swing];
+                }
+                if (previous >= 0 && swing < 0) {
+                    check(feet.feet()[previous].y - start.y > .24f, "a reach became another tiny step");
+                    ++landings;
+                }
+                for (int i = 0; i < 2; ++i) {
+                    if (previous != i && swing != i)
+                        near(length(feet.feet()[i] - before[i]), 0, .00001f);
+                    if (length(feet.feet()[i] - f.hips[i]) >= f.reach[i])
+                        throw std::runtime_error("leg exceeded reach: speed " + std::to_string(speed) +
+                            " frame " + std::to_string(frame) + " foot " + std::to_string(i) +
+                            " previous " + std::to_string(previous) + " swing " + std::to_string(swing));
+                    check(dot(feet.feet()[i] - f.hips[i], f.ahead) <= f.maxUp[i] + .001f,
+                        "contact rose beyond the reserved foot clearance below the pelvis");
+                }
+                if (swing >= 0 && f.hips[1 - swing].y - feet.feet()[1 - swing].y > .5f)
+                    ++supportFrames;
+            }
+            if (landings < 3 || supportFrames <= 10)
+                throw std::runtime_error("no long supporting-leg phase: speed " +
+                    std::to_string(speed) + " landings " + std::to_string(landings) +
+                    " support frames " + std::to_string(supportFrames));
+            for (int i = 0; i < 130; ++i) feet.update(f);
+            check(feet.swinging() < 0, "a stopped foot never finished its landing");
+            const auto stopped = feet.feet();
+            for (int i = 0; i < 100; ++i) feet.update(f);
+            for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - stopped[i]), 0);
+        }
+    });
+    test("outdoor body protocol preserves old commands and validates the surface frame", [] {
+        using namespace native_body;
+        check(commandFormat(1, 144) && commandFormat(2, 160) && commandFormat(3, 168) &&
+              commandFormat(4, 192) && commandFormat(5, 232) && commandFormat(6, 240) &&
+              commandFormat(7, 256) && commandFormat(8, 264) && commandFormat(9, 272),
+              "body command version lost compatibility");
+        check(!commandFormat(4, 232) && !commandFormat(5, 192) && !commandFormat(5, 240) &&
+              !commandFormat(6, 232) && !commandFormat(6, 256) && !commandFormat(7, 240) &&
+              !commandFormat(8, 272) && !commandFormat(9, 264),
+              "incompatible body size accepted");
+        Command c;
+        c.flags = crawl;
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = c.crawlStep = {0, 1, 0};
+        check(validCrawl(c), "valid crawl rejected");
+        c.crawlAhead = c.crawlNormal;
+        check(!validCrawl(c), "parallel crawl frame accepted");
+        c.crawlAhead = {0, 1, 0};
+        c.crawlPhase = std::numeric_limits<float>::quiet_NaN();
+        check(!validCrawl(c), "nonfinite crawl phase accepted");
+        c.crawlPhase = 0; c.version = 4;
+        check(!validCrawl(c), "legacy packet enabled a new crawl frame");
+        c.version = 5; c.crawlMotion = std::numeric_limits<float>::quiet_NaN();
+        check(validCrawl(c), "version 5 read the absent motion field");
+        c.version = 6;
+        check(!validCrawl(c), "nonfinite crawl motion accepted");
+        c.crawlMotion = -1;
+        check(!validCrawl(c), "negative crawl motion accepted");
+        c.crawlMotion = 1.1f;
+        check(!validCrawl(c), "excess crawl motion accepted");
+        c.crawlMotion = 1;
+        check(validCrawl(c), "moving crawl rejected");
+        c.flags |= crawlPlanted;
+        check(!validCrawl(c), "old command enabled persistent contacts");
+        c.version = 7;
+        check(validCrawl(c), "valid planted contacts rejected");
+        c.crawlOrigin.x = std::numeric_limits<float>::quiet_NaN();
+        check(!validCrawl(c), "nonfinite planted origin accepted");
+        c.crawlOrigin = {}; c.flags |= crawlHandSync;
+        check(!validCrawl(c), "old command enabled hand-synced steps");
+        c.version = 8;
+        check(validCrawl(c), "hand-synced command rejected");
+        c.version = 9;
+        for (float distance : {.1f, .4f, 1.f}) {
+            c.crawlDistance = distance;
+            check(validCrawl(c), "valid saved distance rejected");
+        }
+        for (float distance : {0.f, .09f, 1.01f, std::numeric_limits<float>::quiet_NaN()}) {
+            c.crawlDistance = distance;
+            check(!validCrawl(c), "invalid saved distance accepted");
+        }
+        c.crawlDistance = .4f;
+        c.flags &= ~crawlPlanted;
+        check(!validCrawl(c), "hand cues accepted without foot contacts");
+    });
+    test("body: outdoor crawl bends legs against the wall and preserves bone lengths", [] {
+        const auto b = testBody(true);
+        for (const Vec3 n : {Vec3{0, 0, 1}, Vec3{1, 0, 0}, Vec3{0, 0, -1}, Vec3{0, -1, 0}}) {
+            const Vec3 up = std::abs(n.y) < .5f ? Vec3{0, 1, 0} : Vec3{0, 0, -1};
+            body::Targets t;
+            t.head = t.crawl = t.airborne = true;
+            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            t.crawlPhase = .7f;
+            t.eyes = n * .4f + up;
+            t.facing = body::fromAxes(cross(-n, up), up, n);
+            body::Config c;
+            c.hideHead = false;
+            body::State state;
+            body::Result result;
+            const auto pose = solved(b, t, state, c, 1, &result);
+            check(result.solved && result.grounded, "crawl was not solved as a supported body");
+            for (const auto& leg : b.rig.legs) {
+                const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                const Vec3 foot = b.at(pose, leg.foot);
+                check(dot(foot, n) > .03f && dot(foot, n) < .2f, "crawl foot left its surface");
+                check(dot(knee, n) > dot(foot, n), "knee bent into the wall");
+                check(length(cross(normalized(knee - hip), normalized(foot - knee))) > .1f,
+                      "crawl leg stayed straight");
+                near(length(knee - hip), length(b.at(b.rest, leg.lower) - b.at(b.rest, leg.upper)));
+                near(length(foot - knee), length(b.at(b.rest, leg.foot) - b.at(b.rest, leg.lower)));
+            }
+        }
+    });
+    test("body: looking down at distant walls keeps a compact raised and splayed knee crouch", [] {
+        const auto b = testBody();
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float phase : {0.f, 1.5707963f, 3.14159265f, 4.712389f})
+                    for (bool raised : {false, true}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.airborne = true;
+                        t.eyes = Vec3{0, 1, clearance} * scale;
+                        t.facing = Quat::around({1, 0, 0}, -1.2f);
+                        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                        t.crawlPhase = phase;
+                        auto source = b.rest;
+                        if (raised) {
+                            body::Pose view(source.data(), static_cast<int>(b.rig.parent.size()));
+                            for (const auto& leg : b.rig.legs)
+                                view.turn(b.rig.below[leg.upper], Quat::around({1, 0, 0}, -1.2f),
+                                          view.position(leg.upper));
+                        }
+                        body::State state;
+                        const auto pose = solved(b, t, state, {}, scale, nullptr, &source);
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                            const Vec3 ankle = b.at(pose, leg.foot);
+                            const float reach = (b.rig.thigh[i] + b.rig.shin[i]) * scale;
+                            // The photo's extended shins passed a slight-bend check. Require a crouch
+                            // throughout the stride, including the game's already raised air pose.
+                            check(length(ankle - hip) < reach * .75f, "leg extended out of its crouch");
+                            check(knee.y > hip.y + .02f * scale, "knee hung below the hips");
+                            check((knee.x - hip.x) * (i ? 1.f : -1.f) > .2f * scale,
+                                  "knee folded toward the viewer instead of to the side");
+                            check(ankle.z > .03f * scale && ankle.z < .2f * scale,
+                                  "foot stopped following the wall");
+                            near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                            near(length(ankle - knee), b.rig.shin[i] * scale, .001f);
+                        }
+                    }
+    });
+    test("body: tucking the hips preserves the tracked head through gaze and controller roll", [] {
+        const auto b = testBody();
+        for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float pitch : {-1.2f, 0.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.airborne = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                t.crawlNormal = {0, 0, 1};
+                t.crawlAhead = t.crawlStep = t.tilt.rotate({0, 1, 0});
+                t.eyes = Vec3{0, 0, .75f} + t.crawlAhead;
+                t.facing = t.tilt * Quat::yaw(.6f) * Quat::around({1, 0, 0}, pitch);
+                body::Config c;
+                c.hideHead = false;
+                body::State state;
+                const auto pose = solved(b, t, state, c);
+                body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+                const Vec3 f = t.facing.rotate({0, 0, -1}), u = t.facing.rotate({0, 1, 0});
+                const Vec3 target = t.eyes - f * b.rig.eyesFromHead.x - u * b.rig.eyesFromHead.y -
+                    cross(u, f) * b.rig.eyesFromHead.z;
+                near(length(view.position(b.rig.head) - target), 0, .001f);
+                near(length(view.direction(b.rig.head, b.rig.headForward) - f), 0, .001f);
+                near(length(view.direction(b.rig.head, b.rig.headUp) - u), 0, .001f);
+                check(view.position(b.rig.pelvis).z < .45f, "hips followed the distant headset");
+                for (const auto& leg : b.rig.legs)
+                    check(length(view.position(leg.foot) - view.position(leg.upper)) <
+                          (b.rig.thigh[0] + b.rig.shin[0]) * .75f, "roll straightened the legs");
+            }
+    });
+    test("body: moving wall crawl opens and lowers both feet while retaining bent legs in rolled frames", [] {
+        const auto b = testBody();
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (float phase : {0.f, 1.5707963f, 3.14159265f, 4.712389f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), left = t.tilt.rotate({-1, 0, 0});
+                        t.eyes = (Vec3{0, 0, clearance} + up) * scale;
+                        t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                        t.crawlPhase = phase;
+                        body::State state, movingState;
+                        const auto resting = solved(b, t, state, {}, scale);
+                        t.crawlMotion = 1;
+                        const auto moving = solved(b, t, movingState, {}, scale);
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 hip = b.at(moving, leg.upper), knee = b.at(moving, leg.lower);
+                            const Vec3 foot = b.at(moving, leg.foot), before = b.at(resting, leg.foot);
+                            check(dot(foot - before, up) < -.15f * scale,
+                                  "moving foot did not reach farther below the resting pose");
+                            check(dot(foot - before, left) * (i ? -1.f : 1.f) > .1f * scale,
+                                  "moving foot did not open to its side");
+                            check(dot(foot - hip, up) < -.15f * scale, "moving foot reached above the hip");
+                            check(length(foot - hip) < (b.rig.thigh[i] + b.rig.shin[i]) * scale * .9f,
+                                  "moving crawl straightened a leg");
+                            near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                            near(length(foot - knee), b.rig.shin[i] * scale, .001f);
+                            check(foot.z > .03f * scale && foot.z < .2f * scale, "moving foot left the wall");
+                        }
+                        // Only the feet/knees change stance; the approved hips and head do not jump.
+                        near(length(b.at(resting, b.rig.pelvis) - b.at(moving, b.rig.pelvis)), 0);
+                        near(length(b.at(resting, b.rig.head) - b.at(moving, b.rig.head)), 0);
+                        t.crawlMotion = 0;
+                        const auto stopped = solved(b, t, movingState, {}, scale);
+                        for (size_t i = 0; i < resting.size(); ++i) near(stopped[i], resting[i]);
+                    }
+    });
+    test("body: moving knees sit 35 percent lower than Preview 3 through the stride and controller roll", [] {
+        const auto b = testBody();
+        // Knee heights above the ankles captured from Preview 3's solved pose,
+        // at phases 0, pi/2 and pi, 40 cm camera clearance, looking down.
+        const float previous[3][2] = {{.287628f, .3628939f}, {.3326888f, .3638198f}, {.3628941f, .287628f}};
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (int phase = 0; phase < 3; ++phase) {
+                    body::Targets t;
+                    t.head = t.crawl = t.airborne = true;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0});
+                    t.eyes = (Vec3{0, 0, .4f} + up) * scale;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.crawlPhase = phase * 1.5707963f;
+                    t.crawlMotion = 1;
+                    body::State state;
+                    const auto pose = solved(b, t, state, {}, scale);
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 knee = b.at(pose, leg.lower), foot = b.at(pose, leg.foot);
+                        near(dot(knee - foot, up), previous[phase][i] * .65f * scale, .001f);
+                        check(knee.z > 0, "lower knee entered the wall");
+                    }
+                }
+    });
+    test("body: feet remain planted through pulls, actor yaw and controller roll", [] {
+        const auto b = testBody();
+        for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float speed : {.5f, 2.5f})
+                for (float scale : {.85f, 1.2f})
+                  for (Vec3 travel : {Vec3{0, 1, 0}, Vec3{0, -1, 0}, Vec3{1, 0, 0},
+                                      normalized(Vec3{-1, 1, 0})})
+                   for (bool synced : {false, true}) {
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    const Quat chosen = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = chosen.rotate({0, 1, 0});
+                    Vec3 origin{30, 40, 50};
+                    std::array<Vec3, 2> before{};
+                    std::array<Vec3, 2> beforeToe{};
+                    for (int frame = 0; frame < 100; ++frame) {
+                        if (frame) origin += chosen.rotate(travel) * (speed * .01f);
+                        const Quat model = Quat::yaw(frame * .007f), back = model.conjugate();
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                        t.crawlMotion = 1;
+                        t.crawlHandSync = synced;
+                        t.crawlStrokes = {static_cast<uint32_t>((frame + 15) / 16),
+                                          static_cast<uint32_t>((frame + 7) / 16)};
+                        t.crawlOrigin = origin; t.crawlModelToWorld = model;
+                        t.crawlNormal = back.rotate({0, 0, 1});
+                        t.crawlAhead = t.crawlStep = back.rotate(up);
+                        t.eyes = back.rotate((Vec3{0, 0, .4f} + up) * scale);
+                        t.facing = back * chosen * Quat::around({1, 0, 0}, -1.2f);
+                        t.tilt = back * chosen * model;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int previous = state.crawlFeet.swinging();
+                        const auto result = body::solve(view, b.rig, t, {}, state, true, .01f, scale);
+                        check(result.solved, "planted crawl body did not solve");
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 foot = origin + model.rotate(b.at(pose, b.rig.legs[i].foot));
+                            if (length(foot - state.crawlFeet.feet()[i]) >= .003f)
+                                throw std::runtime_error("contact unreachable: speed " +
+                                  std::to_string(speed) + " scale " +
+                                  std::to_string(scale) + " frame " + std::to_string(frame) + " foot " +
+                                  std::to_string(i) + " roll " + std::to_string(roll) + " synced " +
+                                  std::to_string(synced) + " direction " + std::to_string(travel.x) + "," +
+                                  std::to_string(travel.y) + " swing " +
+                                  std::to_string(state.crawlFeet.swinging()) + " error " +
+                                  std::to_string(length(foot - state.crawlFeet.feet()[i])) + " previous " +
+                                  std::to_string(previous) + " reach " + std::to_string(length(
+                                      state.crawlFeet.feet()[i] - origin - model.rotate(
+                                          b.at(pose, b.rig.legs[i].upper)))));
+                            if (frame && previous != i && state.crawlFeet.swinging() != i)
+                                check(length(foot - before[i]) < .003f, "planted foot drifted between poses");
+                            const Vec3 toe = origin + model.rotate(b.at(pose, i ? 28 : 24));
+                            if (synced) {
+                                const Vec3 hip = origin + model.rotate(b.at(pose, b.rig.legs[i].upper));
+                                const Vec3 knee = origin + model.rotate(b.at(pose, b.rig.legs[i].lower));
+                                const Vec3 axis = normalized(foot - hip);
+                                const Vec3 bend = knee - hip - axis * dot(knee - hip, axis);
+                                const Vec3 outward = chosen.rotate({i ? 1.f : -1.f, 0, 0});
+                                check(dot(bend, outward) > 0,
+                                    "a sideways or rolled crawling knee bent across the body");
+                                const Vec3 pelvis = origin + model.rotate(b.at(pose, b.rig.hipRoot));
+                                check(dot(foot - pelvis, outward) >= .1f * scale - .003f,
+                                    "crawling ankle crossed its side of the body centre");
+                                check(dot(foot - pelvis, up) < 0,
+                                    "crawling ankle rose above the pelvis");
+                                check(dot(toe - pelvis, up) <= .001f * scale,
+                                    "crawling toes rose above the pelvis");
+                                const Vec3 forward = normalized(model.rotate(
+                                    view.direction(b.rig.legs[i].foot, b.rig.footForward[i])));
+                                const Vec3 soleUp = normalized(model.rotate(
+                                    view.direction(b.rig.legs[i].foot, b.rig.footUp[i])));
+                                const Vec3 toeTop = foot + forward * (b.rig.forefootLength[i] * scale) +
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                check(dot(toeTop - pelvis, up) < 0,
+                                    "upper toe outline rose above the pelvis");
+                                check(dot(forward, outward) > .4f,
+                                    "crawling foot failed to turn outward with the body");
+                                const Vec3 heel = foot - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                check(dot(heel - pelvis, outward) > 0,
+                                    "crawling heel crossed the centre into the other foot's side");
+                            }
+                            if (synced && previous != i && state.crawlFeet.swinging() != i) {
+                                near(toe.z, origin.z, .003f);
+                                if (frame) check(length(toe - beforeToe[i]) < .003f,
+                                    "supporting toes slid as the body moved past them");
+                            }
+                            before[i] = foot;
+                            beforeToe[i] = toe;
+                        }
+                    }
+                }
+    });
+    test("body: sideways reversals keep feet separated without sliding their planted contacts", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    const Quat selected = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = selected.rotate({0, 1, 0});
+                    Vec3 origin{20, 30, 40};
+                    std::array<Vec3, 2> before{};
+                    for (int frame = 0; frame < 450; ++frame) {
+                        Vec3 travel{};
+                        if (frame >= 30 && frame < 150) travel = {1, 0, 0};
+                        if (frame >= 180 && frame < 300) travel = {-1, 0, 0};
+                        if (frame >= 300 && frame < 420) travel = normalized(Vec3{1, -1, 0});
+                        origin += selected.rotate(travel) * .008f;
+                        const Quat model = Quat::yaw(frame * .004f), back = model.conjugate();
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.crawlDistance = .4f;
+                        t.crawlOrigin = origin; t.crawlModelToWorld = model;
+                        t.crawlNormal = back.rotate({0, 0, 1});
+                        t.crawlAhead = t.crawlStep = back.rotate(up);
+                        t.crawlMotion = length(travel) > 0 ? 1.f : 0.f;
+                        t.crawlStrokes = {static_cast<uint32_t>(frame / 40),
+                                          static_cast<uint32_t>((frame + 20) / 40)};
+                        t.eyes = back.rotate(up * scale + Vec3{0, 0, .4f});
+                        t.facing = back * selected;
+                        t.tilt = back * selected * model;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int previous = state.crawlFeet.swinging();
+                        body::solve(view, b.rig, t, {}, state, true, .01f, scale);
+                        const Vec3 pelvis = origin + model.rotate(b.at(pose, b.rig.hipRoot));
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 foot = origin + model.rotate(b.at(pose, leg.foot));
+                            const Vec3 toe = origin + model.rotate(b.at(pose, i ? 28 : 24));
+                            const Vec3 side = selected.rotate({i ? 1.f : -1.f, 0, 0});
+                            check(dot(foot - pelvis, side) >= .1f * scale - .003f,
+                                "a sideways step crossed the body's middle");
+                            check(dot(toe - pelvis, side) > 0, "opposite toe crossed the centre plane");
+                            check(dot(toe - pelvis, up) < 0, "sideways step raised toes above pelvis");
+                            const Vec3 forward = normalized(model.rotate(
+                                view.direction(leg.foot, b.rig.footForward[i])));
+                            const Vec3 soleUp = normalized(model.rotate(
+                                view.direction(leg.foot, b.rig.footUp[i])));
+                            const Vec3 heel = foot - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                soleUp * (b.rig.ankleHeight[i] * scale);
+                            const float halfWidth = b.rig.forefootLength[i] * .35f * scale;
+                            const float inside = dot(heel - pelvis, side) -
+                                halfWidth * std::abs(dot(normalized(cross(soleUp, forward)), side));
+                            check(inside > 0, "inner heel edge crossed the body centre with long boots");
+                            if (frame && previous != i && state.crawlFeet.swinging() != i)
+                                check(length(foot - before[i]) < .003f,
+                                    "centre boundary dragged a planted foot instead of making a step");
+                            before[i] = foot;
+                        }
+                    }
+                }
+    });
+    test("body: hand pulls accumulate into long alternating steps after full leg extension", [] {
+        const auto verify = [](const TestBody& b, float distance) {
+            body::State state;
+            state.weight = state.crawlWeight = 1;
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.eyes = {0, 1, .4f};
+            t.crawlDistance = distance;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            int steps = 0, landings = 0, extended = 0, lastStep = -1;
+            Vec3 start{};
+            for (int frame = 0; frame < 800; ++frame) {
+                const int cycle = frame < 50 ? 0 : (frame - 50) / 80;
+                const int phase = frame < 50 ? 79 : (frame - 50) % 80;
+                const bool pulling = frame >= 50 && frame < 610 && phase < 50;
+                if (pulling && phase == 3) ++t.crawlStrokes[cycle % 2];
+                if (pulling) t.crawlOrigin.y += .006f;
+                t.crawlMotion = std::clamp(t.crawlMotion + (pulling ? .06f : -.04f), 0.f, 1.f);
+                const auto before = state.crawlFeet.feet();
+                const int previous = state.crawlFeet.swinging();
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                if (b.rig.hipRoot != b.rig.pelvis)
+                    view.turn(b.rig.below[b.rig.hipRoot], Quat::around({1, 0, 0}, std::sin(frame * .1f)),
+                              view.position(b.rig.hipRoot));
+                body::solve(view, b.rig, t, {}, state, true, .01f);
+                const int swing = state.crawlFeet.swinging();
+                for (const int joint : {23, 24, 27, 28})
+                    check(b.at(pose, joint).y < b.at(pose, b.rig.hipRoot).y,
+                        "a long crawling step raised the foot above the pelvis");
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                    const Vec3 axis = normalized(b.at(pose, leg.foot) - hip);
+                    const Vec3 bend = knee - hip - axis * dot(knee - hip, axis);
+                    check(bend.x * (i ? 1.f : -1.f) > .001f,
+                        "a crawling knee turned inward while its leg straightened");
+                }
+                if (previous < 0 && swing >= 0) {
+                    check(swing != lastStep, "full reaches did not alternate feet");
+                    if (!steps) check(swing == 1, "the entry step lost its opposite-hand cue");
+                    else {
+                        const auto& leg = b.rig.legs[swing];
+                        const Vec3 hip = b.at(pose, leg.upper);
+                        const Vec3 knee = b.at(pose, leg.lower), ankle = b.at(pose, leg.foot);
+                        const float reach = b.rig.thigh[swing] + b.rig.shin[swing];
+                        check(length(ankle - hip) > reach * .985f,
+                            "the next step began before the planted leg reached full extension");
+                        check(dot(normalized(knee - hip), normalized(ankle - knee)) > .93f,
+                            "the leg still looked folded before the next step");
+                    }
+                    lastStep = swing;
+                    start = before[swing]; ++steps;
+                }
+                if (previous >= 0 && swing < 0) {
+                    if (landings) check(state.crawlFeet.feet()[previous].y - start.y > .6f,
+                        "extended-leg step lost its larger reach");
+                    ++landings;
+                }
+                if (swing >= 0) {
+                    const auto& leg = b.rig.legs[1 - swing];
+                    const float down = b.at(pose, leg.upper).y - b.at(pose, leg.foot).y;
+                    if (down > .5f) {
+                        const float kneeDown = b.at(pose, leg.upper).y - b.at(pose, leg.lower).y;
+                        if (kneeDown <= .2f)
+                            throw std::runtime_error("high supporting knee: distance " +
+                                std::to_string(distance) + " frame " + std::to_string(frame) +
+                                " foot down " + std::to_string(down) + " knee down " +
+                                std::to_string(kneeDown));
+                        ++extended;
+                    }
+                }
+            }
+            if (!(steps >= 3 && steps <= 7 && landings == steps))
+                throw std::runtime_error("extended steps " + std::to_string(steps) +
+                    " landings " + std::to_string(landings));
+            check(extended > 20, "the supporting leg never extended while the opposite foot reached");
+        };
+        verify(testBody(), 0);
+        verify(splitPelvisBody(), 0);
+        verify(testBody(), .4f);
+        verify(splitPelvisBody(), .4f);
+    });
+    test("body: planted crawl puts knees below the hips with less sideways flare at rest and in motion", [] {
+        const auto b = testBody();
+        for (float moving : {0.f, 1.f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                    t.crawlMotion = moving;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), side = t.tilt.rotate({1, 0, 0});
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.eyes = Vec3{0, 0, clearance} + up;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                    body::State state;
+                    const auto pose = solved(b, t, state);
+                    for (const auto& leg : b.rig.legs) {
+                        const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                        const Vec3 foot = b.at(pose, leg.foot);
+                        check(dot(knee - hip, up) < -.05f, "knee stayed raised alongside the waist");
+                        check(std::abs(dot(knee - hip, side)) < .3f, "knee kept the wide crab flare");
+                        near(length(knee - hip), b.rig.thigh[0], .001f);
+                        near(length(foot - knee), b.rig.shin[0], .001f);
+                        near(foot.z, .08f, .001f);
+                    }
+                }
+    });
+    test("body: planted legs remain reachable while a two-grip roll turns about a stationary head", [] {
+        const auto b = testBody();
+        for (bool synced : {false, true}) {
+        body::State state;
+        state.weight = state.crawlWeight = 1;
+        for (int frame = 0; frame < 100; ++frame) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+            t.crawlHandSync = synced;
+            t.tilt = Quat::around({0, 0, 1}, frame * 3.14159265f / 99);
+            t.eyes = {0, 1, .4f}; // gesture rotates about this head; it does not orbit the feet
+            t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+            t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = t.tilt.rotate({0, 1, 0});
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, .01f);
+            for (int i = 0; i < 2; ++i)
+                near(length(b.at(pose, b.rig.legs[i].foot) - state.crawlFeet.feet()[i]), 0, .002f);
+            check(state.crawlFeet.swinging() < 0, "gesture roll invented a walking step");
+        }
+        }
+    });
+    test("body: confirmed wall hand flags retain the version 9 packet and reject stale formats", [] {
+        using namespace native_body;
+        Command command;
+        command.crawlNormal = {0, 0, 1}; command.crawlAhead = command.crawlStep = {0, 1, 0};
+        for (unsigned hands = 0; hands < 4; ++hands) {
+            command.flags = crawl | crawlPlanted | crawlHandSync | crawlHandFlags(hands);
+            check(validCrawl(command), "confirmed wall hands invalidated the current crawl packet");
+            check(crawlHandMask(command.flags) == hands, "left/right attachment flags changed sides");
+            check(sizeof(command) == 304 && commandFormat(9, commandBytesV10) && commandFormat(16, sizeof(command)),
+                  "wall flags changed the ABI");
+        }
+        command.flags &= ~crawlHandSync;
+        check(!validCrawl(command), "support flags accepted outside hand-synced crawling");
+        command.flags |= crawlHandSync;
+        command.version = 8;
+        check(!validCrawl(command), "legacy version interpreted new support flags");
+        command.flags &= ~(crawlLeftHeld | crawlRightHeld);
+        check(validCrawl(command), "legacy crawl packet lost compatibility");
+        command.version = 9;
+        for (unsigned touches = 0; touches < 4; ++touches) {
+            command.flags = crawl | crawlPlanted | crawlHandSync | crawlTouchFlags(touches) | crawlTurnAway;
+            check(validCrawl(command), "collision/outward flags rejected the current pose");
+            check(crawlTouchMask(command.flags) == touches && crawlHandMask(command.flags) == 0,
+                  "touch contact was confused with a grip attachment");
+        }
+        command.version = 8;
+        check(!validCrawl(command), "old version accepted collision/outward pose flags");
+    });
+    test("body: one supporting hand permits mirrored upper-spine turns with fixed head hips and feet", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (int free = 0; free < 2; ++free) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                        t.eyes = up * scale + normal * .4f; t.crawlDistance = .4f;
+                        t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                        const float direction = free == 0 ? 1.f : -1.f;
+                        t.facing = t.tilt * Quat::yaw(direction * 2.f);
+                        t.crawlHands = 1u << (1 - free);
+                        for (int i = 0; i < 2; ++i) {
+                            const float side = i ? 1.f : -1.f;
+                            const Vec3 grip{side * (i == free ? .38f : .25f) * scale,
+                                            .75f * scale, i == free ? .55f : .035f};
+                            t.hands[i] = {true, t.tilt.rotate(grip), t.tilt};
+                        }
+                        body::Config config; config.hideHead = false;
+                        auto previous = config; previous.crawlTorsoTwist = 0;
+                        body::State oldState, state;
+                        body::Result result;
+                        const auto old = solved(b, t, oldState, previous, scale);
+                        auto pose = solved(b, t, state, config, scale, &result);
+                        for (int frame = 0; frame < 90; ++frame) {
+                            pose = b.rest;
+                            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                            result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        }
+                        check(state.crawlTwist * direction > .45f,
+                              "the upper body remained fixed to the wall");
+                        const int shoulder = b.rig.arms[free].upper;
+                        check(dot(b.at(pose, shoulder) - b.at(old, shoulder), normal) > .05f * scale,
+                              "the reaching shoulder did not open away from the wall");
+                        for (const int joint : {b.rig.head, b.rig.hipRoot, 21, 22, 23, 25, 26, 27})
+                            near(length(b.at(pose, joint) - b.at(old, joint)), 0, .002f);
+                        for (int i = 0; i < 2; ++i) {
+                            near(result.handError[i], 0, .002f);
+                            near(length(b.at(pose, b.rig.arms[i].hand) - wristOf(t.hands[i], i)),
+                                 0, .002f);
+                            near(length(state.crawlFeet.feet()[i] - oldState.crawlFeet.feet()[i]), 0, .002f);
+                        }
+                        for (int joint = 2; joint < static_cast<int>(b.rig.parent.size()); ++joint) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(b.at(pose, joint) - b.at(pose, parent)),
+                                 length(b.at(old, joint) - b.at(old, parent)), .002f);
+                        }
+                    }
+    });
+    test("body: looking and free-hand reaching each turn shoulders but looking down does not turn hips", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 4; ++mode) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 1;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.hands[0] = {true, {-.25f, .75f, .035f}, {}};
+            t.hands[1] = {true, {.3f, .75f, mode == 1 ? .7f : .1f}, {}};
+            if (mode == 0) t.facing = Quat::yaw(-1.5f);
+            if (mode == 2) t.facing = Quat::around({1, 0, 0}, -1.5f);
+            body::State state;
+            solved(b, t, state);
+            if (mode < 2)
+                check(state.crawlTwist < -.25f, "looking or reaching failed to turn the shoulders");
+            else
+                near(state.crawlTwist, 0, .001f);
+        }
+    });
+    test("body: one-hand twist crosses the back smoothly and settles on a two-hand hold", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 2;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.38f, .75f, .55f}, {}};
+        t.hands[1] = {true, {.25f, .75f, .035f}, {}};
+        body::State state;
+        state.weight = state.crawlWeight = 1;
+        Vec3 previousShoulder{};
+        for (int frame = 0; frame < 300; ++frame) {
+            t.facing = Quat::yaw(1.8f + frame * .006f);
+            const float previous = state.crawlTwist;
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+            check(state.crawlTwist >= 0, "looking across the back reversed the shoulder turn");
+            check(std::abs(state.crawlTwist - previous) <= 2.4f / 90 + .001f, "shoulders snapped");
+            if (frame) check(length(view.position(b.rig.arms[0].upper) - previousShoulder) < .025f,
+                             "the visible shoulder popped at the backward look seam");
+            previousShoulder = view.position(b.rig.arms[0].upper);
+        }
+        t.crawlHands = 3; t.facing = {};
+        t.hands[0].grip = {-.25f, .75f, .035f};
+        for (int frame = 0; frame < 100; ++frame) {
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        near(state.crawlTwist, 0, .001f);
+    });
+    test("body: shoulder turns stay within the supporting arm's real reach", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 1;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.48f, .75f, .035f}, {}};
+        t.hands[1] = {true, {-.3f, .75f, .7f}, {}};
+        t.facing = Quat::yaw(2.f);
+        body::State state;
+        body::Result result;
+        auto pose = solved(b, t, state, {}, 1, &result);
+        for (int frame = 0; frame < 90; ++frame) {
+            pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        check(state.crawlTwist > .01f && state.crawlTwist < 1.15f, "attached-arm reach did not limit twist");
+        near(result.handError[0], 0, .002f);
+        near(length(b.at(pose, b.rig.arms[0].hand) - wristOf(t.hands[0], 0)), 0, .002f);
+    });
+    test("body: gaze does not twist unheld two-hand ground vent or stock crawling bodies", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 5; ++mode) {
+            body::Targets t;
+            t.head = true; t.eyes = {0, 1, .4f}; t.facing = Quat::yaw(-2.f);
+            t.crawl = mode != 3; t.crawlHandSync = mode != 4; t.crawlPlanted = true;
+            t.crawlHands = mode == 0 ? 0 : mode == 1 ? 3 : 1;
+            t.crawlDistance = .4f;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.hands[0] = {mode != 2, {-.25f, .75f, .035f}, {}};
+            t.hands[1] = {true, {.38f, .75f, .55f}, {}};
+            body::Config previous; previous.crawlTorsoTwist = 0;
+            body::State oldState, state;
+            const auto old = solved(b, t, oldState, previous);
+            const auto pose = solved(b, t, state);
+            near(state.crawlTwist, 0, .001f);
+            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                near(length(b.at(pose, joint) - b.at(old, joint)), 0, .001f);
+        }
+    });
+    test("body: solid palm contact enables the same shoulder turn without grip attachment", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.25f, .75f, .035f}, {}};
+        t.hands[1] = {true, {.38f, .75f, .55f}, {}};
+        t.facing = Quat::yaw(-2.f);
+        body::State gripped, touched;
+        t.crawlHands = 1;
+        const auto before = solved(b, t, gripped);
+        t.crawlHands = 0; t.crawlTouches = 1;
+        const auto after = solved(b, t, touched);
+        check(touched.crawlTwist < -.4f, "touching a wall did not open the reaching shoulder");
+        near(touched.crawlTwist, gripped.crawlTwist, .001f);
+        for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+            near(length(b.at(after, joint) - b.at(before, joint)), 0, .001f);
+    });
+    test("feet-supported half-turns step one forefoot at a time and return without crossing shoes", [] {
+        for (float scale : {.85f, 1.2f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float direction : {-1.f, 1.f}) {
+                    CrawlTurn turn;
+                    CrawlTurn::Frame f;
+                    const Quat rotation = Quat::yaw(.7f) * Quat::around({0, 0, 1}, roll);
+                    const auto world = [&](Vec3 p) { return rotation.rotate(p); };
+                    f.head = world({0, 1 * scale, .32f});
+                    f.pelvis = world({0, .32f * scale, .45f});
+                    f.normal = world({0, 0, 1}); f.up = world({0, 1, 0});
+                    f.seconds = 1.f / 90; f.scale = scale; f.direction = direction;
+                    f.mayStart = f.wanted = true;
+                    for (int i = 0; i < 2; ++i) {
+                        const float side = i ? 1.f : -1.f;
+                        f.hips[i] = world({side * .1f * scale, .27f * scale, .45f});
+                        f.shoulders[i] = world({side * .18f * scale, .78f * scale, .36f});
+                        f.contacts[i] = world({side * .3f * scale, -.14f * scale, 0});
+                        f.reach[i] = .87f * scale; f.armReach[i] = .56f * scale;
+                        f.ankle[i] = .14f * scale; f.lead[i] = .06f * scale; f.span[i] = .329f * scale;
+                    }
+                    for (int phase = 0; phase < 2; ++phase) {
+                        f.wanted = phase == 0;
+                        for (int frame = 0; frame < 180; ++frame) {
+                            const auto before = turn.feet();
+                            const int previous = turn.swinging();
+                            turn.update(f);
+                            const auto& feet = turn.feet();
+                            check(std::min(dot(feet[0], f.normal), dot(feet[1], f.normal)) < .001f,
+                                  "both feet left the wall during a turn");
+                            for (int i = 0; i < 2; ++i) {
+                                check(dot(feet[i] - f.pelvis, f.up) < -.075f * scale,
+                                      "turning raised a foot above the pelvis");
+                                if ((phase || frame) && previous != i && turn.swinging() != i)
+                                    near(length(feet[i] - before[i]), 0, .0001f);
+                            }
+                            const Vec3 delta = feet[0] - feet[1];
+                            check(std::abs(dot(delta, cross(f.normal, f.up))) > .14f * scale ||
+                                  std::abs(dot(delta, f.up)) > .344f * scale,
+                                  "turning shoes crossed through each other");
+                        }
+                        near(turn.angle(), phase ? 0 : direction * 3.14159265f, .001f);
+                        check(turn.outward() == (phase == 0), "the stepped turn failed to reach its pose");
+                    }
+                }
+    });
+    test("feet-supported turns hold repeated samples and refuse a stance without physical room", [] {
+        CrawlTurn turn;
+        CrawlTurn::Frame f;
+        f.head = {0, 1, .32f}; f.pelvis = {0, .32f, .45f};
+        f.normal = {0, 0, 1}; f.up = {0, 1, 0}; f.seconds = 1.f / 90;
+        f.mayStart = f.wanted = true;
+        for (int i = 0; i < 2; ++i) {
+            const float side = i ? 1.f : -1.f;
+            f.hips[i] = {side * .1f, .27f, .45f}; f.shoulders[i] = {side * .18f, .78f, .36f};
+            f.contacts[i] = {side * .3f, -.14f, 0};
+            f.reach[i] = .87f; f.armReach[i] = .56f; f.ankle[i] = .14f; f.lead[i] = .06f;
+            f.span[i] = .23f;
+        }
+        for (int frame = 0; frame < 150; ++frame) turn.update(f);
+        check(turn.outward(), "reference outward stance was refused");
+        const auto before = turn.feet(); const float angle = turn.angle();
+        f.seconds = 0;
+        for (int frame = 0; frame < 8; ++frame) turn.update(f);
+        near(turn.angle(), angle);
+        for (int i = 0; i < 2; ++i) near(length(turn.feet()[i] - before[i]), 0);
+        f.seconds = std::numeric_limits<float>::quiet_NaN();
+        check(!turn.update(f) && !turn.engaged(), "invalid frame retained the outward stance");
+        f.seconds = 1.f / 90;
+        for (int i = 0; i < 2; ++i) f.shoulders[i].z = .1f;
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(turn.outward(), "usable shoulder clearance unnecessarily blocked the close stance");
+        turn.reset();
+        for (int i = 0; i < 2; ++i) f.shoulders[i].z = 0;
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(!turn.engaged(), "turning carried the shoulder through the known wall");
+        turn.reset();
+        f.head.z = 1.08f; f.pelvis.z = 1.2f;
+        for (int i = 0; i < 2; ++i) { f.hips[i].z = 1.2f; f.shoulders[i].z = 1.12f; }
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(!turn.engaged(), "the feet-supported pose exceeded actual leg reach");
+    });
+    test("feet-supported turns can enter outward immediately and return in either yaw direction", [] {
+        for (float entryDirection : {-1.f, 1.f})
+            for (float returnDirection : {-1.f, 1.f}) {
+                CrawlTurn turn;
+                CrawlTurn::Frame f;
+                f.head = {0, 1, .32f}; f.pelvis = {0, .32f, .45f};
+                f.normal = {0, 0, 1}; f.up = {0, 1, 0}; f.seconds = 1.f / 90;
+                f.entryOutward = f.wanted = f.mayStart = true; f.direction = entryDirection;
+                for (int i = 0; i < 2; ++i) {
+                    const float side = i ? 1.f : -1.f;
+                    f.hips[i] = {side * .1f, .27f, .45f};
+                    f.shoulders[i] = {side * .18f, .78f, .36f};
+                    f.contacts[i] = {side * .3f, -.14f, 0};
+                    f.reach[i] = .87f; f.armReach[i] = .56f;
+                    f.ankle[i] = .14f; f.lead[i] = .06f; f.span[i] = .329f;
+                }
+                turn.update(f);
+                check(turn.outward() && !turn.turning(), "outward entry played a wall-facing turn first");
+                near(turn.angle(), entryDirection * 3.14159265f, .001f);
+                for (auto foot : turn.feet()) near(dot(foot, f.normal), 0, .001f);
+                f.wanted = false; f.direction = returnDirection;
+                float previous = turn.angle();
+                bool moved = false;
+                for (int frame = 0; frame < 120; ++frame) {
+                    turn.update(f);
+                    const float delta = std::remainder(turn.angle() - previous, 6.2831853f);
+                    if (std::abs(delta) > .0001f) {
+                        moved = true;
+                        check(delta * returnDirection > 0, "the body returned against the requested turn");
+                    }
+                    previous = turn.angle();
+                }
+                check(moved && !turn.engaged(), "the outward entry did not step back to normal");
+            }
+    });
+    test("body: back-to-wall entry starts outward, including a downward look", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float direction : {-1.f, 1.f}) for (float scale : {.85f, 1.2f})
+                for (float pitch : {0.f, -1.4f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.crawlTurnAway = true; t.crawlDistance = .4f;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                        t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                        const int support = direction < 0 ? 0 : 1;
+                        t.crawlTouches = 1u << support;
+                        t.hands[support] = {true,
+                            t.tilt.rotate({direction * .12f * scale, .7f * scale, .035f}), t.tilt};
+                        t.facing = t.tilt * Quat::yaw(direction * 3.14159265f) *
+                                   Quat::around({1, 0, 0}, pitch);
+                        body::State state; state.weight = state.crawlWeight = 1;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::Config config; config.hideHead = false;
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        near(result.handError[support], 0, .005f);
+                        check(state.crawlTurn.outward() && !state.crawlTurn.turning(),
+                              "a back-to-wall entry first faced the building");
+                        near(dot(view.position(b.rig.hipRoot), n), .12f, .003f);
+                        check(dot(normalized(view.direction(b.rig.hipRoot, b.rig.hipForward)), n) > .6f,
+                              "the initial pelvis did not face outward");
+                        check(dot(normalized(view.direction(b.rig.head, b.rig.headForward)),
+                                  t.facing.rotate({0, 0, -1})) > .999f, "entry turned the tracked head");
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 toe = view.position(leg.foot) + normalized(
+                                view.direction(leg.foot, b.rig.footForward[i])) *
+                                    b.rig.forefootLength[i] * scale -
+                                normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                                    b.rig.ankleHeight[i] * scale;
+                            near(dot(toe, n), 0, .005f);
+                        }
+                    }
+    });
+    test("body: turning past a shoulder hands the pose to the hips in the same direction", [] {
+        const auto b = splitPelvisBody();
+        for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            const int support = direction < 0 ? 0 : 1;
+            t.crawlTouches = 1u << support;
+            t.hands[support] = {true, {direction * .12f, .7f, .035f}, {}};
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previous = 0; bool moved = false;
+            for (int frame = 0; frame < 240; ++frame) {
+                const float yaw = direction * 1.9198622f * std::clamp((frame - 40) / 40.f, 0.f, 1.f);
+                t.facing = Quat::yaw(yaw);
+                t.hands[1 - support] = {true, t.eyes + t.facing.rotate(
+                    {-direction * .3f, -.25f, -.25f}), t.facing};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                const float delta = std::remainder(state.crawlTurn.angle() - previous, 6.2831853f);
+                if (std::abs(delta) > .0001f) {
+                    moved = true;
+                    check(delta * direction > 0, "the hips turned against the opening shoulder");
+                }
+                previous = state.crawlTurn.angle();
+            }
+            check(moved && state.crawlTurn.outward(), "the body waited for an almost backward gaze");
+        }
+    });
+    test("body: continuing a full left or right turn does not unwind at the backward-look seam", [] {
+        const auto b = splitPelvisBody();
+        for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previous = 0; bool outward = false, returned = false;
+            Vec3 previousNeck{};
+            for (int frame = 0; frame < 700; ++frame) {
+                t.facing = Quat::yaw(direction * 6.2831853f * std::clamp((frame - 40) / 500.f, 0.f, 1.f));
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                const float delta = std::remainder(state.crawlTurn.angle() - previous, 6.2831853f);
+                check(delta * direction >= -.0001f, "the continuous turn suddenly unwound the other way");
+                previous = state.crawlTurn.angle();
+                const Vec3 neck = normalized(view.direction(b.rig.neck.front(), {1, 0, 0}));
+                if (frame) check(dot(neck, previousNeck) > .95f, "the neck snapped across a full-turn seam");
+                previousNeck = neck;
+                if (state.crawlTurn.engaged()) {
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                        near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                    }
+                    check(nearest < .005f, "the continuous turn detached both supporting toes");
+                }
+                outward = outward || state.crawlTurn.outward();
+                returned = returned || (outward && !state.crawlTurn.engaged());
+            }
+            check(outward && returned && !state.crawlTurn.engaged(),
+                  "the full turn lost a facing transition");
+        }
+    });
+    test("body: an outward feet-supported pose turns the chest and hips with tracked head orientation", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = true; t.crawlDistance = .4f;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                    t.eyes = up * scale + normal * .4f;
+                    t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                    body::Config config; config.hideHead = false;
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    std::vector<float> pose;
+                    for (int frame = 0; frame < 420; ++frame) {
+                        const float yaw = frame < 60 ? 0.f :
+                            -std::min(3.14159265f, static_cast<float>(frame - 60) * .045f);
+                        const Quat looking = Quat::yaw(yaw);
+                        t.facing = t.tilt * looking;
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 local = looking.rotate(
+                                {(i ? .3f : -.3f) * scale, -.25f * scale, -.25f});
+                            t.hands[i] = {true, t.eyes + t.tilt.rotate(local), t.facing};
+                        }
+                        pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const float anchorYaw = state.crawlTurn.angle();
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        auto reference = t; reference.crawlTurnAway = false;
+                        body::State oldState; oldState.weight = oldState.crawlWeight = 1;
+                        auto old = b.rest;
+                        body::Pose oldView(old.data(), static_cast<int>(b.rig.parent.size()));
+                        body::solve(oldView, b.rig, reference, config, oldState, true, 1.f / 90, scale);
+                        const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                        const Vec3 offset = F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                                            cross(U, F) * b.rig.eyesFromHead.z;
+                        const Vec3 anchorShift = (offset -
+                            Quat::around(up, anchorYaw - yaw).rotate(offset)) * scale *
+                            state.crawlTurn.outwardWeight(anchorYaw);
+                        const Vec3 bodyRaise = up * config.crawlEyeLift *
+                            state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        near(length(view.position(b.rig.head) - oldView.position(b.rig.head) -
+                                    anchorShift - bodyRaise),
+                             0, .002f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) - F), 0, .002f);
+                        const float outward = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        near(dot(view.position(b.rig.hipRoot), normal), .45f - .33f * outward, .003f);
+                        float nearest = 100;
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 ankle = view.position(leg.foot);
+                            const Vec3 footAhead = normalized(view.direction(leg.foot, b.rig.footForward[i]));
+                            const Vec3 soleUp = normalized(view.direction(leg.foot, b.rig.footUp[i]));
+                            const Vec3 toe = ankle + footAhead * (b.rig.forefootLength[i] * scale) -
+                                             soleUp * (b.rig.ankleHeight[i] * scale);
+                            nearest = std::min(nearest, std::abs(dot(toe, normal)));
+                            if (state.crawlTurn.engaged())
+                                near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                            check(dot(toe - view.position(b.rig.hipRoot), up) < -.01f,
+                                  "outward pose raised a toe above the pelvis");
+                            const Vec3 heel = ankle - footAhead * (b.rig.forefootLength[i] * .5f * scale) -
+                                              soleUp * (b.rig.ankleHeight[i] * scale);
+                            check(dot(heel - view.position(b.rig.hipRoot), up) < -.001f,
+                                  ("raised heel at " + std::to_string(frame) + ", height " +
+                                  std::to_string(dot(heel - view.position(b.rig.hipRoot), up))).c_str());
+                            near(length(view.position(leg.lower) - view.position(leg.upper)),
+                                 b.rig.thigh[i] * scale, .002f);
+                            near(length(ankle - view.position(leg.lower)), b.rig.shin[i] * scale, .002f);
+                        }
+                        if (state.crawlTurn.engaged())
+                            check(nearest < .005f, "the rendered supporting foot lost the wall");
+                        for (const int joint : b.rig.spine) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(oldView.position(joint) - oldView.position(parent)), .002f);
+                        }
+                    }
+                    check(state.crawlTurn.outward(), "looking fully away did not enter the outward pose");
+                    body::Pose result(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose rest(const_cast<float*>(b.rest.data()), static_cast<int>(b.rig.parent.size()));
+                    const int chest = b.rig.spine.back();
+                    const Vec3 chestForward = normalized(
+                        result.direction(chest, rest.local(chest, {0, 0, 1})));
+                    check(dot(chestForward, normal) > .6f, "the chest did not face away from the wall");
+                    check(dot(normalized(result.direction(b.rig.hipRoot, b.rig.hipForward)), normal) > .6f,
+                          "only the upper spine turned instead of the body changing stance");
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 footAhead = normalized(result.direction(leg.foot, b.rig.footForward[i]));
+                        const Vec3 soleUp = normalized(result.direction(leg.foot, b.rig.footUp[i]));
+                        check(dot(footAhead, up) < -.75f,
+                              "outward shoes retained the upward crawling alignment");
+                        check(dot(soleUp, normal) > .95f, "outward soles failed to face the wall");
+                        const Vec3 shin = result.position(leg.lower) - result.position(leg.foot);
+                        check(dot(shin, normal) > .08f * scale,
+                              "the outward shin did not bend away from its attached shoe");
+                    }
+                }
+    });
+    test("body: the close outward pelvis returns smoothly to the saved normal distance", [] {
+        const auto b = splitPelvisBody();
+        for (float distance : {.4f, .5f, .6f})
+            for (float direction : {-1.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = distance; t.eyes = {0, 1, distance};
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                body::State state; state.weight = state.crawlWeight = 1;
+                Vec3 previous{};
+                for (int frame = 0; frame < 650; ++frame) {
+                    const float yaw = frame < 50 ? 0 : frame < 150 ? (frame - 50) * .0314159265f :
+                                      frame < 350 ? 3.14159265f :
+                                      frame < 450 ? (450 - frame) * .0314159265f : 0;
+                    t.facing = Quat::yaw(yaw * direction);
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                    const Vec3 pelvis = view.position(b.rig.hipRoot);
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    near(pelvis.z, (distance + .05f) * (1 - weight) + .12f * weight, .003f);
+                    if (frame) check(length(pelvis - previous) < .055f, "the pelvis snapped during the turn");
+                    previous = pelvis;
+                    if (frame == 340) check(state.crawlTurn.outward(),
+                        ("a reachable distance refused the turn: " + std::to_string(distance)).c_str());
+                }
+                check(!state.crawlTurn.engaged(), "returning to the wall retained the close outward pelvis");
+                near(previous.z, distance + .05f, .003f);
+            }
+    });
+    test("body: the outward down view clears the chest, retaining pelvis clearance and planted shoes", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = true; t.crawlDistance = .4f; t.crawlTouches = 1;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n;
+                    t.crawlAhead = t.crawlStep = up;
+                    t.hands[0] = {true, t.tilt.rotate({-.12f * scale, .7f * scale, .035f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    auto previous = config; previous.crawlOutwardEyeClearance = 0;
+                    body::State state, reference;
+                    state.weight = state.crawlWeight = reference.weight = reference.crawlWeight = 1;
+                    for (int frame = 0; frame < 700; ++frame) {
+                        const float yaw = frame < 40 ? 0 :
+                            -std::min(3.14159265f, static_cast<float>(frame - 40) * .0314159265f);
+                        const float bend = frame < 300 ? 0 : frame < 420 ? (frame - 300) / 120.f :
+                                           frame < 500 ? 1 : frame < 620 ? (620 - frame) / 120.f : 0;
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0}, -1.55f * bend);
+                        t.hands[1] = {true, t.eyes + t.tilt.rotate(Quat::yaw(yaw).rotate(
+                            {.3f * scale, -.25f * scale, -.25f})), t.tilt * Quat::yaw(yaw)};
+                        auto pose = b.rest, oldPose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        const auto oldResult = body::solve(old, b.rig, t, previous, reference,
+                                                           true, 1.f / 90, scale);
+                        for (int i = 0; i < 2; ++i)
+                            check(result.handError[i] < std::max(.005f, oldResult.handError[i] + .005f),
+                                  ("chest clearance detached hand " + std::to_string(i) +
+                                   " at frame " + std::to_string(frame) + ", error " +
+                                   std::to_string(result.handError[i]) + ", previous " +
+                                   std::to_string(oldResult.handError[i])).c_str());
+                        near(result.handError[0], 0, .005f);
+                        near(length(view.position(b.rig.arms[0].hand) - wristOf(t.hands[0], 0)), 0, .005f);
+                        const Vec3 gaze = t.facing.rotate({0, 0, -1});
+                        check(dot(normalized(view.direction(b.rig.head, b.rig.headForward)), gaze) > .999f,
+                              "chest clearance changed the head's tracked orientation");
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            if (state.crawlTurn.engaged()) {
+                                const Vec3 toe = view.position(leg.foot) + normalized(
+                                    view.direction(leg.foot, b.rig.footForward[i])) *
+                                        b.rig.forefootLength[i] * scale - normalized(
+                                    view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i] * scale;
+                                const float error = length(toe - state.crawlTurn.feet()[i]);
+                                check(error < .004f, ("outward view toe error " + std::to_string(error) +
+                                    " frame " + std::to_string(frame) + ", angle " +
+                                    std::to_string(state.crawlTurn.angle())).c_str());
+                            } else {
+                                near(length(view.position(leg.foot) - old.position(leg.foot)), 0, .004f);
+                            }
+                        }
+                        for (const int joint : b.rig.spine) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(old.position(joint) - old.position(parent)), .002f);
+                        }
+                        if (frame < 300 || frame >= 650)
+                            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                                near(length(view.position(joint) - old.position(joint)), 0, .002f);
+                        if (frame >= 420 && frame < 500) {
+                            check(state.crawlTurn.outward(), "looking down ended the outward stance");
+                            near(dot(view.position(b.rig.hipRoot), n), .12f, .003f);
+                            const int chest = b.rig.spine.back();
+                            check(dot(old.position(chest) - view.position(chest), n) > .06f,
+                                  "the downturned outward chest did not retreat behind the viewpoint");
+                            body::Pose rest(const_cast<float*>(b.rest.data()),
+                                            static_cast<int>(b.rig.parent.size()));
+                            const Vec3 chestFront = view.position(chest) + normalized(
+                                view.direction(chest, rest.local(chest, {0, 0, 1}))) * (.12f * scale);
+                            check(dot(t.eyes - chestFront, n) > .04f,
+                                  ("chest-front gap " + std::to_string(dot(t.eyes - chestFront, n)) +
+                                  ", scale " + std::to_string(scale)).c_str());
+                        }
+                    }
+                }
+    });
+    test("body: a resting palm can support the outward turn without a grip or a detached wrist", [] {
+        const auto b = splitPelvisBody();
+        for (int support : {0, 1})
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.crawlTouches = 1u << support;
+            t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            const float side = support ? 1.f : -1.f;
+            t.hands[support] = {true, t.tilt.rotate({side * .12f, .7f, .035f}), t.tilt};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 320; ++frame) {
+                const float angle = side * std::min(3.14159265f, frame * .025f);
+                const Quat viewTurn = Quat::yaw(angle);
+                t.facing = t.tilt * viewTurn;
+                t.hands[1 - support] = {true,
+                    t.eyes + t.tilt.rotate(viewTurn.rotate({-side * .3f, -.25f, -.25f})), t.facing};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const auto result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                near(result.handError[support], 0, .003f);
+                near(length(view.position(b.rig.arms[support].hand) -
+                    wristOf(t.hands[support], support)), 0, .003f);
+            }
+            check(state.crawlTurn.outward(), "resting contact required a grip for the full outward turn");
+            check(t.crawlHands == 0, "the contact-only pose invented a grip attachment");
+            near(length(t.crawlOrigin), 0);
+        }
+    });
+    test("body: the outward stance has narrow feet and a long leg opposite a bent leg", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, left = cross(n, up);
+                t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                body::State state; state.weight = state.crawlWeight = 1;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                float longest = 0, shortest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 ownSide = left * (i ? 1.f : -1.f);
+                    const Vec3 ankle = view.position(leg.foot), pelvis = view.position(b.rig.hipRoot);
+                    const float width = dot(ankle - pelvis, ownSide);
+                    check(width > .1f * scale && width < .19f * scale,
+                          "the outward ankle failed to stay in its narrow own-side lane");
+                    const Vec3 forward = normalized(view.direction(leg.foot, b.rig.footForward[i]));
+                    check(dot(forward, ownSide) > .22f && dot(forward, ownSide) < .29f,
+                          "the outward boot kept the wide crawling toe-out angle");
+                    const float extension = length(ankle - view.position(leg.upper)) /
+                                            ((b.rig.thigh[i] + b.rig.shin[i]) * scale);
+                    longest = std::max(longest, extension); shortest = std::min(shortest, extension);
+                }
+                check(longest > .93f && shortest < .55f, "the outward legs remained equally bent");
+            }
+    });
+    test("body: outward pulls alternate long strides with one extended leg and one reaching leg", [] {
+        const auto b = longFootBody(.22f);
+        for (float speed : {.135f, .54f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            t.facing = t.tilt * Quat::yaw(3.14159265f);
+            body::State state; state.weight = state.crawlWeight = 1;
+            int previous = -1, last = -1, steps = 0, extended = 0, flying = 0;
+            for (int frame = 0; frame < 1500; ++frame) {
+                const bool moving = frame >= 30;
+                if (moving) t.crawlOrigin += up * (speed / 90.f);
+                t.crawlMotion = moving ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                check(state.crawlTurn.outward(), "outward stepping unexpectedly changed the stance");
+                const int swing = state.outwardFeet.swinging();
+                if (swing >= 0 && previous < 0) {
+                    check(swing != last, "outward steps repeated the same foot");
+                    last = swing; ++steps;
+                }
+                previous = swing;
+                float longest = 0, shortest = 1, nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 ankle = view.position(leg.foot);
+                    const float extension = length(ankle - view.position(leg.upper)) /
+                                            (b.rig.thigh[i] + b.rig.shin[i]);
+                    longest = std::max(longest, extension); shortest = std::min(shortest, extension);
+                    const Vec3 toe = ankle + normalized(view.direction(leg.foot, b.rig.footForward[i])) *
+                        b.rig.forefootLength[i] - normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                        b.rig.ankleHeight[i] + t.crawlOrigin;
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, n)));
+                }
+                check(nearest < .005f, "outward stepping lifted both supporting feet");
+                if (moving && swing >= 0) {
+                    ++flying;
+                    if (longest >= .87f && shortest < .9f) ++extended;
+                }
+            }
+            check(steps >= 4 && flying > 100, "outward hand pulls did not produce full alternating strides");
+            check(extended > flying * .9f, "outward stepping kept both legs compressed during the stride");
+        }
+    });
+    test("body: outward moving hips ease away from the wall and settle back without changing tracking", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float pitch : {0.f, -1.5f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.eyes = {0, scale, .4f};
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                t.facing = Quat::yaw(3.14159265f) * Quat::around({1, 0, 0}, pitch);
+                body::State state; state.weight = state.crawlWeight = 1;
+                float previous = .12f;
+                for (int frame = 0; frame < 650; ++frame) {
+                    const bool moving = frame >= 60 && frame < 450;
+                    t.crawlMotion = moving ? .8f : 0;
+                    if (moving) t.crawlOrigin.y += .002f;
+                    const auto eyes = t.eyes; const auto facing = t.facing;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                    check(state.crawlTurn.outward(), "moving pelvis adjustment lost the outward stance");
+                    const float depth = dot(view.position(b.rig.hipRoot), t.crawlNormal);
+                    check(std::abs(depth - previous) < .004f, "outward pelvis snapped between clearances");
+                    previous = depth;
+                    if (frame == 150) near(depth, .22f, .002f);
+                    if (frame == 600) near(depth, .12f, .002f);
+                    near(length(t.eyes - eyes), 0);
+                    near(length(t.facing.rotate({1, 0, 0}) - facing.rotate({1, 0, 0})), 0, .001f);
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        near(length(toe + t.crawlOrigin - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                        near(length(view.position(leg.lower) - view.position(leg.upper)),
+                             b.rig.thigh[i] * scale, .001f);
+                    }
+                    check(nearest < .005f, "moving pelvis detached both supporting toes");
+                }
+            }
+    });
+    test("body: outward steps stay in narrow lanes through sideways diagonal and reversing pulls", [] {
+        const auto b = longFootBody(.22f);
+        for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float sideways : {-1.f, 0.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, left = cross(n, up);
+                t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                body::State state; state.weight = state.crawlWeight = 1;
+                int steps = 0, previousSwing = -1;
+                std::array<Vec3, 2> previousToes{};
+                for (int frame = 0; frame < 1000; ++frame) {
+                    const bool moving = frame >= 30;
+                    const Vec3 direction = normalized(left * sideways +
+                        up * (sideways == 0 ? 1.f : frame < 350 ? .4f : 0.f));
+                    if (moving) t.crawlOrigin += direction * ((frame < 650 ? 1.f : -1.f) * .003f * scale);
+                    t.crawlMotion = moving ? .8f : 0;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                    const int swing = state.outwardFeet.swinging();
+                    if (swing >= 0 && previousSwing < 0) ++steps;
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 ankle = view.position(leg.foot), pelvis = view.position(b.rig.hipRoot);
+                        const float width = dot(ankle - pelvis, left * (i ? 1.f : -1.f));
+                        check(width >= .099f * scale && width <= .231f * scale,
+                              ("outward step escaped its lane: " + std::to_string(width / scale) +
+                               " at frame " + std::to_string(frame)).c_str());
+                        const Vec3 toe = t.crawlOrigin + ankle + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, n)));
+                        if (frame && (1 - i) != swing && (1 - i) != previousSwing)
+                            near(length(toe - previousToes[i]), 0, .005f);
+                        previousToes[i] = toe;
+                    }
+                    check(nearest < .005f, "narrow sideways stepping detached both feet");
+                    previousSwing = swing;
+                }
+                if (sideways != 0) check(steps > 5, "sideways lane limits prevented stepping");
+            }
+    });
+    test("body: looking left and right while outward leaves resting hips knees and feet steady", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float pitch : {0.f, -1.1f}) for (int support : {-1, 0, 1}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    if (support >= 0) {
+                        t.crawlTouches = 1u << support;
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 grip{(i ? 1.f : -1.f) * (i == support ? .12f : .3f) * scale,
+                                            .7f * scale, i == support ? .035f : .6f};
+                            t.hands[i] = {true, t.tilt.rotate(grip), t.tilt};
+                        }
+                    }
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    std::vector<float> reference;
+                    for (int frame = 0; frame < 400; ++frame) {
+                        const float glance = frame < 60 ? 0.f : .7f * std::sin((frame - 60) * .04f);
+                        t.facing = t.tilt * Quat::yaw(3.14159265f + glance) *
+                                   Quat::around({1, 0, 0}, pitch);
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        if (frame == 59) reference = pose;
+                        if (frame < 60) continue;
+                        check(state.crawlTurn.outward() && !state.crawlTurn.turning() &&
+                              state.outwardFeet.swinging() < 0, "a backward glance requested a body step");
+                        for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                            const float change = length(view.position(joint) - b.at(reference, joint));
+                            check(change < .002f, ("backward glance moved lower joint " +
+                                std::to_string(joint) + " by " + std::to_string(change)).c_str());
+                        }
+                        body::Pose old(reference.data(), static_cast<int>(b.rig.parent.size()));
+                        near(length(view.direction(b.rig.hipRoot, b.rig.hipForward) -
+                                    old.direction(b.rig.hipRoot, b.rig.hipForward)), 0, .002f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                    }
+                }
+    });
+    test("body: real sideways headset travel during outward glances does not sway the pelvis or belt", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (float travel : {0.f, .003f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    t.crawlTouches = 1u << support;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f,
+                                                         i == support ? .035f : .6f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    body::Pose rest(const_cast<float*>(b.rest.data()), static_cast<int>(b.rig.parent.size()));
+                    const int waist = b.rig.spine.front();
+                    const Vec3 waistForward = rest.local(waist, {0, 0, 1});
+                    Vec3 restingHip{}, restingWaist{};
+                    float restingYaw = 0, maximumChestYaw = 0;
+                    for (int frame = 0; frame < 650; ++frame) {
+                        const float glance = frame < 60 ? 0 : .65f * std::sin((frame - 60) * .04f);
+                        // An eye-centred tracker travels about a real neck;
+                        // rotating orientation at a fixed point missed this.
+                        t.eyes = up + n * .4f + side * (.14f * std::sin(glance)) +
+                                 n * (.14f * (std::cos(glance) - 1));
+                        t.facing = t.tilt * Quat::yaw(3.14159265f + glance);
+                        if (frame >= 60) t.crawlOrigin += side * travel;
+                        t.crawlMotion = frame >= 60 && travel > 0 ? .8f : 0;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                        const Vec3 hip = view.position(b.rig.hipRoot) + t.crawlOrigin;
+                        const Vec3 belt = view.position(waist) + t.crawlOrigin;
+                        const Vec3 beltForward = normalized(view.direction(waist, waistForward));
+                        if (frame == 59) {
+                            restingHip = hip; restingWaist = belt; restingYaw = dot(beltForward, side);
+                        }
+                        if (frame < 60) continue;
+                        const float travelled = static_cast<float>(frame - 59) * travel;
+                        near(dot(hip - restingHip, side), travelled, .002f);
+                        near(dot(belt - restingWaist, side), travelled, .002f);
+                        near(dot(beltForward, side), restingYaw, .002f);
+                        near(result.handError[support], 0, .005f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                        const int chest = b.rig.spine.back();
+                        const Vec3 chestForward = normalized(view.direction(chest,
+                            rest.local(chest, {0, 0, 1})));
+                        maximumChestYaw = std::max(maximumChestYaw, std::abs(dot(chestForward, side)));
+                        if (travel == 0) check(state.outwardFeet.swinging() < 0,
+                                              "looking around started a resting footstep");
+                    }
+                    check(maximumChestYaw > .02f, "stabilizing the waist also froze the upper chest");
+                }
+    });
+    test("body: an outward waist anchor transports with camera roll and building corners", [] {
+        const auto b = longFootBody(.22f);
+        for (bool corner : {false, true}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f}; t.crawlNormal = {0, 0, 1};
+            body::State state; state.weight = state.crawlWeight = 1;
+            Vec3 before{};
+            for (int frame = 0; frame < 350; ++frame) {
+                const float roll = 1.5707963f * std::clamp((frame - 60) / 180.f, 0.f, 1.f);
+                const Quat frameTurn = Quat::around(corner ? Vec3{0, 1, 0} : Vec3{0, 0, 1}, roll);
+                t.tilt = corner ? Quat{} : frameTurn;
+                t.crawlNormal = frameTurn.rotate({0, 0, 1});
+                t.crawlAhead = t.crawlStep = frameTurn.rotate({0, 1, 0});
+                t.eyes = corner ? frameTurn.rotate({0, 1, .4f}) : Vec3{0, 1, .4f};
+                t.facing = frameTurn * Quat::yaw(3.14159265f);
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                check(state.crawlTurn.outward(), "a deliberate roll/corner lost the outward stance");
+                const Vec3 hip = view.position(b.rig.hipRoot);
+                near(dot(hip, t.crawlNormal), .12f, .002f);
+                if (frame) check(length(hip - before) < .025f, "the anchored pelvis snapped during a turn");
+                before = hip;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                }
+                check(nearest < .005f, "waist stabilization lifted both feet during a turn");
+            }
+        }
+    });
+    test("body: raising the outward body restores eye height with fixed tracking and real limb lengths", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float pitch : {0.f, -1.2f}) for (bool outward : {false, true}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    t.facing = t.tilt * Quat::yaw(outward ? 3.14159265f : 0.f) *
+                               Quat::around({1, 0, 0}, pitch);
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .25f : -.25f, .7f * scale, .25f}),
+                                      t.tilt};
+                    body::Config config; config.hideHead = false; config.crawlTorsoTwist = 0;
+                    auto previous = config; previous.crawlOutwardEyeLift = previous.crawlEyeLift;
+                    body::State state, oldState;
+                    state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+                    auto pose = b.rest, oldPose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                    const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                    const auto oldResult = body::solve(old, b.rig, t, previous, oldState,
+                                                       true, 1.f / 90, scale);
+                    const Vec3 raise = up * (outward ? .08f : 0.f);
+                    for (int joint : {b.rig.head, b.rig.hipRoot, static_cast<int>(b.rig.spine.back())})
+                        near(length(view.position(joint) - old.position(joint) - raise), 0, .002f);
+                    near(dot(view.position(b.rig.hipRoot), n), outward ? .12f : .45f, .002f);
+                    near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                t.facing.rotate({0, 0, -1})), 0, .002f);
+                    for (int i = 0; i < 2; ++i) {
+                        near(result.handError[i], 0, .005f); near(oldResult.handError[i], 0, .005f);
+                        near(length(view.position(b.rig.arms[i].hand) - wristOf(t.hands[i], i)), 0, .005f);
+                        const auto& leg = b.rig.legs[i];
+                        near(length(view.position(leg.upper) - view.position(leg.lower)),
+                             b.rig.thigh[i] * scale, .002f);
+                        near(length(view.position(leg.lower) - view.position(leg.foot)),
+                             b.rig.shin[i] * scale, .002f);
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        if (outward) near(dot(toe, n), 0, .005f);
+                    }
+                }
+    });
+    test("body: outward body height blends through both turn directions with supporting toes retained", [] {
+        const auto b = longFootBody(.22f);
+        for (float direction : {-1.f, 1.f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::Config config; config.hideHead = false;
+            auto previous = config; previous.crawlOutwardEyeLift = previous.crawlEyeLift;
+            body::State state, oldState;
+            state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+            float priorRaise = 0;
+            for (int frame = 0; frame < 650; ++frame) {
+                const float yaw = frame < 50 ? 0 : frame < 150 ? (frame - 50) * .0314159265f :
+                                  frame < 350 ? 3.14159265f :
+                                  frame < 450 ? (450 - frame) * .0314159265f : 0;
+                t.facing = t.tilt * Quat::yaw(yaw * direction);
+                auto pose = b.rest, oldPose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                body::solve(old, b.rig, t, previous, oldState, true, 1.f / 90);
+                const float raise = dot(view.position(b.rig.head) - old.position(b.rig.head), up);
+                near(raise, .08f * state.crawlTurn.outwardWeight(state.crawlTurn.angle()), .002f);
+                check(std::abs(raise - priorRaise) < .012f, "outward body height snapped during a turn");
+                priorRaise = raise;
+                if (frame == 330) near(raise, .08f, .002f);
+                if (frame == 600) near(raise, 0, .002f);
+                if (!state.crawlTurn.engaged()) continue;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, n)));
+                }
+                check(nearest < .005f, "raising the outward body detached both supporting feet");
+            }
+        }
+    });
+    test("body: native reach turns ignore head-only looks and keep outward legs steady", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (bool startOutward : {false, true}) for (bool handNear : {false, true}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = t.crawlReachTurn = true;
+                    t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up; t.crawlHands = 1u << support;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f,
+                            i == support || handNear ? .035f : .55f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    std::vector<float> reference;
+                    for (int frame = 0; frame < 420; ++frame) {
+                        const float time = static_cast<float>(std::max(0, frame - 60));
+                        const float yaw = (startOutward ? 3.14159265f : 0.f) + 2.9f * std::sin(time * .025f);
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0},
+                            -1.4f * std::sin(time * .017f)) *
+                            Quat::around({0, 0, 1}, .35f * std::sin(time * .04f));
+                        t.eyes = up + n * .25f + side * (.1f * std::sin(time * .025f)) +
+                                 up * (.03f * std::sin(time * .017f));
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                        if (frame == 59) reference = pose;
+                        check(!state.crawlTurn.turning() && state.crawlTurn.outward() == startOutward,
+                              "a head-only look triggered the native stance change");
+                        const float armReach = b.rig.upperArm[support] + b.rig.forearm[support];
+                        const float distance = length(wristOf(t.hands[support], support) -
+                                                      view.position(b.rig.arms[support].upper));
+                        const float inner = std::abs(b.rig.upperArm[support] - b.rig.forearm[support]);
+                        const float outside = std::max({0.f, distance - armReach, inner - distance});
+                        near(result.handError[support], outside, .005f);
+                        if (frame < 60 || !startOutward) continue;
+                        for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                            const float change = length(view.position(joint) - b.at(reference, joint));
+                            check(change < .003f, ("looking around changed lower joint " +
+                                std::to_string(joint) + " by " + std::to_string(change) +
+                                " at frame " + std::to_string(frame)).c_str());
+                        }
+                        check(state.outwardFeet.swinging() < 0, "looking around started a footstep");
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                    }
+                }
+    });
+    test("body: a completed outward handoff settles to the fresh resumed body height without a pause", [] {
+        const auto b = longFootBody(.22f);
+        for (float direction : {-1.f, 1.f}) for (float change : {-.12f, .12f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::Config config; config.hideHead = false;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int round = 0; round < 2; ++round) {
+                int landed = -1;
+                Vec3 previousHip{};
+                std::vector<float> pose;
+                for (int frame = 0; frame < 600; ++frame) {
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    t.facing = Quat::yaw(frame < 100 ? 0.f : direction * 2.9670597f) *
+                               Quat::around({1, 0, 0}, -.8f);
+                    const float after = landed < 0 ? 0.f : std::clamp((frame - landed) / 20.f, 0.f, 1.f);
+                    t.eyes = {0, 1.f + change * after, .25f + .15f * weight};
+                    const bool away = frame >= 150 && frame < 210;
+                    t.crawlTouches = away ? 1 : 3;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, {i ? .22f : -.22f, .7f, i && away ? .45f : .035f}, {}};
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    if (landed < 0 && state.crawlTurn.outward() && !state.crawlTurn.turning()) landed = frame;
+                    if (landed >= 0 && frame > landed)
+                        check(std::abs(view.position(b.rig.hipRoot).y - previousHip.y) < .009f,
+                              "automatic body height refresh jumped instead of settling");
+                    previousHip = view.position(b.rig.hipRoot);
+                }
+                check(landed > 210, "the test did not exercise an actual outward handoff");
+                body::State resumed; resumed.weight = resumed.crawlWeight = 1;
+                std::vector<float> fresh;
+                for (int frame = 0; frame < 90; ++frame) {
+                    fresh = b.rest;
+                    body::Pose view(fresh.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, resumed, true, 1.f / 90);
+                }
+                check(resumed.crawlTurn.outward(), "the comparison did not enter a fresh outward pose");
+                for (int joint : {b.rig.hipRoot, 2, 4, 5, 6})
+                    near(b.at(pose, joint).y, b.at(fresh, joint).y, .005f);
+                const Vec3 hip = b.at(pose, b.rig.hipRoot);
+                const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                const Vec3 neck = t.eyes - F * b.rig.eyesFromHead.x - U * b.rig.eyesFromHead.y;
+                for (int frame = 0; frame < 180; ++frame) {
+                    t.facing = Quat::yaw(direction * 2.9670597f + .7f * std::sin(frame * .04f)) *
+                               Quat::around({1, 0, 0}, -.8f + .5f * std::sin(frame * .03f));
+                    const Vec3 look = t.facing.rotate({0, 0, -1}), crown = t.facing.rotate({0, 1, 0});
+                    t.eyes = neck + look * b.rig.eyesFromHead.x + crown * b.rig.eyesFromHead.y;
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    near(length(view.position(b.rig.hipRoot) - hip), 0, .003f);
+                }
+                // Return without recreating state: the next outward handoff
+                // must refresh its own height just as the first one did.
+                for (int frame = 0; frame < 400; ++frame) {
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    t.facing = Quat::around({1, 0, 0}, -.8f);
+                    t.eyes = {0, 1.f + change, .25f + .15f * weight};
+                    const bool away = frame >= 10 && frame < 70;
+                    t.crawlTouches = away ? 1 : 3;
+                    t.hands[1].grip.z = away ? .45f : .035f;
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                }
+                check(!state.crawlTurn.engaged(), "the round-trip comparison did not return to the wall");
+            }
+        }
+    });
+    test("body: a free palm returning after turning requests the left or right stance change", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (float direction : {-1.f, 1.f}) for (float scale : {.85f, 1.2f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, scale, .25f};
+            t.crawlHands = 1u << support;
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previousAngle = 0;
+            for (int frame = 0; frame < 850; ++frame) {
+                const float yaw = frame < 60 ? 0 : frame < 160 ? (frame - 60) * .0314159265f :
+                                  frame < 430 ? 3.14159265f : frame < 530 ?
+                                  (530 - frame) * .0314159265f : 0;
+                const float depth = frame >= 60 && frame < 180 ? .05f : frame < 230 ? .55f : frame < 270 ?
+                    .55f - .5f * (frame - 230) / 40 : frame < 400 ? .05f :
+                    frame < 580 ? .55f : frame < 620 ? .55f - .5f * (frame - 580) / 40 : .05f;
+                t.facing = Quat::yaw(yaw * direction);
+                t.crawlTouches = (frame >= 270 && frame < 400) || frame >= 620 ? 3u : 1u << support;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, {(i ? .12f : -.12f) * scale, .7f * scale,
+                                         i == support ? .035f : depth}, {}};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const auto result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                const float delta = std::remainder(state.crawlTurn.angle() - previousAngle, 6.2831853f);
+                near(result.handError[support], 0, .005f);
+                if (std::abs(delta) > .0001f)
+                    check(delta * direction * (frame < 430 ? 1.f : -1.f) > 0,
+                          "the recontact body turn went against the player's turn");
+                previousAngle = state.crawlTurn.angle();
+                if (frame < 230) check(!state.crawlTurn.engaged(), "looking back alone changed the stance");
+                if (frame == 410)
+                    check(state.crawlTurn.outward(), "the returning palm did not turn outward");
+                if (frame == 560)
+                    check(state.crawlTurn.outward(), "looking toward the wall alone turned back");
+                if (frame == 820) check(!state.crawlTurn.engaged(), "a new recontact did not turn back");
+                if (!state.crawlTurn.engaged()) continue;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * (b.rig.forefootLength[i] * scale) -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                        (b.rig.ankleHeight[i] * scale);
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(toe.z));
+                }
+                check(nearest < .005f, "the recontact turn lost both supporting feet");
+            }
+        }
+    });
+    test("body: downward handoffs keep the neck aligned through rolled turns and animated poses", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (float direction : {-1.f, 1.f})
+                for (float scale : {.85f, 1.f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = t.crawlReachTurn = true;
+                    t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    for (int frame = 0; frame < 700; ++frame) {
+                        const bool returning = frame >= 400;
+                        const bool away = (frame >= 150 && frame < 210) || (frame >= 450 && frame < 510);
+                        const float yaw = frame < 100 || returning ? 0.f : direction * 2.9670597f;
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0}, -1.2f);
+                        const float outward = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        t.eyes = up * scale + n * (.25f + .15f * outward);
+                        t.crawlTouches = away ? 1 : 3;
+                        for (int i = 0; i < 2; ++i)
+                            t.hands[i] = {true, t.tilt.rotate({(i ? .22f : -.22f) * scale, .7f * scale,
+                                i && away ? .45f : .035f}), t.tilt};
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int chest = b.rig.spine.back(), neck = b.rig.neck.front();
+                        const float sway = state.crawlTurn.turning() ? .25f * std::sin(frame * .03f) : 0.f;
+                        view.turn(b.rig.below[chest], Quat::around({1, 0, 0}, sway), view.position(chest));
+                        view.turn(b.rig.below[neck], Quat::around({1, 0, 0}, -.8f * sway),
+                                  view.position(neck));
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        if (frame == 390)
+                            check(state.crawlTurn.outward(), ("downward handoff failed outward hip " +
+                                std::to_string(b.rig.hipRoot) + " roll " + std::to_string(roll) +
+                                " scale " + std::to_string(scale) +
+                                " direction " + std::to_string(direction) +
+                                " angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        if (frame == 690) check(!state.crawlTurn.engaged(), "downward handoff failed return");
+                        const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        if (!state.crawlTurn.turning() || weight < .01f) continue;
+                        const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                        const Vec3 target = t.eyes - (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                            cross(U, F) * b.rig.eyesFromHead.z) * scale -
+                            up * (config.crawlEyeLift * (1 - weight));
+                        const float neckError = length(view.position(b.rig.head) - target);
+                        check(returning || neckError < .025f, ("downward neck error " +
+                            std::to_string(neckError) +
+                            " frame " + std::to_string(frame) + " hip " + std::to_string(b.rig.hipRoot) +
+                            " roll " + std::to_string(roll) + " scale " + std::to_string(scale) +
+                            " angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        for (int joint : b.rig.all) {
+                            const int parent = b.rig.parent[joint];
+                            if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(b.at(b.rest, joint) - b.at(b.rest, parent)) * scale, .003f);
+                        }
+                        float nearest = 1;
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 toe = view.position(leg.foot) + normalized(
+                                view.direction(leg.foot, b.rig.footForward[i])) *
+                                (b.rig.forefootLength[i] * scale) -
+                                normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                                (b.rig.ankleHeight[i] * scale);
+                            nearest = std::min(nearest, std::abs(dot(toe - t.floor, n)));
+                        }
+                        check(nearest < .005f, "downward neck fit detached both supporting feet");
+                    }
+                }
+    });
+    test("body: held palms grips proximity and contact flicker cannot replace a fresh reach", [] {
+        const auto b = longFootBody(.22f);
+        for (unsigned touches : {0u, 1u, 2u, 3u}) for (bool tracked : {false, true}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, 1, .25f};
+            t.crawlHands = 3;
+            t.hands[0] = {true, {-.12f, .7f, .035f}, {}};
+            t.hands[1] = {tracked, {.12f, .7f, .035f}, {}};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 350; ++frame) {
+                t.facing = Quat::yaw(frame < 60 ? 0.f : 3.14159265f);
+                t.crawlTouches = touches;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+            }
+            check(!state.crawlTurn.engaged(), "an unchanged palm placement triggered the stance change");
+        }
+        // Contact flicker without a physically withdrawn hand cannot arm
+        // the new gesture, even when the player looks all the way around.
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.crawlTurnAway = t.crawlReachTurn = true;
+        t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+        t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, 1, .25f};
+        t.hands[0] = {true, {-.12f, .7f, .035f}, {}};
+        t.hands[1] = {true, {.12f, .7f, .035f}, {}};
+        body::State state; state.weight = state.crawlWeight = 1;
+        for (int frame = 0; frame < 300; ++frame) {
+            t.facing = Quat::yaw(frame < 60 ? 0.f : 3.14159265f);
+            t.crawlTouches = frame == 60 ? 3u : 1u;
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        check(!state.crawlTurn.engaged(), "stationary contact flicker armed the reach gesture");
+    });
+    test("body: a returning palm triggers the handoff without simultaneous two-hand wall contact", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::Config config; config.hideHead = false;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 750; ++frame) {
+                const int free = 1 - support;
+                t.eyes = {0, 1, .25f + .15f * state.crawlTurn.outwardWeight(state.crawlTurn.angle())};
+                t.facing = Quat::yaw(direction * (frame < 60 ? 0.f : frame < 400 ? 2.9670597f : .2f));
+                t.crawlTouches = frame < 140 ? 1u << support : frame < 150 ? 0u :
+                                 frame < 460 ? 1u << free : frame < 470 ? 0u : 1u << support;
+                for (int i = 0; i < 2; ++i) {
+                    const bool contact = t.crawlTouches & (1u << i);
+                    t.hands[i] = {true, {i ? .12f : -.12f, .7f, contact ? .035f : .5f}, {}};
+                }
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                check(t.crawlTouches != 3, "test accidentally supplied simultaneous contact");
+                if (frame < 150)
+                    check(!state.crawlTurn.engaged(), "a look without recontact turned the body");
+                if (frame == 350 || frame == 450)
+                    check(state.crawlTurn.outward(), "the new handoff did not hold the outward pose");
+                if (frame == 350)
+                    check(state.crawlTurn.angle() * direction > 0, "handoff reversed the requested turn");
+                if (frame == 740) check(!state.crawlTurn.engaged(), "the opposite handoff did not turn back");
+                for (int joint : b.rig.all) {
+                    const int parent = b.rig.parent[joint];
+                    if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                    near(length(view.position(joint) - view.position(parent)),
+                         length(b.at(b.rest, joint) - b.at(b.rest, parent)), .003f);
+                }
+            }
+        }
+    });
+    test("body: recontact latches a brief tap but rejects tracking recovery and an earlier placement", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (int mode = 0; mode < 3; ++mode) {
+            const int free = 1 - support;
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.crawlHands = 1u << support;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 350; ++frame) {
+                t.eyes = {0, 1, .25f + .15f * state.crawlTurn.outwardWeight(state.crawlTurn.angle())};
+                const int lookAt = mode == 2 ? 180 : 100;
+                t.facing = Quat::yaw(frame < lookAt ? 0.f : 2.9670597f);
+                const bool contact = frame < 60 || frame == 150 || (mode != 0 && frame > 150);
+                t.crawlTouches = (1u << support) | (contact ? 1u << free : 0u);
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, {i ? .12f : -.12f, .7f,
+                        i == support || contact ? .035f : .5f}, {}};
+                if (mode == 1 && frame >= 130 && frame <= 150) t.hands[free].tracked = false;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (frame < 150) check(!state.crawlTurn.engaged(), "the reach fired before recontact");
+            }
+            check(state.crawlTurn.outward() == (mode == 0),
+                  "brief recontact tracking recovery or an old placement was interpreted incorrectly");
+        }
+    });
+    test("body: outward chest meets the tracked neck without moving the waist or shoulders", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (float scale : {.85f, 1.2f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.crawlHands = t.crawlTouches = 1u << support;
+                const Vec3 neck = up * (.92f * scale) + n * .17f;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, t.tilt.rotate({(i ? .12f : -.12f) * scale, .7f * scale,
+                        i == support ? .035f : .55f}), t.tilt};
+                body::Config config; config.hideHead = false;
+                body::State state; state.weight = state.crawlWeight = 1;
+                std::vector<float> reference;
+                for (int frame = 0; frame < 420; ++frame) {
+                    const float time = static_cast<float>(std::max(0, frame - 60));
+                    t.facing = t.tilt * Quat::yaw(3.14159265f + .9f * std::sin(time * .025f)) *
+                        Quat::around({1, 0, 0}, -1.4f * std::sin(time * .017f)) *
+                        Quat::around({0, 0, 1}, .25f * std::sin(time * .04f));
+                    const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                    t.eyes = neck + (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                             cross(U, F) * b.rig.eyesFromHead.z) * scale;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                    if (frame == 59) reference = pose;
+                    if (frame < 60) continue;
+                    near(length(view.position(b.rig.head) - neck), 0, .025f);
+                    for (int joint : {b.rig.hipRoot, static_cast<int>(b.rig.spine.front()),
+                                      static_cast<int>(b.rig.spine.back()), b.rig.arms[0].clavicle,
+                                      b.rig.arms[1].clavicle})
+                        check(length(view.position(joint) - b.at(reference, joint)) < .006f,
+                              ("a glance displaced outward joint " + std::to_string(joint) + " by " +
+                               std::to_string(length(view.position(joint) - b.at(reference, joint))) +
+                               " at frame " + std::to_string(frame) + " roll " + std::to_string(roll) +
+                               " hip " + std::to_string(b.rig.hipRoot) + " support " +
+                               std::to_string(support)).c_str());
+                    for (int joint : b.rig.all) {
+                        const int parent = b.rig.parent[joint];
+                        if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                        near(length(view.position(joint) - view.position(parent)),
+                             length(b.at(b.rest, joint) - b.at(b.rest, parent)) * scale, .003f);
+                    }
+                    near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) - F), 0, .002f);
+                    check(state.outwardFeet.swinging() < 0, "neck alignment started a false step");
+                }
+            }
+    });
+    test("body: outward chest shape ignores the native animation's changing lumbar arch", [] {
+        const auto b = longFootBody(.22f);
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.crawlTurnAway = t.crawlReachTurn = true;
+        t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+        t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.facing = Quat::yaw(3.14159265f); t.eyes = {0, 1, .4f};
+        body::State state; state.weight = state.crawlWeight = 1;
+        body::Config config; config.hideHead = false;
+        std::vector<float> reference;
+        for (int frame = 0; frame < 360; ++frame) {
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            if (frame >= 90) {
+                const float arch = .7f * std::sin((frame - 90) * .04f);
+                const int low = b.rig.spine.front(), high = b.rig.spine.back();
+                view.turn(b.rig.below[low], Quat::around({1, 0, 0}, arch), view.position(low));
+                view.turn(b.rig.below[high], Quat::around({1, 0, 0}, -1.8f * arch), view.position(high));
+            }
+            body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+            check(state.crawlTurn.outward(), "native arch lost the outward pose");
+            if (frame == 89) reference = pose;
+            if (frame < 90) continue;
+            for (int joint : {b.rig.hipRoot, 2, 3, 4, 5, 6}) {
+                near(length(view.position(joint) - b.at(reference, joint)), 0, .005f);
+                const Vec3 forward = view.direction(joint, {0, 0, 1});
+                body::Pose rest(reference.data(), static_cast<int>(b.rig.parent.size()));
+                near(length(forward - rest.direction(joint, {0, 0, 1})), 0, .005f);
+            }
+        }
+    });
+    test("body: vent palm support moves only the upper body and cannot turn the back toward the surface", [] {
+        const auto b = longFootBody(.22f);
+        for (bool planted : {false, true}) {
+            body::Targets t;
+            t.head = t.airborne = t.surfaceHands = true;
+            t.plant = t.kneel = planted;
+            t.surfaceNormal = {0, 1, 0}; t.eyes = {0, .4f, 0};
+            t.tilt = Quat::around({1, 0, 0}, -1.5707963f);
+            t.facing = t.tilt * Quat::yaw(.9f); t.crawlTouches = 1;
+            t.hands[0] = {true, {-.2f, .035f, -.25f}, t.tilt};
+            t.hands[1] = {true, {.4f, .4f, .15f}, t.tilt};
+            body::Config config; config.hideHead = false; config.yawDrift = config.yawSpeed = 0;
+            body::State state, oldState;
+            state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+            std::vector<float> pose, old;
+            for (int frame = 0; frame < 150; ++frame) {
+                pose = old = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::Pose before(old.data(), static_cast<int>(b.rig.parent.size()));
+                t.surfaceHands = false; body::solve(before, b.rig, t, config, oldState, true, 1.f / 90);
+                t.surfaceHands = true; body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                check(!state.crawlTurn.ready(), "vent contact enabled outdoor back rotation");
+                for (int joint : {b.rig.hipRoot, 21, 22, 23, 25, 26, 27})
+                    near(length(view.position(joint) - b.at(old, joint)), 0, .002f);
+            }
+            check(std::abs(state.crawlTwist) > .05f,
+                  "one vent palm did not allow upper-spine look/reach motion");
+            body::Pose after(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::Pose before(old.data(), static_cast<int>(b.rig.parent.size()));
+            const int chest = b.rig.spine.back();
+            check(length(after.direction(chest, {0, 0, 1}) - before.direction(chest, {0, 0, 1})) > .02f,
+                  "vent upper-spine movement faded out with the outdoor crawl blend");
+        }
+    });
+    test("body: version 10 vent contact packets reject outdoor legs and back rotation", [] {
+        using namespace native_body;
+        Command command;
+        command.flags = bodyOn | ventHands | crawlHandFlags(1) | crawlTouchFlags(2);
+        command.crawlNormal = {0, 1, 0};
+        check(commandFormat(10, commandBytesV10) && validCrawl(command), "version 10 vent was rejected");
+        for (uint32_t wrong : {crawl, crawlPlanted, crawlHandSync, crawlTurnAway}) {
+            command.flags |= wrong;
+            check(!validCrawl(command), "vent packet enabled outdoor leg or back-turn behavior");
+            command.flags &= ~wrong;
+        }
+        command.version = 9;
+        check(!validCrawl(command), "an old command version accepted vent upper-body flags");
+    });
+    test("body: moving outward crawl keeps the chest below the tracked neck across game poses", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                t.crawlDistance = .25f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.crawlHands = t.crawlTouches = 1;
+                body::Config config; config.hideHead = false;
+                body::State state; state.weight = state.crawlWeight = 1;
+                for (int frame = 0; frame < 700; ++frame) {
+                    const bool moving = frame >= 120 && frame < 450;
+                    if (moving) t.crawlOrigin += up * .003f;
+                    t.crawlMotion = moving ? .8f : 0;
+                    t.facing = t.tilt * Quat::yaw(3.14159265f) * Quat::around({1, 0, 0}, -.7f);
+                    t.eyes = up * (moving ? .88f : 1.f) + n * (frame < 80 ? .25f : .40f);
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .22f : -.22f, .7f,
+                            i ? .5f : .035f}), t.tilt};
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    const int chest = b.rig.spine.back(), neck = b.rig.neck.front();
+                    const float sway = moving ? .55f * std::sin(frame * .035f) : 0.f;
+                    view.turn(b.rig.below[chest], Quat::around({1, 0, 0}, sway), view.position(chest));
+                    view.turn(b.rig.below[neck], Quat::around({1, 0, 0}, -.8f * sway), view.position(neck));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                    const Vec3 target = t.eyes - (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                        cross(U, F) * b.rig.eyesFromHead.z);
+                    const float error = length(view.position(b.rig.head) - target);
+                    check(error < .025f, ("outward motion left the tracked neck by " + std::to_string(error) +
+                        " at frame " + std::to_string(frame)).c_str());
+                    const float neckUp = dot(view.position(b.rig.head) - view.position(neck), up);
+                    check(neckUp > .045f, ("outward movement folded the neck into the chest by " +
+                        std::to_string(neckUp) + " at frame " + std::to_string(frame)).c_str());
+                    near(dot(view.position(b.rig.hipRoot), n), .12f + .10f * state.crawlOutwardMotion, .003f);
+                    for (int joint : b.rig.all) {
+                        const int parent = b.rig.parent[joint];
+                        if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                        near(length(view.position(joint) - view.position(parent)),
+                             length(b.at(b.rest, joint) - b.at(b.rest, parent)), .003f);
+                    }
+                }
+            }
+    });
+    test("body: the native neck fit leaves wall-facing crawling unchanged", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0});
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                t.eyes = up + Vec3{0, 0, .25f}; t.crawlHands = t.crawlTouches = 1u << support;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f, i == support ? .035f : .55f}),
+                                  t.tilt};
+                body::Config config; config.hideHead = false;
+                body::State state, reference;
+                state.weight = state.crawlWeight = reference.weight = reference.crawlWeight = 1;
+                for (int frame = 0; frame < 180; ++frame) {
+                    t.facing = t.tilt * Quat::yaw(.7f * std::sin(frame * .03f)) *
+                        Quat::around({1, 0, 0}, -1.4f * std::sin(frame * .02f));
+                    auto pose = b.rest, oldPose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                    t.crawlReachTurn = false;
+                    body::solve(old, b.rig, t, config, reference, true, 1.f / 90);
+                    t.crawlReachTurn = true;
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    for (size_t i = 0; i < pose.size(); ++i) near(pose[i], oldPose[i], .0002f);
+                }
+            }
+    });
+    test("body: native outward pulls keep planted strides through full head motion and idle sway", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (bool sideways : {false, true}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                t.crawlNormal = n; t.crawlAhead = t.crawlStep = up; t.crawlHands = 1;
+                t.hands[0] = {true, t.tilt.rotate({-.12f, .7f, .035f}), t.tilt};
+                t.hands[1] = {true, t.tilt.rotate({.25f, .7f, .55f}), t.tilt};
+                body::State state, control;
+                state.weight = state.crawlWeight = control.weight = control.crawlWeight = 1;
+                int steps = 0, previous = -1;
+                for (int frame = 0; frame < 800; ++frame) {
+                    const float time = static_cast<float>(std::max(0, frame - 60));
+                    if (frame >= 60) t.crawlOrigin += (sideways ? side : up) * .003f;
+                    t.crawlMotion = frame >= 60 ? .8f : 0;
+                    t.eyes = up + n * .25f; t.facing = t.tilt * Quat::yaw(3.14159265f);
+                    auto steady = b.rest;
+                    body::Pose old(steady.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(old, b.rig, t, {}, control, true, 1.f / 90);
+                    t.eyes += side * (.08f * std::sin(time * .04f)) + up * (.04f * std::sin(time * .03f));
+                    t.facing = t.tilt * Quat::yaw(3.14159265f + .8f * std::sin(time * .035f)) *
+                        Quat::around({1, 0, 0}, -1.35f * std::sin(time * .015f)) *
+                        Quat::around({0, 0, 1}, .25f * std::sin(time * .03f));
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    // The native writer supplies its animated pose each job.
+                    // Include changing torso/neck motion, rather than only
+                    // fresh bind-pose frames as in the earlier gaze checks.
+                    const int spine = b.rig.spine.front();
+                    view.turn(b.rig.below[spine], Quat::around({1, 0, 0}, .08f * std::sin(time * .02f)),
+                              view.position(spine));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                    check(state.crawlTurn.outward() && !state.crawlTurn.turning(),
+                          "look/idle motion left the outward climbing stance");
+                    for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                        const float error = length(view.position(joint) - old.position(joint));
+                        check(error < .006f, ("head/idle motion steered crawling joint " +
+                            std::to_string(joint) + " by " + std::to_string(error)).c_str());
+                    }
+                    const int swing = state.outwardFeet.swinging();
+                    if (swing >= 0 && previous < 0) ++steps;
+                    previous = swing;
+                }
+                check(steps >= 3, "stabilizing the native pose prevented actual hand-pull steps");
+            }
+    });
+    test("body: outward walking steps and pelvis do not steer with casual head yaw", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (float sideways : {0.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::State state, control; state.weight = state.crawlWeight = 1;
+            control.weight = control.crawlWeight = 1;
+            for (int frame = 0; frame < 900; ++frame) {
+                if (frame >= 60) t.crawlOrigin += normalized(up + cross(n, up) * sideways) * .004f;
+                t.crawlMotion = frame >= 60 ? .8f : 0;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                auto steady = b.rest;
+                body::Pose old(steady.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(old, b.rig, t, {}, control, true, 1.f / 90);
+                t.facing = t.tilt * Quat::yaw(3.14159265f + .65f * std::sin(frame * .035f));
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28})
+                    near(length(view.position(joint) - old.position(joint)), 0, .002f);
+                check(state.outwardFeet.swinging() == control.outwardFeet.swinging(),
+                      "head yaw changed the outward step timing");
+            }
+        }
+    });
+    test("body: requested turns finish a footstep and can start while hand-pull travel continues", [] {
+        const auto b = longFootBody(.22f);
+        for (float speed : {.18f, .54f}) for (float pitch : {0.f, -1.5f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 650; ++frame) {
+                const float yaw = frame < 180 ? 3.14159265f : frame < 240 ?
+                    3.14159265f * (240 - frame) / 60 : frame < 360 ? 0 :
+                    frame < 420 ? 3.14159265f * (frame - 360) / 60 : 3.14159265f;
+                t.facing = Quat::yaw(yaw) * Quat::around({1, 0, 0}, pitch);
+                if (frame >= 30) t.crawlOrigin += Vec3{0, speed / 90, 0};
+                t.crawlMotion = frame >= 30 ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                }
+                check(nearest < .005f, "the queued moving turn lost both wall contacts");
+                if (frame == 330)
+                    check(!state.crawlTurn.engaged(), "an outward footstep indefinitely delayed the return");
+                if (frame == 600)
+                    check(state.crawlTurn.outward(), "the moving player had to stop before turning outward");
+            }
+        }
+    });
+    test("body: left/right head turns work while looking steeply up or down without nod-driven flips", [] {
+        const auto b = splitPelvisBody();
+        for (float pitch : {-1.5f, 1.5f}) for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 550; ++frame) {
+                const float yaw = frame < 60 ? 0 : frame < 160 ?
+                    3.14159265f * (frame - 60) / 100 : frame < 260 ? 3.14159265f :
+                    frame < 360 ? 3.14159265f * (360 - frame) / 100 : 0;
+                t.facing = Quat::yaw(yaw * direction) * Quat::around({1, 0, 0}, pitch);
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (frame < 60) check(!state.crawlTurn.engaged(), "a steep nod selected the outward stance");
+                if (frame == 250)
+                    check(state.crawlTurn.outward(), "a steep gaze ignored the left/right head turn");
+            }
+            check(!state.crawlTurn.engaged(), "the steep-gaze return failed to face the wall again");
+        }
+    });
+    test("body: outward foot support survives climbing travel and returns to the normal crawl stance", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 700; ++frame) {
+                const float angle = frame < 40 ? 0 : frame < 140 ? -(frame - 40) * .0314159265f :
+                                    frame < 400 ? -3.14159265f :
+                                    frame < 500 ? -3.14159265f + (frame - 400) * .0314159265f : 0;
+                t.facing = t.tilt * Quat::yaw(angle);
+                if (frame >= 230 && frame < 330) t.crawlOrigin += up * .004f;
+                t.crawlMotion = frame >= 230 && frame < 330 ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (state.crawlTurn.engaged()) {
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) +
+                            normalized(view.direction(leg.foot, b.rig.footForward[i])) *
+                            b.rig.forefootLength[i] -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                        const Vec3 worldToe = t.crawlOrigin + toe;
+                        const float error = length(worldToe - state.crawlTurn.feet()[i]);
+                        check(error < .005f, ("turn toe error " + std::to_string(error) +
+                            " at frame " + std::to_string(frame) + ", foot " + std::to_string(i) +
+                            ", angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        nearest = std::min(nearest, std::abs(dot(worldToe, n)));
+                        check(dot(toe - view.position(b.rig.hipRoot), up) < -.01f,
+                              "outward travel raised a foot above the pelvis");
+                    }
+                    check(nearest < .005f, "outward travel detached both feet");
+                }
+                if (frame == 390) check(state.crawlTurn.outward(), "moving ended the outward stance");
+            }
+            check(!state.crawlTurn.engaged(), "facing the wall again did not restore crawling");
+            near(state.crawlTurn.angle(), 0, .001f);
+            check(state.crawlFeet.ready(), "returning lost the normal planted foot state");
+        }
+    });
+    test("body: pressing hands moves the upper torso away while feet retain their contacts", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        body::State state;
+        const auto before = solved(b, t, state);
+        const auto contacts = state.crawlFeet.feet();
+        t.eyes.z += .2f;
+        const auto after = solved(b, t, state);
+        const int chest = b.rig.spine.back();
+        check(b.at(after, chest).z - b.at(before, chest).z > .06f,
+              "hand pressure moved the eyes without carrying the chest away from the wall");
+        near(b.at(after, b.rig.hipRoot).z, .45f, .002f);
+        for (int i = 0; i < 2; ++i)
+            near(length(state.crawlFeet.feet()[i] - contacts[i]), 0, .003f);
+    });
+    test("body: raised crawling viewpoint clears the chest without moving controller targets", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float pitch : {-1.2f, 0.f, .6f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                        t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                        t.eyes = up * scale + normal * .4f;
+                        t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                        t.crawlDistance = .4f;
+                        for (int i = 0; i < 2; ++i) {
+                            t.hands[i].tracked = true;
+                            t.hands[i].orientation = t.tilt;
+                            t.hands[i].grip = t.tilt.rotate({i ? .25f : -.25f, .75f * scale, .2f});
+                        }
+                        body::Config config; config.hideHead = false;
+                        auto previous = config; previous.crawlEyeLift = 0;
+                        body::State oldState, state;
+                        body::Result result;
+                        const auto old = solved(b, t, oldState, previous, scale);
+                        const auto pose = solved(b, t, state, config, scale, &result);
+                        for (const int joint : {b.rig.head, static_cast<int>(b.rig.spine.back()),
+                                               b.rig.hipRoot})
+                            near(length(b.at(pose, joint) - b.at(old, joint) + up * .08f), 0, .002f);
+                        near(dot(b.at(pose, b.rig.hipRoot), normal), .45f, .002f);
+                        for (int i = 0; i < 2; ++i) {
+                            near(result.handError[i], 0, .002f);
+                            near(length(b.at(pose, b.rig.arms[i].hand) - wristOf(t.hands[i], i)),
+                                 0, .002f);
+                        }
+                    }
+    });
+    test("body: raised eye alignment does not affect ground vent or stock crawl poses", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 4; ++mode) {
+            auto t = lookingAhead({0, 1.7f, 0});
+            t.plant = mode == 1;
+            t.kneel = mode == 1;
+            t.crawl = mode >= 2;
+            t.crawlHandSync = mode == 0; // A stale sync flag alone cannot raise a non-crawl pose.
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.airborne = mode == 3;
+            body::Config previous; previous.crawlEyeLift = 0;
+            body::State oldState, state;
+            const auto old = solved(b, t, oldState, previous);
+            const auto pose = solved(b, t, state);
+            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                near(length(b.at(pose, joint) - b.at(old, joint)), 0, .00001f);
+        }
+    });
+    test("body: hand-synced crawl keeps the pelvis steady with raised eye alignment", [] {
+        const auto b = testBody();
+        for (float clearance : {.25f, .4f, .75f, 1.f})
+            for (float pitch : {-1.2f, 0.f, .6f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0});
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.eyes = Vec3{0, 0, clearance} + up;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                    body::State oldState, state;
+                    const auto old = solved(b, t, oldState);
+                    t.crawlHandSync = true;
+                    const auto pose = solved(b, t, state);
+                    body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+                    const Vec3 pelvisUp = normalized(view.direction(b.rig.pelvis, b.rig.pelvisUp));
+                    near(dot(pelvisUp, up), std::cos(.12f), .001f);
+                    near(length(b.at(pose, b.rig.head) - b.at(old, b.rig.head) + up * .08f), 0, .001f);
+                    for (const auto& leg : b.rig.legs) {
+                        near(length(b.at(pose, leg.lower) - b.at(pose, leg.upper)), b.rig.thigh[0], .001f);
+                        near(length(b.at(pose, leg.foot) - b.at(pose, leg.lower)), b.rig.shin[0], .001f);
+                    }
+                }
+    });
+    test("body: crawling corrects the separate native pelvis rather than only a_body", [] {
+        const auto b = splitPelvisBody();
+        const int pelvis = b.rig.hipRoot;
+        bool oldCorrectionFails = false;
+        for (float pitch : {-1.1f, -.5f, .8f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                auto animated = b.rest;
+                body::Pose source(animated.data(), pelvis + 1);
+                source.turn(b.rig.below[pelvis], Quat::around({1, 0, 0}, pitch), source.position(pelvis));
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0});
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                t.eyes = up + Vec3{0, 0, .4f}; t.facing = t.tilt;
+                body::State state;
+                const auto result = solved(b, t, state, {}, 1, nullptr, &animated);
+                body::Pose pose(const_cast<float*>(result.data()), pelvis + 1);
+                body::State neutralState;
+                const auto neutral = solved(b, t, neutralState);
+                for (const int joint : {pelvis, b.rig.head, static_cast<int>(b.rig.spine.back())})
+                    near(length(pose.position(joint) - b.at(neutral, joint)), 0, .001f);
+                const Vec3 hipUp = normalized(pose.direction(pelvis, b.rig.hipUp));
+                near(dot(hipUp, up), std::cos(.12f), .001f);
+                near(dot(pose.position(pelvis) - t.floor, t.crawlNormal), .51f, .002f);
+                auto oldBody = b;
+                oldBody.rig.hipRoot = oldBody.rig.pelvis;
+                oldBody.rig.hipForward = oldBody.rig.pelvisForward;
+                oldBody.rig.hipUp = oldBody.rig.pelvisUp;
+                body::State oldState;
+                const auto oldResult = solved(oldBody, t, oldState, {}, 1, nullptr, &animated);
+                body::Pose oldPose(const_cast<float*>(oldResult.data()), pelvis + 1);
+                oldCorrectionFails |= dot(normalized(oldPose.direction(pelvis, b.rig.hipUp)), up) < .8f;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    near(length(pose.position(leg.lower) - pose.position(leg.upper)), b.rig.thigh[0], .001f);
+                    near(length(pose.position(leg.foot) - pose.position(leg.lower)), b.rig.shin[0], .001f);
+                    near(dot(pose.position(i ? 28 : 24), t.crawlNormal), 0, .002f);
+                    check(dot(pose.position(leg.upper) - pose.position(leg.foot), up) > .3f,
+                        "resting feet remained folded beside the hips");
+                }
+                near(length(pose.position(b.rig.head) - oldPose.position(b.rig.head)), 0, .001f);
+            }
+        check(oldCorrectionFails, "the fixture did not expose the old root-only pelvis correction");
+    });
+    test("body: crawl forefeet attach with raised heels diagonal shins and pelvis clear of the wall", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float clearance : {.25f, .4f, .75f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                        for (float motion : {0.f, 1.f}) {
+                            body::Targets t;
+                            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                            t.tilt = Quat::around({0, 0, 1}, roll);
+                            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                            t.eyes = (up + n * clearance) * scale; t.facing = t.tilt;
+                            t.crawlMotion = motion;
+                            body::State state;
+                            body::Result result;
+                            body::Config config; config.hideHead = false;
+                            const auto solvedPose = solved(b, t, state, config, scale, &result);
+                            body::Pose pose(const_cast<float*>(solvedPose.data()),
+                                            static_cast<int>(b.rig.parent.size()));
+                            near(result.headError, 0, .001f);
+                            near(dot(pose.position(b.rig.hipRoot), n), .51f * scale, .002f);
+                            for (int i = 0; i < 2; ++i) {
+                                const auto& leg = b.rig.legs[i];
+                                const Vec3 ankle = pose.position(leg.foot), knee = pose.position(leg.lower);
+                                const Vec3 forward = normalized(
+                                    pose.direction(leg.foot, b.rig.footForward[i]));
+                                const Vec3 soleUp = normalized(pose.direction(leg.foot, b.rig.footUp[i]));
+                                const Vec3 heel = ankle - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                near(dot(pose.position(i ? 28 : 24), n), 0, .002f);
+                                check(dot(heel, n) > .05f * scale, "heel stayed flat against the wall");
+                                check(dot(forward, n) < -.35f, "foot lost its diagonal toe contact");
+                                const Vec3 outward = t.tilt.rotate({i ? 1.f : -1.f, 0, 0});
+                                near(dot(forward, outward), .46984631f, .001f);
+                                near(dot(forward, up), .67101007f, .001f);
+                                check(dot(knee - ankle, up) > .16f * scale, "shin stayed nearly horizontal");
+                                check(dot(knee - ankle, n) > .07f * scale,
+                                    "shin did not slope into the wall");
+                                check(dot(pose.position(leg.upper) - ankle, up) > .38f * scale,
+                                    "feet stayed folded beside the hips");
+                                near(length(knee - pose.position(leg.upper)), b.rig.thigh[i] * scale, .001f);
+                                near(length(knee - ankle), b.rig.shin[i] * scale, .001f);
+                            }
+                        }
+    });
+    test("body: camera distances of 20 cm to 1 m set absolute pelvis clearance across body sizes", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (float pitch : {-1.f, 0.f, 1.f}) {
+                        body::State state;
+                        for (int cm : {20, 25, 30, 40, 50, 60, 75, 100}) {
+                            const float distance = static_cast<float>(cm) / 100;
+                            body::Targets t;
+                            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                            t.tilt = Quat::around({0, 0, 1}, roll);
+                            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                            t.floor = n * -.3f;
+                            t.eyes = t.floor + up * scale + n * distance;
+                            t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                            t.crawlDistance = distance;
+                            body::Result result;
+                            const auto pose = solved(b, t, state, {}, scale, &result);
+                            const Vec3 pelvis = b.at(pose, b.rig.hipRoot);
+                            near(dot(pelvis - t.floor, n), distance + .05f, .002f);
+                            near(result.headError, 0, .001f);
+                            for (int i = 0; i < 2; ++i) {
+                                const auto& leg = b.rig.legs[i];
+                                const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                                const Vec3 ankle = b.at(pose, leg.foot), toe = b.at(pose, i ? 28 : 24);
+                                near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                                near(length(ankle - knee), b.rig.shin[i] * scale, .001f);
+                                check(dot(toe - pelvis, up) < 0, "saved distance raised toes above pelvis");
+                                const Vec3 outward = t.tilt.rotate({i ? 1.f : -1.f, 0, 0});
+                                check(dot(ankle - pelvis, outward) >= .1f * scale - .002f,
+                                    "saved distance let a foot cross the body centre");
+                                if (distance <= .6f)
+                                    near(dot(toe - t.floor, n), 0, .003f);
+                            }
+                        }
+                    }
+    });
+    test("body: outdoor steps alternate and a stopped phase does not animate", [] {
+        const auto b = testBody();
+        body::Targets t;
+        t.head = t.crawl = t.airborne = true;
+        t.eyes = {0, 1, .4f};
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        body::State state;
+        auto first = solved(b, t, state);
+        t.crawlPhase = 3.14159265f;
+        auto next = solved(b, t, state);
+        const float left = b.at(next, b.rig.legs[0].foot).y - b.at(first, b.rig.legs[0].foot).y;
+        const float right = b.at(next, b.rig.legs[1].foot).y - b.at(first, b.rig.legs[1].foot).y;
+        check(left < -.12f && right > .12f, "crawl feet did not alternate");
+        const auto stopped = solved(b, t, state);
+        for (size_t i = 0; i < next.size(); ++i) near(stopped[i], next[i]);
+    });
+    test("body: outdoor crawl keeps its torso frame while the player looks around", [] {
+        const auto b = testBody();
+        for (float pitch : {-1.f, 0.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = true;
+            t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.facing = Quat::yaw(.6f) * Quat::around({1, 0, 0}, pitch);
+            body::State state;
+            const auto pose = solved(b, t, state);
+            body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+            const Vec3 torso = normalized(view.direction(b.rig.pelvis, b.rig.pelvisUp));
+            const Vec3 chest = normalized(view.direction(b.rig.pelvis, b.rig.pelvisForward));
+            near(torso.x, 0);
+            check(torso.y > .3f && chest.z < -.3f, "gaze reversed the crawling body");
+            near(b.at(pose, b.rig.pelvis).z, .32f, .002f);
+        }
+    });
+    test("body: outdoor crawl roll is applied once to the body feet and tracked hands", [] {
+        const auto b = testBody();
+        for (float angle : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.airborne = true;
+            t.tilt = Quat::around({0, 0, 1}, angle);
+            const Vec3 up = t.tilt.rotate({0, 1, 0});
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+            t.eyes = Vec3{0, 0, .4f} + up;
+            t.facing = t.tilt;
+            for (int i = 0; i < 2; ++i) {
+                t.hands[i].tracked = true;
+                t.hands[i].grip = t.eyes + t.tilt.rotate({i ? .25f : -.25f, -.3f, -.15f});
+                t.hands[i].orientation = t.tilt;
+            }
+            body::State state;
+            body::Result result;
+            const auto pose = solved(b, t, state, {}, 1, &result);
+            body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+            const Vec3 torso = view.direction(b.rig.pelvis, b.rig.pelvisUp);
+            const Vec3 along = normalized(torso - t.crawlNormal * dot(torso, t.crawlNormal));
+            near(length(along - up), 0);
+            for (int i = 0; i < 2; ++i) {
+                check(result.handError[i] < .002f, "crawl arm missed the tracked controller");
+                check(b.at(pose, b.rig.legs[i].foot).z > .03f, "rolled foot went through the wall");
+            }
+        }
+    });
+    test("outdoor crawl stride advances with native travel and rests through head movement or teleports", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+        check(gait.update(frame, wall, true, .02f), "outdoor crawl did not activate");
+        near(gait.phase(), 0);
+        frame.anchor.y += .14f;
+        check(gait.update(frame, wall, true, .02f), "travel dropped the visual crawl");
+        near(gait.phase(), 6.2831853f * .2f);
+        const float phase = gait.phase();
+        frame.headPose.orientation = Quat::around({1, 0, 0}, 1.f);
+        frame.headPose.position = {0, -.5f, 0};
+        for (int i = 0; i < 20; ++i) gait.update(frame, wall, true, .02f);
+        near(gait.phase(), phase);
+        frame.anchor.y += 100;
+        gait.update(frame, wall, true, .02f);
+        near(gait.phase(), phase);
+        near(length(gait.ahead() - Vec3{0, 1, 0}), 0);
+        for (int i = 0; i < 15; ++i) {
+            frame.anchor.x += .02f;
+            gait.update(frame, wall, true, .02f);
+        }
+        near(length(gait.step() - Vec3{1, 0, 0}), 0);
+        for (int i = 0; i < 20; ++i) {
+            frame.anchor.y -= .02f;
+            gait.update(frame, wall, true, .02f);
+        }
+        near(length(gait.step() - Vec3{0, -1, 0}), 0);
+    });
+    test("outdoor crawl is off for vents running ground and jumps, and follows gesture roll at corners", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 0, false};
+        gait.update(frame, wall, true, .02f);
+        const Quat roll = Quat::around({0, 0, 1}, 1.5707963f);
+        frame.swing.tilt = roll;
+        gait.update(frame, wall, true, .02f);
+        near(length(gait.ahead() - roll.rotate({0, 1, 0})), 0);
+        near(length(gait.step() - gait.ahead()), 0);
+        frame.swing.tilt = {};
+        wall.normal = {1, 0, 0};
+        gait.update(frame, wall, true, .02f);
+        near(dot(gait.step(), wall.normal), 0);
+        for (int mode = 0; mode < 5; ++mode) {
+            auto f = frame;
+            auto h = wall;
+            f.ventCrawl = mode == 0;
+            f.standing = mode == 1;
+            f.swing.jump = mode == 2;
+            if (mode == 3) h.normal = {0, 1, 0};
+            check(!gait.update(f, h, mode != 4, .02f), "crawl visual affected another locomotion mode");
+        }
+    });
+    test("momentum wall runs keep their legs with a neutral stick until slowed or caught by a palm", [] {
+        for (bool native : {false, true}) {
+            WallCrawlBody gait;
+            GameMotionFrame frame;
+            frame.active = true;
+            SurfaceHold wall{{0, 0, 1}, {}, 12, native};
+            check(!gait.update(frame, wall, true, .02f), "neutral-stick run took the crawling crouch");
+            wall.speed = 2;
+            check(!gait.update(frame, wall, true, .02f), "decelerating run flickered into crawling");
+            wall.speed = 1;
+            check(gait.update(frame, wall, true, .02f), "slow wall contact did not regain the idle pose");
+            wall.speed = 12;
+            check(gait.update(frame, wall, true, .02f, true), "sticky palm did not interrupt the visual run");
+            check(!gait.update(frame, wall, true, .02f), "released fast run kept the crouch");
+            wall.speed = 0;
+            frame.anchor.x += 10;
+            check(gait.update(frame, wall, true, .02f), "stopped run never resumed the static pose");
+            near(gait.motion(), 0);
+            near(gait.phase(), 0);
+        }
+    });
+    test("only fresh real outdoor wall contacts can interrupt the momentum run pose", [] {
+        using game_swing::outdoorClimbGrip;
+        game_swing::ClimbData d;
+        d.status = 1; d.hands = 1; d.sampleTimeNs = 1'000'000'000;
+        check(outdoorClimbGrip(d, d.sampleTimeNs + 10'000'000), "fresh wall grip ignored");
+        check(!outdoorClimbGrip(d, d.sampleTimeNs - 1), "future wall grip accepted");
+        check(!outdoorClimbGrip(d, d.sampleTimeNs + 100'000'001), "stale wall grip accepted");
+        for (int invalid = 0; invalid < 7; ++invalid) {
+            auto bad = d;
+            if (invalid == 0) bad.hands = 0;
+            if (invalid == 1) bad.hands = 4;
+            if (invalid == 2) bad.crawl = 1;
+            if (invalid == 3) bad.status = 0;
+            if (invalid == 4) bad.version = 1;
+            if (invalid == 5) bad.bytes = 48;
+            if (invalid == 6) bad.magic = 0;
+            check(!outdoorClimbGrip(bad, d.sampleTimeNs), "invalid wall grip overrode the running pose");
+        }
+    });
+    test("moving crawl stance follows actual travel and eases back to compact when stopped", [] {
+        WallCrawlBody gait;
+        GameMotionFrame frame;
+        frame.active = true;
+        SurfaceHold wall{{0, 0, 1}, {}, 1, false};
+        gait.update(frame, wall, true, .02f, true);
+        for (int i = 0; i < 20; ++i) {
+            const float before = gait.motion();
+            frame.anchor.y += .02f;
+            gait.update(frame, wall, true, .02f, true);
+            check(gait.motion() >= before && gait.motion() - before <= .121f, "moving stance snapped");
+        }
+        near(gait.motion(), 1);
+        const float phase = gait.phase();
+        for (int i = 0; i < 20; ++i) {
+            frame.headPose.position.y += .01f;
+            frame.headPose.orientation = Quat::yaw(i * .1f);
+            const float before = gait.motion();
+            gait.update(frame, wall, true, .02f, true);
+            check(before >= gait.motion() && before - gait.motion() <= .081f, "idle stance snapped");
+        }
+        near(gait.motion(), 0);
+        near(gait.phase(), phase);
+        frame.anchor.y += 100;
+        gait.update(frame, wall, true, .02f, true);
+        near(gait.motion(), 0);
+        near(gait.phase(), phase);
+        for (int i = 0; i < 20; ++i) {
+            frame.anchor.x += .0002f;
+            gait.update(frame, wall, true, .02f, true);
+        }
+        near(gait.motion(), 0);
+    });
+    test("crawl feet stay on fixed contacts as the body moves and alternate one reaching foot", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        check(feet.update(f), "contacts did not initialize");
+        int lastStep = -1, steps = 0;
+        for (int frame = 0; frame < 180; ++frame) {
+            const auto before = feet.feet();
+            const int previous = feet.swinging();
+            f.origin.y += .01f; f.floor.y += .01f;
+            for (int i = 0; i < 2; ++i) { f.rest[i].y += .01f; f.hips[i].y += .01f; }
+            check(feet.update(f), "travel lost the contacts");
+            for (int i = 0; i < 2; ++i)
+                if (previous != i && feet.swinging() != i)
+                    near(length(feet.feet()[i] - before[i]), 0, .00001f);
+            if (previous < 0 && feet.swinging() >= 0) {
+                check(feet.swinging() != lastStep, "the same foot reached twice in a row");
+                lastStep = feet.swinging(); ++steps;
+            }
+        }
+        check(steps >= 6, "the feet never made alternating progress");
+        for (int frame = 0; frame < 40; ++frame) feet.update(f);
+        check(feet.swinging() < 0, "stopping left a foot floating mid-step");
+        const auto stopped = feet.feet();
+        for (int frame = 0; frame < 40; ++frame) {
+            for (auto& p : f.rest) p.x += .001f; // head/hip offsets, no native travel
+            feet.update(f);
+            for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - stopped[i]), 0);
+        }
+        near(stopped[0].z, .08f); near(stopped[1].z, .08f);
+    });
+    test("crawl contacts follow corners and roll, and reset on teleport or calibration", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        feet.update(f);
+        for (const Quat turn : {Quat::yaw(1.2f), Quat::around({1, 0, 0}, 1.5707963f)}) {
+            const auto before = feet.feet();
+            f.normal = turn.rotate(f.normal); f.ahead = turn.rotate(f.ahead);
+            for (int i = 0; i < 2; ++i) {
+                f.rest[i] = turn.rotate(f.rest[i]); f.hips[i] = turn.rotate(f.hips[i]);
+            }
+            feet.update(f);
+            for (int i = 0; i < 2; ++i) {
+                near(dot(feet.feet()[i] - f.floor, f.normal), .08f);
+                near(length(feet.feet()[i] - turn.rotate(before[i])), 0, .001f);
+            }
+            check(feet.swinging() < 0, "view rotation invented a step");
+        }
+        f.origin.x += 10; f.floor.x += 10;
+        for (int i = 0; i < 2; ++i) { f.rest[i].x += 10; f.hips[i].x += 10; }
+        feet.update(f);
+        for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - f.rest[i]), 0);
+        f.scale = .85f;
+        feet.update(f);
+        for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - f.rest[i]), 0);
+    });
+    test("crawl foot contacts reject invalid data and restart without stale anchors", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.normal = {0, 0, 1}; f.ahead = {0, 1, 0};
+        f.reach = {.87f, .87f}; f.seconds = .01f;
+        check(feet.update(f), "valid contacts rejected");
+        auto bad = f; bad.origin.x = std::numeric_limits<float>::quiet_NaN();
+        check(!feet.update(bad), "nonfinite foot origin accepted");
+        bad = f; bad.seconds = 1;
+        check(!feet.update(bad), "stale interval accepted");
+        bad = f; bad.reach[0] = 0;
+        check(!feet.update(bad), "broken leg reach accepted");
+        f.origin.y = f.rest[0].y = f.rest[1].y = 10;
+        check(feet.update(f), "contacts did not recover");
+        near(feet.feet()[0].y, 10);
+    });
+    test("climbing hand strokes require attached tracked motion and count a continuous pull once", [] {
+        CrawlHandSteps strokes;
+        Input in;
+        for (auto& hand : in.hands) {
+            hand.tracked = true; hand.wallGrip = 1; hand.gripRelativeToHead = {0, 1, -.3f};
+        }
+        const Vec3 n{0, 0, 1};
+        strokes.update(in, 1, n, .01f);
+        for (int i = 0; i < 10; ++i) {
+            in.hands[0].gripRelativeToHead.y -= .01f;
+            in.hands[1].gripRelativeToHead.y -= .01f; // the free hand is not a wall pull
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 1 && strokes.strokes()[1] == 0, "pull stroke was miscounted");
+        for (int i = 0; i < 20; ++i) {
+            in.trackingYaw += .02f; in.tilt = Quat::around(n, i * .02f);
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 1, "artificial view turns counted as hand pulls");
+        strokes.update(in, 0, n, .01f);
+        in.hands[0].gripRelativeToHead.y += .5f;
+        strokes.update(in, 1, n, .01f); // recontact seeds the hand rather than treating the reach as a pull
+        for (int i = 0; i < 4; ++i) {
+            in.hands[0].gripRelativeToHead.y -= .01f;
+            strokes.update(in, 1, n, .01f);
+        }
+        check(strokes.strokes()[0] == 2, "new attached pull did not start another stroke");
+        in.focused = false;
+        in.hands[0].gripRelativeToHead.y -= .1f;
+        strokes.update(in, 1, n, .01f);
+        check(strokes.strokes()[0] == 2, "unfocused tracking produced a step cue");
+    });
+    test("a left hand stroke cues the right foot and a right hand stroke cues the left foot", [] {
+        CrawlFeet feet;
+        CrawlFeet::Frame f;
+        f.handSync = true; f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+        f.rest = {Vec3{-.3f, .1f, .08f}, Vec3{.3f, .1f, .08f}};
+        f.hips = {Vec3{-.1f, .5f, .32f}, Vec3{.1f, .5f, .32f}};
+        f.reach = {.87f, .87f}; f.clearance = {.08f, .08f};
+        {
+            CrawlFeet entering;
+            auto caught = f;
+            caught.strokes[0] = 1; // first left-hand pull began before the visible pose finished blending
+            entering.update(caught);
+            caught.origin.y += .002f;
+            entering.update(caught);
+            check(entering.swinging() == 1, "wall-entry blend lost the first opposite-hand cue");
+        }
+        feet.update(f);
+        const auto move = [&] {
+            f.origin.y += .002f; f.floor.y += .002f;
+            for (int i = 0; i < 2; ++i) { f.rest[i].y += .002f; f.hips[i].y += .002f; }
+            feet.update(f);
+        };
+        ++f.strokes[0]; move();
+        check(feet.swinging() == 1, "left hand did not cue the right foot");
+        for (int i = 0; i < 130; ++i) feet.update(f);
+        check(feet.swinging() < 0, "right foot failed to settle");
+        move();
+        check(feet.swinging() < 0, "the same held stroke replayed a step");
+        ++f.strokes[0]; move();
+        check(feet.swinging() < 0, "the same hand replayed a short step out of alternation");
+        ++f.strokes[1]; move();
+        for (int i = 0; i < 300 && feet.swinging() < 0; ++i) move();
+        check(feet.swinging() == 0, "right hand did not cue the next left-foot reach");
+        for (int i = 0; i < 130; ++i) feet.update(f);
+        move();
+        check(feet.swinging() < 0, "a queued hand cue replayed a tiny corrective step");
+    });
+    test("hand-synced crawl uses large alternating strides and an extended supporting leg", [] {
+        for (float speed : {.25f, .6f, 1.2f}) {
+            CrawlFeet feet;
+            CrawlFeet::Frame f;
+            f.handSync = true; f.normal = {0, 0, 1}; f.ahead = {0, 1, 0}; f.seconds = .01f;
+            f.rest = {Vec3{-.38f, .065f, .14f}, Vec3{.38f, .065f, .14f}};
+            f.hips = {Vec3{-.1f, .5f, .51f}, Vec3{.1f, .5f, .51f}};
+            f.reach = {.87f, .87f}; f.clearance = {.14f, .14f}; f.maxUp = {-.15f, -.15f};
+            feet.update(f);
+            int last = -1, steps = 0, landings = 0, supportFrames = 0;
+            Vec3 start{};
+            for (int frame = 0; frame < 600; ++frame) {
+                if (frame % 50 == 0) ++f.strokes[(frame / 50) % 2];
+                const auto before = feet.feet();
+                const int previous = feet.swinging();
+                const float moved = speed * f.seconds;
+                f.origin.y += moved; f.floor.y += moved;
+                for (int i = 0; i < 2; ++i) { f.rest[i].y += moved; f.hips[i].y += moved; }
+                feet.update(f);
+                const int swing = feet.swinging();
+                if (previous < 0 && swing >= 0) {
+                    check(swing != last, "large reaches did not alternate feet");
+                    if (!steps) check(swing == 1, "first left-hand pull did not cue the right foot");
+                    else if (length(before[swing] - f.hips[swing]) <= f.reach[swing] * .98f)
+                        throw std::runtime_error("early extension: speed " + std::to_string(speed) +
+                            " frame " + std::to_string(frame) + " ratio " +
+                            std::to_string(length(before[swing] - f.hips[swing]) / f.reach[swing]));
+                    last = swing; ++steps; start = before[swing];
+                }
+                if (previous >= 0 && swing < 0) {
+                    check(feet.feet()[previous].y - start.y > .24f, "a reach became another tiny step");
+                    ++landings;
+                }
+                for (int i = 0; i < 2; ++i) {
+                    if (previous != i && swing != i)
+                        near(length(feet.feet()[i] - before[i]), 0, .00001f);
+                    if (length(feet.feet()[i] - f.hips[i]) >= f.reach[i])
+                        throw std::runtime_error("leg exceeded reach: speed " + std::to_string(speed) +
+                            " frame " + std::to_string(frame) + " foot " + std::to_string(i) +
+                            " previous " + std::to_string(previous) + " swing " + std::to_string(swing));
+                    check(dot(feet.feet()[i] - f.hips[i], f.ahead) <= f.maxUp[i] + .001f,
+                        "contact rose beyond the reserved foot clearance below the pelvis");
+                }
+                if (swing >= 0 && f.hips[1 - swing].y - feet.feet()[1 - swing].y > .5f)
+                    ++supportFrames;
+            }
+            if (landings < 3 || supportFrames <= 10)
+                throw std::runtime_error("no long supporting-leg phase: speed " +
+                    std::to_string(speed) + " landings " + std::to_string(landings) +
+                    " support frames " + std::to_string(supportFrames));
+            for (int i = 0; i < 130; ++i) feet.update(f);
+            check(feet.swinging() < 0, "a stopped foot never finished its landing");
+            const auto stopped = feet.feet();
+            for (int i = 0; i < 100; ++i) feet.update(f);
+            for (int i = 0; i < 2; ++i) near(length(feet.feet()[i] - stopped[i]), 0);
+        }
+    });
+    test("outdoor body protocol preserves old commands and validates the surface frame", [] {
+        using namespace native_body;
+        check(commandFormat(1, 144) && commandFormat(2, 160) && commandFormat(3, 168) &&
+              commandFormat(4, 192) && commandFormat(5, 232) && commandFormat(6, 240) &&
+              commandFormat(7, 256) && commandFormat(8, 264) && commandFormat(9, 272),
+              "body command version lost compatibility");
+        check(!commandFormat(4, 232) && !commandFormat(5, 192) && !commandFormat(5, 240) &&
+              !commandFormat(6, 232) && !commandFormat(6, 256) && !commandFormat(7, 240) &&
+              !commandFormat(8, 272) && !commandFormat(9, 264),
+              "incompatible body size accepted");
+        Command c;
+        c.flags = crawl;
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = c.crawlStep = {0, 1, 0};
+        check(validCrawl(c), "valid crawl rejected");
+        c.crawlAhead = c.crawlNormal;
+        check(!validCrawl(c), "parallel crawl frame accepted");
+        c.crawlAhead = {0, 1, 0};
+        c.crawlPhase = std::numeric_limits<float>::quiet_NaN();
+        check(!validCrawl(c), "nonfinite crawl phase accepted");
+        c.crawlPhase = 0; c.version = 4;
+        check(!validCrawl(c), "legacy packet enabled a new crawl frame");
+        c.version = 5; c.crawlMotion = std::numeric_limits<float>::quiet_NaN();
+        check(validCrawl(c), "version 5 read the absent motion field");
+        c.version = 6;
+        check(!validCrawl(c), "nonfinite crawl motion accepted");
+        c.crawlMotion = -1;
+        check(!validCrawl(c), "negative crawl motion accepted");
+        c.crawlMotion = 1.1f;
+        check(!validCrawl(c), "excess crawl motion accepted");
+        c.crawlMotion = 1;
+        check(validCrawl(c), "moving crawl rejected");
+        c.flags |= crawlPlanted;
+        check(!validCrawl(c), "old command enabled persistent contacts");
+        c.version = 7;
+        check(validCrawl(c), "valid planted contacts rejected");
+        c.crawlOrigin.x = std::numeric_limits<float>::quiet_NaN();
+        check(!validCrawl(c), "nonfinite planted origin accepted");
+        c.crawlOrigin = {}; c.flags |= crawlHandSync;
+        check(!validCrawl(c), "old command enabled hand-synced steps");
+        c.version = 8;
+        check(validCrawl(c), "hand-synced command rejected");
+        c.version = 9;
+        for (float distance : {.1f, .4f, 1.f}) {
+            c.crawlDistance = distance;
+            check(validCrawl(c), "valid saved distance rejected");
+        }
+        for (float distance : {0.f, .09f, 1.01f, std::numeric_limits<float>::quiet_NaN()}) {
+            c.crawlDistance = distance;
+            check(!validCrawl(c), "invalid saved distance accepted");
+        }
+        c.crawlDistance = .4f;
+        c.flags &= ~crawlPlanted;
+        check(!validCrawl(c), "hand cues accepted without foot contacts");
+    });
+    test("body: outdoor crawl bends legs against the wall and preserves bone lengths", [] {
+        const auto b = testBody(true);
+        for (const Vec3 n : {Vec3{0, 0, 1}, Vec3{1, 0, 0}, Vec3{0, 0, -1}, Vec3{0, -1, 0}}) {
+            const Vec3 up = std::abs(n.y) < .5f ? Vec3{0, 1, 0} : Vec3{0, 0, -1};
+            body::Targets t;
+            t.head = t.crawl = t.airborne = true;
+            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            t.crawlPhase = .7f;
+            t.eyes = n * .4f + up;
+            t.facing = body::fromAxes(cross(-n, up), up, n);
+            body::Config c;
+            c.hideHead = false;
+            body::State state;
+            body::Result result;
+            const auto pose = solved(b, t, state, c, 1, &result);
+            check(result.solved && result.grounded, "crawl was not solved as a supported body");
+            for (const auto& leg : b.rig.legs) {
+                const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                const Vec3 foot = b.at(pose, leg.foot);
+                check(dot(foot, n) > .03f && dot(foot, n) < .2f, "crawl foot left its surface");
+                check(dot(knee, n) > dot(foot, n), "knee bent into the wall");
+                check(length(cross(normalized(knee - hip), normalized(foot - knee))) > .1f,
+                      "crawl leg stayed straight");
+                near(length(knee - hip), length(b.at(b.rest, leg.lower) - b.at(b.rest, leg.upper)));
+                near(length(foot - knee), length(b.at(b.rest, leg.foot) - b.at(b.rest, leg.lower)));
+            }
+        }
+    });
+    test("body: looking down at distant walls keeps a compact raised and splayed knee crouch", [] {
+        const auto b = testBody();
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float phase : {0.f, 1.5707963f, 3.14159265f, 4.712389f})
+                    for (bool raised : {false, true}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.airborne = true;
+                        t.eyes = Vec3{0, 1, clearance} * scale;
+                        t.facing = Quat::around({1, 0, 0}, -1.2f);
+                        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                        t.crawlPhase = phase;
+                        auto source = b.rest;
+                        if (raised) {
+                            body::Pose view(source.data(), static_cast<int>(b.rig.parent.size()));
+                            for (const auto& leg : b.rig.legs)
+                                view.turn(b.rig.below[leg.upper], Quat::around({1, 0, 0}, -1.2f),
+                                          view.position(leg.upper));
+                        }
+                        body::State state;
+                        const auto pose = solved(b, t, state, {}, scale, nullptr, &source);
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                            const Vec3 ankle = b.at(pose, leg.foot);
+                            const float reach = (b.rig.thigh[i] + b.rig.shin[i]) * scale;
+                            // The photo's extended shins passed a slight-bend check. Require a crouch
+                            // throughout the stride, including the game's already raised air pose.
+                            check(length(ankle - hip) < reach * .75f, "leg extended out of its crouch");
+                            check(knee.y > hip.y + .02f * scale, "knee hung below the hips");
+                            check((knee.x - hip.x) * (i ? 1.f : -1.f) > .2f * scale,
+                                  "knee folded toward the viewer instead of to the side");
+                            check(ankle.z > .03f * scale && ankle.z < .2f * scale,
+                                  "foot stopped following the wall");
+                            near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                            near(length(ankle - knee), b.rig.shin[i] * scale, .001f);
+                        }
+                    }
+    });
+    test("body: tucking the hips preserves the tracked head through gaze and controller roll", [] {
+        const auto b = testBody();
+        for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float pitch : {-1.2f, 0.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.airborne = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                t.crawlNormal = {0, 0, 1};
+                t.crawlAhead = t.crawlStep = t.tilt.rotate({0, 1, 0});
+                t.eyes = Vec3{0, 0, .75f} + t.crawlAhead;
+                t.facing = t.tilt * Quat::yaw(.6f) * Quat::around({1, 0, 0}, pitch);
+                body::Config c;
+                c.hideHead = false;
+                body::State state;
+                const auto pose = solved(b, t, state, c);
+                body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+                const Vec3 f = t.facing.rotate({0, 0, -1}), u = t.facing.rotate({0, 1, 0});
+                const Vec3 target = t.eyes - f * b.rig.eyesFromHead.x - u * b.rig.eyesFromHead.y -
+                    cross(u, f) * b.rig.eyesFromHead.z;
+                near(length(view.position(b.rig.head) - target), 0, .001f);
+                near(length(view.direction(b.rig.head, b.rig.headForward) - f), 0, .001f);
+                near(length(view.direction(b.rig.head, b.rig.headUp) - u), 0, .001f);
+                check(view.position(b.rig.pelvis).z < .45f, "hips followed the distant headset");
+                for (const auto& leg : b.rig.legs)
+                    check(length(view.position(leg.foot) - view.position(leg.upper)) <
+                          (b.rig.thigh[0] + b.rig.shin[0]) * .75f, "roll straightened the legs");
+            }
+    });
+    test("body: moving wall crawl opens and lowers both feet while retaining bent legs in rolled frames", [] {
+        const auto b = testBody();
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (float phase : {0.f, 1.5707963f, 3.14159265f, 4.712389f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), left = t.tilt.rotate({-1, 0, 0});
+                        t.eyes = (Vec3{0, 0, clearance} + up) * scale;
+                        t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                        t.crawlPhase = phase;
+                        body::State state, movingState;
+                        const auto resting = solved(b, t, state, {}, scale);
+                        t.crawlMotion = 1;
+                        const auto moving = solved(b, t, movingState, {}, scale);
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 hip = b.at(moving, leg.upper), knee = b.at(moving, leg.lower);
+                            const Vec3 foot = b.at(moving, leg.foot), before = b.at(resting, leg.foot);
+                            check(dot(foot - before, up) < -.15f * scale,
+                                  "moving foot did not reach farther below the resting pose");
+                            check(dot(foot - before, left) * (i ? -1.f : 1.f) > .1f * scale,
+                                  "moving foot did not open to its side");
+                            check(dot(foot - hip, up) < -.15f * scale, "moving foot reached above the hip");
+                            check(length(foot - hip) < (b.rig.thigh[i] + b.rig.shin[i]) * scale * .9f,
+                                  "moving crawl straightened a leg");
+                            near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                            near(length(foot - knee), b.rig.shin[i] * scale, .001f);
+                            check(foot.z > .03f * scale && foot.z < .2f * scale, "moving foot left the wall");
+                        }
+                        // Only the feet/knees change stance; the approved hips and head do not jump.
+                        near(length(b.at(resting, b.rig.pelvis) - b.at(moving, b.rig.pelvis)), 0);
+                        near(length(b.at(resting, b.rig.head) - b.at(moving, b.rig.head)), 0);
+                        t.crawlMotion = 0;
+                        const auto stopped = solved(b, t, movingState, {}, scale);
+                        for (size_t i = 0; i < resting.size(); ++i) near(stopped[i], resting[i]);
+                    }
+    });
+    test("body: moving knees sit 35 percent lower than Preview 3 through the stride and controller roll", [] {
+        const auto b = testBody();
+        // Knee heights above the ankles captured from Preview 3's solved pose,
+        // at phases 0, pi/2 and pi, 40 cm camera clearance, looking down.
+        const float previous[3][2] = {{.287628f, .3628939f}, {.3326888f, .3638198f}, {.3628941f, .287628f}};
+        for (float scale : {.85f, 1.f, 1.2f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (int phase = 0; phase < 3; ++phase) {
+                    body::Targets t;
+                    t.head = t.crawl = t.airborne = true;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0});
+                    t.eyes = (Vec3{0, 0, .4f} + up) * scale;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.crawlPhase = phase * 1.5707963f;
+                    t.crawlMotion = 1;
+                    body::State state;
+                    const auto pose = solved(b, t, state, {}, scale);
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 knee = b.at(pose, leg.lower), foot = b.at(pose, leg.foot);
+                        near(dot(knee - foot, up), previous[phase][i] * .65f * scale, .001f);
+                        check(knee.z > 0, "lower knee entered the wall");
+                    }
+                }
+    });
+    test("body: feet remain planted through pulls, actor yaw and controller roll", [] {
+        const auto b = testBody();
+        for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float speed : {.5f, 2.5f})
+                for (float scale : {.85f, 1.2f})
+                  for (Vec3 travel : {Vec3{0, 1, 0}, Vec3{0, -1, 0}, Vec3{1, 0, 0},
+                                      normalized(Vec3{-1, 1, 0})})
+                   for (bool synced : {false, true}) {
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    const Quat chosen = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = chosen.rotate({0, 1, 0});
+                    Vec3 origin{30, 40, 50};
+                    std::array<Vec3, 2> before{};
+                    std::array<Vec3, 2> beforeToe{};
+                    for (int frame = 0; frame < 100; ++frame) {
+                        if (frame) origin += chosen.rotate(travel) * (speed * .01f);
+                        const Quat model = Quat::yaw(frame * .007f), back = model.conjugate();
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                        t.crawlMotion = 1;
+                        t.crawlHandSync = synced;
+                        t.crawlStrokes = {static_cast<uint32_t>((frame + 15) / 16),
+                                          static_cast<uint32_t>((frame + 7) / 16)};
+                        t.crawlOrigin = origin; t.crawlModelToWorld = model;
+                        t.crawlNormal = back.rotate({0, 0, 1});
+                        t.crawlAhead = t.crawlStep = back.rotate(up);
+                        t.eyes = back.rotate((Vec3{0, 0, .4f} + up) * scale);
+                        t.facing = back * chosen * Quat::around({1, 0, 0}, -1.2f);
+                        t.tilt = back * chosen * model;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int previous = state.crawlFeet.swinging();
+                        const auto result = body::solve(view, b.rig, t, {}, state, true, .01f, scale);
+                        check(result.solved, "planted crawl body did not solve");
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 foot = origin + model.rotate(b.at(pose, b.rig.legs[i].foot));
+                            if (length(foot - state.crawlFeet.feet()[i]) >= .003f)
+                                throw std::runtime_error("contact unreachable: speed " +
+                                  std::to_string(speed) + " scale " +
+                                  std::to_string(scale) + " frame " + std::to_string(frame) + " foot " +
+                                  std::to_string(i) + " roll " + std::to_string(roll) + " synced " +
+                                  std::to_string(synced) + " direction " + std::to_string(travel.x) + "," +
+                                  std::to_string(travel.y) + " swing " +
+                                  std::to_string(state.crawlFeet.swinging()) + " error " +
+                                  std::to_string(length(foot - state.crawlFeet.feet()[i])) + " previous " +
+                                  std::to_string(previous) + " reach " + std::to_string(length(
+                                      state.crawlFeet.feet()[i] - origin - model.rotate(
+                                          b.at(pose, b.rig.legs[i].upper)))));
+                            if (frame && previous != i && state.crawlFeet.swinging() != i)
+                                check(length(foot - before[i]) < .003f, "planted foot drifted between poses");
+                            const Vec3 toe = origin + model.rotate(b.at(pose, i ? 28 : 24));
+                            if (synced) {
+                                const Vec3 hip = origin + model.rotate(b.at(pose, b.rig.legs[i].upper));
+                                const Vec3 knee = origin + model.rotate(b.at(pose, b.rig.legs[i].lower));
+                                const Vec3 axis = normalized(foot - hip);
+                                const Vec3 bend = knee - hip - axis * dot(knee - hip, axis);
+                                const Vec3 outward = chosen.rotate({i ? 1.f : -1.f, 0, 0});
+                                check(dot(bend, outward) > 0,
+                                    "a sideways or rolled crawling knee bent across the body");
+                                const Vec3 pelvis = origin + model.rotate(b.at(pose, b.rig.hipRoot));
+                                check(dot(foot - pelvis, outward) >= .1f * scale - .003f,
+                                    "crawling ankle crossed its side of the body centre");
+                                check(dot(foot - pelvis, up) < 0,
+                                    "crawling ankle rose above the pelvis");
+                                check(dot(toe - pelvis, up) <= .001f * scale,
+                                    "crawling toes rose above the pelvis");
+                                const Vec3 forward = normalized(model.rotate(
+                                    view.direction(b.rig.legs[i].foot, b.rig.footForward[i])));
+                                const Vec3 soleUp = normalized(model.rotate(
+                                    view.direction(b.rig.legs[i].foot, b.rig.footUp[i])));
+                                const Vec3 toeTop = foot + forward * (b.rig.forefootLength[i] * scale) +
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                check(dot(toeTop - pelvis, up) < 0,
+                                    "upper toe outline rose above the pelvis");
+                                check(dot(forward, outward) > .4f,
+                                    "crawling foot failed to turn outward with the body");
+                                const Vec3 heel = foot - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                check(dot(heel - pelvis, outward) > 0,
+                                    "crawling heel crossed the centre into the other foot's side");
+                            }
+                            if (synced && previous != i && state.crawlFeet.swinging() != i) {
+                                near(toe.z, origin.z, .003f);
+                                if (frame) check(length(toe - beforeToe[i]) < .003f,
+                                    "supporting toes slid as the body moved past them");
+                            }
+                            before[i] = foot;
+                            beforeToe[i] = toe;
+                        }
+                    }
+                }
+    });
+    test("body: sideways reversals keep feet separated without sliding their planted contacts", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    const Quat selected = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = selected.rotate({0, 1, 0});
+                    Vec3 origin{20, 30, 40};
+                    std::array<Vec3, 2> before{};
+                    for (int frame = 0; frame < 450; ++frame) {
+                        Vec3 travel{};
+                        if (frame >= 30 && frame < 150) travel = {1, 0, 0};
+                        if (frame >= 180 && frame < 300) travel = {-1, 0, 0};
+                        if (frame >= 300 && frame < 420) travel = normalized(Vec3{1, -1, 0});
+                        origin += selected.rotate(travel) * .008f;
+                        const Quat model = Quat::yaw(frame * .004f), back = model.conjugate();
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.crawlDistance = .4f;
+                        t.crawlOrigin = origin; t.crawlModelToWorld = model;
+                        t.crawlNormal = back.rotate({0, 0, 1});
+                        t.crawlAhead = t.crawlStep = back.rotate(up);
+                        t.crawlMotion = length(travel) > 0 ? 1.f : 0.f;
+                        t.crawlStrokes = {static_cast<uint32_t>(frame / 40),
+                                          static_cast<uint32_t>((frame + 20) / 40)};
+                        t.eyes = back.rotate(up * scale + Vec3{0, 0, .4f});
+                        t.facing = back * selected;
+                        t.tilt = back * selected * model;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int previous = state.crawlFeet.swinging();
+                        body::solve(view, b.rig, t, {}, state, true, .01f, scale);
+                        const Vec3 pelvis = origin + model.rotate(b.at(pose, b.rig.hipRoot));
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 foot = origin + model.rotate(b.at(pose, leg.foot));
+                            const Vec3 toe = origin + model.rotate(b.at(pose, i ? 28 : 24));
+                            const Vec3 side = selected.rotate({i ? 1.f : -1.f, 0, 0});
+                            check(dot(foot - pelvis, side) >= .1f * scale - .003f,
+                                "a sideways step crossed the body's middle");
+                            check(dot(toe - pelvis, side) > 0, "opposite toe crossed the centre plane");
+                            check(dot(toe - pelvis, up) < 0, "sideways step raised toes above pelvis");
+                            const Vec3 forward = normalized(model.rotate(
+                                view.direction(leg.foot, b.rig.footForward[i])));
+                            const Vec3 soleUp = normalized(model.rotate(
+                                view.direction(leg.foot, b.rig.footUp[i])));
+                            const Vec3 heel = foot - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                soleUp * (b.rig.ankleHeight[i] * scale);
+                            const float halfWidth = b.rig.forefootLength[i] * .35f * scale;
+                            const float inside = dot(heel - pelvis, side) -
+                                halfWidth * std::abs(dot(normalized(cross(soleUp, forward)), side));
+                            check(inside > 0, "inner heel edge crossed the body centre with long boots");
+                            if (frame && previous != i && state.crawlFeet.swinging() != i)
+                                check(length(foot - before[i]) < .003f,
+                                    "centre boundary dragged a planted foot instead of making a step");
+                            before[i] = foot;
+                        }
+                    }
+                }
+    });
+    test("body: hand pulls accumulate into long alternating steps after full leg extension", [] {
+        const auto verify = [](const TestBody& b, float distance) {
+            body::State state;
+            state.weight = state.crawlWeight = 1;
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.eyes = {0, 1, .4f};
+            t.crawlDistance = distance;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            int steps = 0, landings = 0, extended = 0, lastStep = -1;
+            Vec3 start{};
+            for (int frame = 0; frame < 800; ++frame) {
+                const int cycle = frame < 50 ? 0 : (frame - 50) / 80;
+                const int phase = frame < 50 ? 79 : (frame - 50) % 80;
+                const bool pulling = frame >= 50 && frame < 610 && phase < 50;
+                if (pulling && phase == 3) ++t.crawlStrokes[cycle % 2];
+                if (pulling) t.crawlOrigin.y += .006f;
+                t.crawlMotion = std::clamp(t.crawlMotion + (pulling ? .06f : -.04f), 0.f, 1.f);
+                const auto before = state.crawlFeet.feet();
+                const int previous = state.crawlFeet.swinging();
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                if (b.rig.hipRoot != b.rig.pelvis)
+                    view.turn(b.rig.below[b.rig.hipRoot], Quat::around({1, 0, 0}, std::sin(frame * .1f)),
+                              view.position(b.rig.hipRoot));
+                body::solve(view, b.rig, t, {}, state, true, .01f);
+                const int swing = state.crawlFeet.swinging();
+                for (const int joint : {23, 24, 27, 28})
+                    check(b.at(pose, joint).y < b.at(pose, b.rig.hipRoot).y,
+                        "a long crawling step raised the foot above the pelvis");
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                    const Vec3 axis = normalized(b.at(pose, leg.foot) - hip);
+                    const Vec3 bend = knee - hip - axis * dot(knee - hip, axis);
+                    check(bend.x * (i ? 1.f : -1.f) > .001f,
+                        "a crawling knee turned inward while its leg straightened");
+                }
+                if (previous < 0 && swing >= 0) {
+                    check(swing != lastStep, "full reaches did not alternate feet");
+                    if (!steps) check(swing == 1, "the entry step lost its opposite-hand cue");
+                    else {
+                        const auto& leg = b.rig.legs[swing];
+                        const Vec3 hip = b.at(pose, leg.upper);
+                        const Vec3 knee = b.at(pose, leg.lower), ankle = b.at(pose, leg.foot);
+                        const float reach = b.rig.thigh[swing] + b.rig.shin[swing];
+                        check(length(ankle - hip) > reach * .985f,
+                            "the next step began before the planted leg reached full extension");
+                        check(dot(normalized(knee - hip), normalized(ankle - knee)) > .93f,
+                            "the leg still looked folded before the next step");
+                    }
+                    lastStep = swing;
+                    start = before[swing]; ++steps;
+                }
+                if (previous >= 0 && swing < 0) {
+                    if (landings) check(state.crawlFeet.feet()[previous].y - start.y > .6f,
+                        "extended-leg step lost its larger reach");
+                    ++landings;
+                }
+                if (swing >= 0) {
+                    const auto& leg = b.rig.legs[1 - swing];
+                    const float down = b.at(pose, leg.upper).y - b.at(pose, leg.foot).y;
+                    if (down > .5f) {
+                        const float kneeDown = b.at(pose, leg.upper).y - b.at(pose, leg.lower).y;
+                        if (kneeDown <= .2f)
+                            throw std::runtime_error("high supporting knee: distance " +
+                                std::to_string(distance) + " frame " + std::to_string(frame) +
+                                " foot down " + std::to_string(down) + " knee down " +
+                                std::to_string(kneeDown));
+                        ++extended;
+                    }
+                }
+            }
+            if (!(steps >= 3 && steps <= 7 && landings == steps))
+                throw std::runtime_error("extended steps " + std::to_string(steps) +
+                    " landings " + std::to_string(landings));
+            check(extended > 20, "the supporting leg never extended while the opposite foot reached");
+        };
+        verify(testBody(), 0);
+        verify(splitPelvisBody(), 0);
+        verify(testBody(), .4f);
+        verify(splitPelvisBody(), .4f);
+    });
+    test("body: planted crawl puts knees below the hips with less sideways flare at rest and in motion", [] {
+        const auto b = testBody();
+        for (float moving : {0.f, 1.f})
+            for (float clearance : {.25f, .4f, .75f, 1.f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                    t.crawlMotion = moving;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), side = t.tilt.rotate({1, 0, 0});
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.eyes = Vec3{0, 0, clearance} + up;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+                    body::State state;
+                    const auto pose = solved(b, t, state);
+                    for (const auto& leg : b.rig.legs) {
+                        const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                        const Vec3 foot = b.at(pose, leg.foot);
+                        check(dot(knee - hip, up) < -.05f, "knee stayed raised alongside the waist");
+                        check(std::abs(dot(knee - hip, side)) < .3f, "knee kept the wide crab flare");
+                        near(length(knee - hip), b.rig.thigh[0], .001f);
+                        near(length(foot - knee), b.rig.shin[0], .001f);
+                        near(foot.z, .08f, .001f);
+                    }
+                }
+    });
+    test("body: planted legs remain reachable while a two-grip roll turns about a stationary head", [] {
+        const auto b = testBody();
+        for (bool synced : {false, true}) {
+        body::State state;
+        state.weight = state.crawlWeight = 1;
+        for (int frame = 0; frame < 100; ++frame) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+            t.crawlHandSync = synced;
+            t.tilt = Quat::around({0, 0, 1}, frame * 3.14159265f / 99);
+            t.eyes = {0, 1, .4f}; // gesture rotates about this head; it does not orbit the feet
+            t.facing = t.tilt * Quat::around({1, 0, 0}, -1.2f);
+            t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = t.tilt.rotate({0, 1, 0});
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, .01f);
+            for (int i = 0; i < 2; ++i)
+                near(length(b.at(pose, b.rig.legs[i].foot) - state.crawlFeet.feet()[i]), 0, .002f);
+            check(state.crawlFeet.swinging() < 0, "gesture roll invented a walking step");
+        }
+        }
+    });
+    test("body: confirmed wall hand flags retain the version 9 packet and reject stale formats", [] {
+        using namespace native_body;
+        Command command;
+        command.crawlNormal = {0, 0, 1}; command.crawlAhead = command.crawlStep = {0, 1, 0};
+        for (unsigned hands = 0; hands < 4; ++hands) {
+            command.flags = crawl | crawlPlanted | crawlHandSync | crawlHandFlags(hands);
+            check(validCrawl(command), "confirmed wall hands invalidated the current crawl packet");
+            check(crawlHandMask(command.flags) == hands, "left/right attachment flags changed sides");
+            check(sizeof(command) == 304 && commandFormat(9, 272), "wall flags changed the ABI");
+        }
+        command.flags &= ~crawlHandSync;
+        check(!validCrawl(command), "support flags accepted outside hand-synced crawling");
+        command.flags |= crawlHandSync;
+        command.version = 8;
+        check(!validCrawl(command), "legacy version interpreted new support flags");
+        command.flags &= ~(crawlLeftHeld | crawlRightHeld);
+        check(validCrawl(command), "legacy crawl packet lost compatibility");
+        command.version = 9;
+        for (unsigned touches = 0; touches < 4; ++touches) {
+            command.flags = crawl | crawlPlanted | crawlHandSync | crawlTouchFlags(touches) | crawlTurnAway;
+            check(validCrawl(command), "collision/outward flags rejected the current pose");
+            check(crawlTouchMask(command.flags) == touches && crawlHandMask(command.flags) == 0,
+                  "touch contact was confused with a grip attachment");
+        }
+        command.version = 8;
+        check(!validCrawl(command), "old version accepted collision/outward pose flags");
+    });
+    test("body: one supporting hand permits mirrored upper-spine turns with fixed head hips and feet", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (int free = 0; free < 2; ++free) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                        t.eyes = up * scale + normal * .4f; t.crawlDistance = .4f;
+                        t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                        const float direction = free == 0 ? 1.f : -1.f;
+                        t.facing = t.tilt * Quat::yaw(direction * 2.f);
+                        t.crawlHands = 1u << (1 - free);
+                        for (int i = 0; i < 2; ++i) {
+                            const float side = i ? 1.f : -1.f;
+                            const Vec3 grip{side * (i == free ? .38f : .25f) * scale,
+                                            .75f * scale, i == free ? .55f : .035f};
+                            t.hands[i] = {true, t.tilt.rotate(grip), t.tilt};
+                        }
+                        body::Config config; config.hideHead = false;
+                        auto previous = config; previous.crawlTorsoTwist = 0;
+                        body::State oldState, state;
+                        body::Result result;
+                        const auto old = solved(b, t, oldState, previous, scale);
+                        auto pose = solved(b, t, state, config, scale, &result);
+                        for (int frame = 0; frame < 90; ++frame) {
+                            pose = b.rest;
+                            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                            result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        }
+                        check(state.crawlTwist * direction > .45f,
+                              "the upper body remained fixed to the wall");
+                        const int shoulder = b.rig.arms[free].upper;
+                        check(dot(b.at(pose, shoulder) - b.at(old, shoulder), normal) > .05f * scale,
+                              "the reaching shoulder did not open away from the wall");
+                        for (const int joint : {b.rig.head, b.rig.hipRoot, 21, 22, 23, 25, 26, 27})
+                            near(length(b.at(pose, joint) - b.at(old, joint)), 0, .002f);
+                        for (int i = 0; i < 2; ++i) {
+                            near(result.handError[i], 0, .002f);
+                            near(length(b.at(pose, b.rig.arms[i].hand) - wristOf(t.hands[i], i)),
+                                 0, .002f);
+                            near(length(state.crawlFeet.feet()[i] - oldState.crawlFeet.feet()[i]), 0, .002f);
+                        }
+                        for (int joint = 2; joint < static_cast<int>(b.rig.parent.size()); ++joint) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(b.at(pose, joint) - b.at(pose, parent)),
+                                 length(b.at(old, joint) - b.at(old, parent)), .002f);
+                        }
+                    }
+    });
+    test("body: looking and free-hand reaching each turn shoulders but looking down does not turn hips", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 4; ++mode) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 1;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.hands[0] = {true, {-.25f, .75f, .035f}, {}};
+            t.hands[1] = {true, {.3f, .75f, mode == 1 ? .7f : .1f}, {}};
+            if (mode == 0) t.facing = Quat::yaw(-1.5f);
+            if (mode == 2) t.facing = Quat::around({1, 0, 0}, -1.5f);
+            body::State state;
+            solved(b, t, state);
+            if (mode < 2)
+                check(state.crawlTwist < -.25f, "looking or reaching failed to turn the shoulders");
+            else
+                near(state.crawlTwist, 0, .001f);
+        }
+    });
+    test("body: one-hand twist crosses the back smoothly and settles on a two-hand hold", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 2;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.38f, .75f, .55f}, {}};
+        t.hands[1] = {true, {.25f, .75f, .035f}, {}};
+        body::State state;
+        state.weight = state.crawlWeight = 1;
+        Vec3 previousShoulder{};
+        for (int frame = 0; frame < 300; ++frame) {
+            t.facing = Quat::yaw(1.8f + frame * .006f);
+            const float previous = state.crawlTwist;
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+            check(state.crawlTwist >= 0, "looking across the back reversed the shoulder turn");
+            check(std::abs(state.crawlTwist - previous) <= 2.4f / 90 + .001f, "shoulders snapped");
+            if (frame) check(length(view.position(b.rig.arms[0].upper) - previousShoulder) < .025f,
+                             "the visible shoulder popped at the backward look seam");
+            previousShoulder = view.position(b.rig.arms[0].upper);
+        }
+        t.crawlHands = 3; t.facing = {};
+        t.hands[0].grip = {-.25f, .75f, .035f};
+        for (int frame = 0; frame < 100; ++frame) {
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        near(state.crawlTwist, 0, .001f);
+    });
+    test("body: shoulder turns stay within the supporting arm's real reach", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f; t.crawlHands = 1;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.48f, .75f, .035f}, {}};
+        t.hands[1] = {true, {-.3f, .75f, .7f}, {}};
+        t.facing = Quat::yaw(2.f);
+        body::State state;
+        body::Result result;
+        auto pose = solved(b, t, state, {}, 1, &result);
+        for (int frame = 0; frame < 90; ++frame) {
+            pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        check(state.crawlTwist > .01f && state.crawlTwist < 1.15f, "attached-arm reach did not limit twist");
+        near(result.handError[0], 0, .002f);
+        near(length(b.at(pose, b.rig.arms[0].hand) - wristOf(t.hands[0], 0)), 0, .002f);
+    });
+    test("body: gaze does not twist unheld two-hand ground vent or stock crawling bodies", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 5; ++mode) {
+            body::Targets t;
+            t.head = true; t.eyes = {0, 1, .4f}; t.facing = Quat::yaw(-2.f);
+            t.crawl = mode != 3; t.crawlHandSync = mode != 4; t.crawlPlanted = true;
+            t.crawlHands = mode == 0 ? 0 : mode == 1 ? 3 : 1;
+            t.crawlDistance = .4f;
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.hands[0] = {mode != 2, {-.25f, .75f, .035f}, {}};
+            t.hands[1] = {true, {.38f, .75f, .55f}, {}};
+            body::Config previous; previous.crawlTorsoTwist = 0;
+            body::State oldState, state;
+            const auto old = solved(b, t, oldState, previous);
+            const auto pose = solved(b, t, state);
+            near(state.crawlTwist, 0, .001f);
+            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                near(length(b.at(pose, joint) - b.at(old, joint)), 0, .001f);
+        }
+    });
+    test("body: solid palm contact enables the same shoulder turn without grip attachment", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.hands[0] = {true, {-.25f, .75f, .035f}, {}};
+        t.hands[1] = {true, {.38f, .75f, .55f}, {}};
+        t.facing = Quat::yaw(-2.f);
+        body::State gripped, touched;
+        t.crawlHands = 1;
+        const auto before = solved(b, t, gripped);
+        t.crawlHands = 0; t.crawlTouches = 1;
+        const auto after = solved(b, t, touched);
+        check(touched.crawlTwist < -.4f, "touching a wall did not open the reaching shoulder");
+        near(touched.crawlTwist, gripped.crawlTwist, .001f);
+        for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+            near(length(b.at(after, joint) - b.at(before, joint)), 0, .001f);
+    });
+    test("feet-supported half-turns step one forefoot at a time and return without crossing shoes", [] {
+        for (float scale : {.85f, 1.2f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float direction : {-1.f, 1.f}) {
+                    CrawlTurn turn;
+                    CrawlTurn::Frame f;
+                    const Quat rotation = Quat::yaw(.7f) * Quat::around({0, 0, 1}, roll);
+                    const auto world = [&](Vec3 p) { return rotation.rotate(p); };
+                    f.head = world({0, 1 * scale, .32f});
+                    f.pelvis = world({0, .32f * scale, .45f});
+                    f.normal = world({0, 0, 1}); f.up = world({0, 1, 0});
+                    f.seconds = 1.f / 90; f.scale = scale; f.direction = direction;
+                    f.mayStart = f.wanted = true;
+                    for (int i = 0; i < 2; ++i) {
+                        const float side = i ? 1.f : -1.f;
+                        f.hips[i] = world({side * .1f * scale, .27f * scale, .45f});
+                        f.shoulders[i] = world({side * .18f * scale, .78f * scale, .36f});
+                        f.contacts[i] = world({side * .3f * scale, -.14f * scale, 0});
+                        f.reach[i] = .87f * scale; f.armReach[i] = .56f * scale;
+                        f.ankle[i] = .14f * scale; f.lead[i] = .06f * scale; f.span[i] = .329f * scale;
+                    }
+                    for (int phase = 0; phase < 2; ++phase) {
+                        f.wanted = phase == 0;
+                        for (int frame = 0; frame < 180; ++frame) {
+                            const auto before = turn.feet();
+                            const int previous = turn.swinging();
+                            turn.update(f);
+                            const auto& feet = turn.feet();
+                            check(std::min(dot(feet[0], f.normal), dot(feet[1], f.normal)) < .001f,
+                                  "both feet left the wall during a turn");
+                            for (int i = 0; i < 2; ++i) {
+                                check(dot(feet[i] - f.pelvis, f.up) < -.075f * scale,
+                                      "turning raised a foot above the pelvis");
+                                if ((phase || frame) && previous != i && turn.swinging() != i)
+                                    near(length(feet[i] - before[i]), 0, .0001f);
+                            }
+                            const Vec3 delta = feet[0] - feet[1];
+                            check(std::abs(dot(delta, cross(f.normal, f.up))) > .14f * scale ||
+                                  std::abs(dot(delta, f.up)) > .344f * scale,
+                                  "turning shoes crossed through each other");
+                        }
+                        near(turn.angle(), phase ? 0 : direction * 3.14159265f, .001f);
+                        check(turn.outward() == (phase == 0), "the stepped turn failed to reach its pose");
+                    }
+                }
+    });
+    test("feet-supported turns hold repeated samples and refuse a stance without physical room", [] {
+        CrawlTurn turn;
+        CrawlTurn::Frame f;
+        f.head = {0, 1, .32f}; f.pelvis = {0, .32f, .45f};
+        f.normal = {0, 0, 1}; f.up = {0, 1, 0}; f.seconds = 1.f / 90;
+        f.mayStart = f.wanted = true;
+        for (int i = 0; i < 2; ++i) {
+            const float side = i ? 1.f : -1.f;
+            f.hips[i] = {side * .1f, .27f, .45f}; f.shoulders[i] = {side * .18f, .78f, .36f};
+            f.contacts[i] = {side * .3f, -.14f, 0};
+            f.reach[i] = .87f; f.armReach[i] = .56f; f.ankle[i] = .14f; f.lead[i] = .06f;
+            f.span[i] = .23f;
+        }
+        for (int frame = 0; frame < 150; ++frame) turn.update(f);
+        check(turn.outward(), "reference outward stance was refused");
+        const auto before = turn.feet(); const float angle = turn.angle();
+        f.seconds = 0;
+        for (int frame = 0; frame < 8; ++frame) turn.update(f);
+        near(turn.angle(), angle);
+        for (int i = 0; i < 2; ++i) near(length(turn.feet()[i] - before[i]), 0);
+        f.seconds = std::numeric_limits<float>::quiet_NaN();
+        check(!turn.update(f) && !turn.engaged(), "invalid frame retained the outward stance");
+        f.seconds = 1.f / 90;
+        for (int i = 0; i < 2; ++i) f.shoulders[i].z = .1f;
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(turn.outward(), "usable shoulder clearance unnecessarily blocked the close stance");
+        turn.reset();
+        for (int i = 0; i < 2; ++i) f.shoulders[i].z = 0;
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(!turn.engaged(), "turning carried the shoulder through the known wall");
+        turn.reset();
+        f.head.z = 1.08f; f.pelvis.z = 1.2f;
+        for (int i = 0; i < 2; ++i) { f.hips[i].z = 1.2f; f.shoulders[i].z = 1.12f; }
+        for (int frame = 0; frame < 90; ++frame) turn.update(f);
+        check(!turn.engaged(), "the feet-supported pose exceeded actual leg reach");
+    });
+    test("feet-supported turns can enter outward immediately and return in either yaw direction", [] {
+        for (float entryDirection : {-1.f, 1.f})
+            for (float returnDirection : {-1.f, 1.f}) {
+                CrawlTurn turn;
+                CrawlTurn::Frame f;
+                f.head = {0, 1, .32f}; f.pelvis = {0, .32f, .45f};
+                f.normal = {0, 0, 1}; f.up = {0, 1, 0}; f.seconds = 1.f / 90;
+                f.entryOutward = f.wanted = f.mayStart = true; f.direction = entryDirection;
+                for (int i = 0; i < 2; ++i) {
+                    const float side = i ? 1.f : -1.f;
+                    f.hips[i] = {side * .1f, .27f, .45f};
+                    f.shoulders[i] = {side * .18f, .78f, .36f};
+                    f.contacts[i] = {side * .3f, -.14f, 0};
+                    f.reach[i] = .87f; f.armReach[i] = .56f;
+                    f.ankle[i] = .14f; f.lead[i] = .06f; f.span[i] = .329f;
+                }
+                turn.update(f);
+                check(turn.outward() && !turn.turning(), "outward entry played a wall-facing turn first");
+                near(turn.angle(), entryDirection * 3.14159265f, .001f);
+                for (auto foot : turn.feet()) near(dot(foot, f.normal), 0, .001f);
+                f.wanted = false; f.direction = returnDirection;
+                float previous = turn.angle();
+                bool moved = false;
+                for (int frame = 0; frame < 120; ++frame) {
+                    turn.update(f);
+                    const float delta = std::remainder(turn.angle() - previous, 6.2831853f);
+                    if (std::abs(delta) > .0001f) {
+                        moved = true;
+                        check(delta * returnDirection > 0, "the body returned against the requested turn");
+                    }
+                    previous = turn.angle();
+                }
+                check(moved && !turn.engaged(), "the outward entry did not step back to normal");
+            }
+    });
+    test("body: back-to-wall entry starts outward, including a downward look", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float direction : {-1.f, 1.f}) for (float scale : {.85f, 1.2f})
+                for (float pitch : {0.f, -1.4f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.crawlTurnAway = true; t.crawlDistance = .4f;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                        t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                        const int support = direction < 0 ? 0 : 1;
+                        t.crawlTouches = 1u << support;
+                        t.hands[support] = {true,
+                            t.tilt.rotate({direction * .12f * scale, .7f * scale, .035f}), t.tilt};
+                        t.facing = t.tilt * Quat::yaw(direction * 3.14159265f) *
+                                   Quat::around({1, 0, 0}, pitch);
+                        body::State state; state.weight = state.crawlWeight = 1;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::Config config; config.hideHead = false;
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        near(result.handError[support], 0, .005f);
+                        check(state.crawlTurn.outward() && !state.crawlTurn.turning(),
+                              "a back-to-wall entry first faced the building");
+                        near(dot(view.position(b.rig.hipRoot), n), .12f, .003f);
+                        check(dot(normalized(view.direction(b.rig.hipRoot, b.rig.hipForward)), n) > .6f,
+                              "the initial pelvis did not face outward");
+                        check(dot(normalized(view.direction(b.rig.head, b.rig.headForward)),
+                                  t.facing.rotate({0, 0, -1})) > .999f, "entry turned the tracked head");
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 toe = view.position(leg.foot) + normalized(
+                                view.direction(leg.foot, b.rig.footForward[i])) *
+                                    b.rig.forefootLength[i] * scale -
+                                normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                                    b.rig.ankleHeight[i] * scale;
+                            near(dot(toe, n), 0, .005f);
+                        }
+                    }
+    });
+    test("body: turning past a shoulder hands the pose to the hips in the same direction", [] {
+        const auto b = splitPelvisBody();
+        for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            const int support = direction < 0 ? 0 : 1;
+            t.crawlTouches = 1u << support;
+            t.hands[support] = {true, {direction * .12f, .7f, .035f}, {}};
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previous = 0; bool moved = false;
+            for (int frame = 0; frame < 240; ++frame) {
+                const float yaw = direction * 1.9198622f * std::clamp((frame - 40) / 40.f, 0.f, 1.f);
+                t.facing = Quat::yaw(yaw);
+                t.hands[1 - support] = {true, t.eyes + t.facing.rotate(
+                    {-direction * .3f, -.25f, -.25f}), t.facing};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                const float delta = std::remainder(state.crawlTurn.angle() - previous, 6.2831853f);
+                if (std::abs(delta) > .0001f) {
+                    moved = true;
+                    check(delta * direction > 0, "the hips turned against the opening shoulder");
+                }
+                previous = state.crawlTurn.angle();
+            }
+            check(moved && state.crawlTurn.outward(), "the body waited for an almost backward gaze");
+        }
+    });
+    test("body: continuing a full left or right turn does not unwind at the backward-look seam", [] {
+        const auto b = splitPelvisBody();
+        for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previous = 0; bool outward = false, returned = false;
+            Vec3 previousNeck{};
+            for (int frame = 0; frame < 700; ++frame) {
+                t.facing = Quat::yaw(direction * 6.2831853f * std::clamp((frame - 40) / 500.f, 0.f, 1.f));
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                const float delta = std::remainder(state.crawlTurn.angle() - previous, 6.2831853f);
+                check(delta * direction >= -.0001f, "the continuous turn suddenly unwound the other way");
+                previous = state.crawlTurn.angle();
+                const Vec3 neck = normalized(view.direction(b.rig.neck.front(), {1, 0, 0}));
+                if (frame) check(dot(neck, previousNeck) > .95f, "the neck snapped across a full-turn seam");
+                previousNeck = neck;
+                if (state.crawlTurn.engaged()) {
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                        near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                    }
+                    check(nearest < .005f, "the continuous turn detached both supporting toes");
+                }
+                outward = outward || state.crawlTurn.outward();
+                returned = returned || (outward && !state.crawlTurn.engaged());
+            }
+            check(outward && returned && !state.crawlTurn.engaged(),
+                  "the full turn lost a facing transition");
+        }
+    });
+    test("body: an outward feet-supported pose turns the chest and hips with tracked head orientation", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = true; t.crawlDistance = .4f;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                    t.eyes = up * scale + normal * .4f;
+                    t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                    body::Config config; config.hideHead = false;
+                    body::State state;
+                    state.weight = state.crawlWeight = 1;
+                    std::vector<float> pose;
+                    for (int frame = 0; frame < 420; ++frame) {
+                        const float yaw = frame < 60 ? 0.f :
+                            -std::min(3.14159265f, static_cast<float>(frame - 60) * .045f);
+                        const Quat looking = Quat::yaw(yaw);
+                        t.facing = t.tilt * looking;
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 local = looking.rotate(
+                                {(i ? .3f : -.3f) * scale, -.25f * scale, -.25f});
+                            t.hands[i] = {true, t.eyes + t.tilt.rotate(local), t.facing};
+                        }
+                        pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const float anchorYaw = state.crawlTurn.angle();
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        auto reference = t; reference.crawlTurnAway = false;
+                        body::State oldState; oldState.weight = oldState.crawlWeight = 1;
+                        auto old = b.rest;
+                        body::Pose oldView(old.data(), static_cast<int>(b.rig.parent.size()));
+                        body::solve(oldView, b.rig, reference, config, oldState, true, 1.f / 90, scale);
+                        const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                        const Vec3 offset = F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                                            cross(U, F) * b.rig.eyesFromHead.z;
+                        const Vec3 anchorShift = (offset -
+                            Quat::around(up, anchorYaw - yaw).rotate(offset)) * scale *
+                            state.crawlTurn.outwardWeight(anchorYaw);
+                        const Vec3 bodyRaise = up * config.crawlEyeLift *
+                            state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        near(length(view.position(b.rig.head) - oldView.position(b.rig.head) -
+                                    anchorShift - bodyRaise),
+                             0, .002f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) - F), 0, .002f);
+                        const float outward = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        near(dot(view.position(b.rig.hipRoot), normal), .45f - .33f * outward, .003f);
+                        float nearest = 100;
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 ankle = view.position(leg.foot);
+                            const Vec3 footAhead = normalized(view.direction(leg.foot, b.rig.footForward[i]));
+                            const Vec3 soleUp = normalized(view.direction(leg.foot, b.rig.footUp[i]));
+                            const Vec3 toe = ankle + footAhead * (b.rig.forefootLength[i] * scale) -
+                                             soleUp * (b.rig.ankleHeight[i] * scale);
+                            nearest = std::min(nearest, std::abs(dot(toe, normal)));
+                            if (state.crawlTurn.engaged())
+                                near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                            check(dot(toe - view.position(b.rig.hipRoot), up) < -.01f,
+                                  "outward pose raised a toe above the pelvis");
+                            const Vec3 heel = ankle - footAhead * (b.rig.forefootLength[i] * .5f * scale) -
+                                              soleUp * (b.rig.ankleHeight[i] * scale);
+                            check(dot(heel - view.position(b.rig.hipRoot), up) < -.001f,
+                                  ("raised heel at " + std::to_string(frame) + ", height " +
+                                  std::to_string(dot(heel - view.position(b.rig.hipRoot), up))).c_str());
+                            near(length(view.position(leg.lower) - view.position(leg.upper)),
+                                 b.rig.thigh[i] * scale, .002f);
+                            near(length(ankle - view.position(leg.lower)), b.rig.shin[i] * scale, .002f);
+                        }
+                        if (state.crawlTurn.engaged())
+                            check(nearest < .005f, "the rendered supporting foot lost the wall");
+                        for (const int joint : b.rig.spine) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(oldView.position(joint) - oldView.position(parent)), .002f);
+                        }
+                    }
+                    check(state.crawlTurn.outward(), "looking fully away did not enter the outward pose");
+                    body::Pose result(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose rest(const_cast<float*>(b.rest.data()), static_cast<int>(b.rig.parent.size()));
+                    const int chest = b.rig.spine.back();
+                    const Vec3 chestForward = normalized(
+                        result.direction(chest, rest.local(chest, {0, 0, 1})));
+                    check(dot(chestForward, normal) > .6f, "the chest did not face away from the wall");
+                    check(dot(normalized(result.direction(b.rig.hipRoot, b.rig.hipForward)), normal) > .6f,
+                          "only the upper spine turned instead of the body changing stance");
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 footAhead = normalized(result.direction(leg.foot, b.rig.footForward[i]));
+                        const Vec3 soleUp = normalized(result.direction(leg.foot, b.rig.footUp[i]));
+                        check(dot(footAhead, up) < -.75f,
+                              "outward shoes retained the upward crawling alignment");
+                        check(dot(soleUp, normal) > .95f, "outward soles failed to face the wall");
+                        const Vec3 shin = result.position(leg.lower) - result.position(leg.foot);
+                        check(dot(shin, normal) > .08f * scale,
+                              "the outward shin did not bend away from its attached shoe");
+                    }
+                }
+    });
+    test("body: the close outward pelvis returns smoothly to the saved normal distance", [] {
+        const auto b = splitPelvisBody();
+        for (float distance : {.4f, .5f, .6f})
+            for (float direction : {-1.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = distance; t.eyes = {0, 1, distance};
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                body::State state; state.weight = state.crawlWeight = 1;
+                Vec3 previous{};
+                for (int frame = 0; frame < 650; ++frame) {
+                    const float yaw = frame < 50 ? 0 : frame < 150 ? (frame - 50) * .0314159265f :
+                                      frame < 350 ? 3.14159265f :
+                                      frame < 450 ? (450 - frame) * .0314159265f : 0;
+                    t.facing = Quat::yaw(yaw * direction);
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                    const Vec3 pelvis = view.position(b.rig.hipRoot);
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    near(pelvis.z, (distance + .05f) * (1 - weight) + .12f * weight, .003f);
+                    if (frame) check(length(pelvis - previous) < .055f, "the pelvis snapped during the turn");
+                    previous = pelvis;
+                    if (frame == 340) check(state.crawlTurn.outward(),
+                        ("a reachable distance refused the turn: " + std::to_string(distance)).c_str());
+                }
+                check(!state.crawlTurn.engaged(), "returning to the wall retained the close outward pelvis");
+                near(previous.z, distance + .05f, .003f);
+            }
+    });
+    test("body: the outward down view clears the chest, retaining pelvis clearance and planted shoes", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = true; t.crawlDistance = .4f; t.crawlTouches = 1;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n;
+                    t.crawlAhead = t.crawlStep = up;
+                    t.hands[0] = {true, t.tilt.rotate({-.12f * scale, .7f * scale, .035f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    auto previous = config; previous.crawlOutwardEyeClearance = 0;
+                    body::State state, reference;
+                    state.weight = state.crawlWeight = reference.weight = reference.crawlWeight = 1;
+                    for (int frame = 0; frame < 700; ++frame) {
+                        const float yaw = frame < 40 ? 0 :
+                            -std::min(3.14159265f, static_cast<float>(frame - 40) * .0314159265f);
+                        const float bend = frame < 300 ? 0 : frame < 420 ? (frame - 300) / 120.f :
+                                           frame < 500 ? 1 : frame < 620 ? (620 - frame) / 120.f : 0;
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0}, -1.55f * bend);
+                        t.hands[1] = {true, t.eyes + t.tilt.rotate(Quat::yaw(yaw).rotate(
+                            {.3f * scale, -.25f * scale, -.25f})), t.tilt * Quat::yaw(yaw)};
+                        auto pose = b.rest, oldPose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        const auto oldResult = body::solve(old, b.rig, t, previous, reference,
+                                                           true, 1.f / 90, scale);
+                        for (int i = 0; i < 2; ++i)
+                            check(result.handError[i] < std::max(.005f, oldResult.handError[i] + .005f),
+                                  ("chest clearance detached hand " + std::to_string(i) +
+                                   " at frame " + std::to_string(frame) + ", error " +
+                                   std::to_string(result.handError[i]) + ", previous " +
+                                   std::to_string(oldResult.handError[i])).c_str());
+                        near(result.handError[0], 0, .005f);
+                        near(length(view.position(b.rig.arms[0].hand) - wristOf(t.hands[0], 0)), 0, .005f);
+                        const Vec3 gaze = t.facing.rotate({0, 0, -1});
+                        check(dot(normalized(view.direction(b.rig.head, b.rig.headForward)), gaze) > .999f,
+                              "chest clearance changed the head's tracked orientation");
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            if (state.crawlTurn.engaged()) {
+                                const Vec3 toe = view.position(leg.foot) + normalized(
+                                    view.direction(leg.foot, b.rig.footForward[i])) *
+                                        b.rig.forefootLength[i] * scale - normalized(
+                                    view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i] * scale;
+                                const float error = length(toe - state.crawlTurn.feet()[i]);
+                                check(error < .004f, ("outward view toe error " + std::to_string(error) +
+                                    " frame " + std::to_string(frame) + ", angle " +
+                                    std::to_string(state.crawlTurn.angle())).c_str());
+                            } else {
+                                near(length(view.position(leg.foot) - old.position(leg.foot)), 0, .004f);
+                            }
+                        }
+                        for (const int joint : b.rig.spine) {
+                            const int parent = b.rig.parent[joint];
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(old.position(joint) - old.position(parent)), .002f);
+                        }
+                        if (frame < 300 || frame >= 650)
+                            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                                near(length(view.position(joint) - old.position(joint)), 0, .002f);
+                        if (frame >= 420 && frame < 500) {
+                            check(state.crawlTurn.outward(), "looking down ended the outward stance");
+                            near(dot(view.position(b.rig.hipRoot), n), .12f, .003f);
+                            const int chest = b.rig.spine.back();
+                            check(dot(old.position(chest) - view.position(chest), n) > .06f,
+                                  "the downturned outward chest did not retreat behind the viewpoint");
+                            body::Pose rest(const_cast<float*>(b.rest.data()),
+                                            static_cast<int>(b.rig.parent.size()));
+                            const Vec3 chestFront = view.position(chest) + normalized(
+                                view.direction(chest, rest.local(chest, {0, 0, 1}))) * (.12f * scale);
+                            check(dot(t.eyes - chestFront, n) > .04f,
+                                  ("chest-front gap " + std::to_string(dot(t.eyes - chestFront, n)) +
+                                  ", scale " + std::to_string(scale)).c_str());
+                        }
+                    }
+                }
+    });
+    test("body: a resting palm can support the outward turn without a grip or a detached wrist", [] {
+        const auto b = splitPelvisBody();
+        for (int support : {0, 1})
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.crawlTouches = 1u << support;
+            t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            const float side = support ? 1.f : -1.f;
+            t.hands[support] = {true, t.tilt.rotate({side * .12f, .7f, .035f}), t.tilt};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 320; ++frame) {
+                const float angle = side * std::min(3.14159265f, frame * .025f);
+                const Quat viewTurn = Quat::yaw(angle);
+                t.facing = t.tilt * viewTurn;
+                t.hands[1 - support] = {true,
+                    t.eyes + t.tilt.rotate(viewTurn.rotate({-side * .3f, -.25f, -.25f})), t.facing};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const auto result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                near(result.handError[support], 0, .003f);
+                near(length(view.position(b.rig.arms[support].hand) -
+                    wristOf(t.hands[support], support)), 0, .003f);
+            }
+            check(state.crawlTurn.outward(), "resting contact required a grip for the full outward turn");
+            check(t.crawlHands == 0, "the contact-only pose invented a grip attachment");
+            near(length(t.crawlOrigin), 0);
+        }
+    });
+    test("body: the outward stance has narrow feet and a long leg opposite a bent leg", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, left = cross(n, up);
+                t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                body::State state; state.weight = state.crawlWeight = 1;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                float longest = 0, shortest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 ownSide = left * (i ? 1.f : -1.f);
+                    const Vec3 ankle = view.position(leg.foot), pelvis = view.position(b.rig.hipRoot);
+                    const float width = dot(ankle - pelvis, ownSide);
+                    check(width > .1f * scale && width < .19f * scale,
+                          "the outward ankle failed to stay in its narrow own-side lane");
+                    const Vec3 forward = normalized(view.direction(leg.foot, b.rig.footForward[i]));
+                    check(dot(forward, ownSide) > .22f && dot(forward, ownSide) < .29f,
+                          "the outward boot kept the wide crawling toe-out angle");
+                    const float extension = length(ankle - view.position(leg.upper)) /
+                                            ((b.rig.thigh[i] + b.rig.shin[i]) * scale);
+                    longest = std::max(longest, extension); shortest = std::min(shortest, extension);
+                }
+                check(longest > .93f && shortest < .55f, "the outward legs remained equally bent");
+            }
+    });
+    test("body: outward pulls alternate long strides with one extended leg and one reaching leg", [] {
+        const auto b = longFootBody(.22f);
+        for (float speed : {.135f, .54f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            t.facing = t.tilt * Quat::yaw(3.14159265f);
+            body::State state; state.weight = state.crawlWeight = 1;
+            int previous = -1, last = -1, steps = 0, extended = 0, flying = 0;
+            for (int frame = 0; frame < 1500; ++frame) {
+                const bool moving = frame >= 30;
+                if (moving) t.crawlOrigin += up * (speed / 90.f);
+                t.crawlMotion = moving ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                check(state.crawlTurn.outward(), "outward stepping unexpectedly changed the stance");
+                const int swing = state.outwardFeet.swinging();
+                if (swing >= 0 && previous < 0) {
+                    check(swing != last, "outward steps repeated the same foot");
+                    last = swing; ++steps;
+                }
+                previous = swing;
+                float longest = 0, shortest = 1, nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 ankle = view.position(leg.foot);
+                    const float extension = length(ankle - view.position(leg.upper)) /
+                                            (b.rig.thigh[i] + b.rig.shin[i]);
+                    longest = std::max(longest, extension); shortest = std::min(shortest, extension);
+                    const Vec3 toe = ankle + normalized(view.direction(leg.foot, b.rig.footForward[i])) *
+                        b.rig.forefootLength[i] - normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                        b.rig.ankleHeight[i] + t.crawlOrigin;
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, n)));
+                }
+                check(nearest < .005f, "outward stepping lifted both supporting feet");
+                if (moving && swing >= 0) {
+                    ++flying;
+                    if (longest >= .87f && shortest < .9f) ++extended;
+                }
+            }
+            check(steps >= 4 && flying > 100, "outward hand pulls did not produce full alternating strides");
+            check(extended > flying * .9f, "outward stepping kept both legs compressed during the stride");
+        }
+    });
+    test("body: outward moving hips ease away from the wall and settle back without changing tracking", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float pitch : {0.f, -1.5f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.eyes = {0, scale, .4f};
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+                t.facing = Quat::yaw(3.14159265f) * Quat::around({1, 0, 0}, pitch);
+                body::State state; state.weight = state.crawlWeight = 1;
+                float previous = .12f;
+                for (int frame = 0; frame < 650; ++frame) {
+                    const bool moving = frame >= 60 && frame < 450;
+                    t.crawlMotion = moving ? .8f : 0;
+                    if (moving) t.crawlOrigin.y += .002f;
+                    const auto eyes = t.eyes; const auto facing = t.facing;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                    check(state.crawlTurn.outward(), "moving pelvis adjustment lost the outward stance");
+                    const float depth = dot(view.position(b.rig.hipRoot), t.crawlNormal);
+                    check(std::abs(depth - previous) < .004f, "outward pelvis snapped between clearances");
+                    previous = depth;
+                    if (frame == 150) near(depth, .22f, .002f);
+                    if (frame == 600) near(depth, .12f, .002f);
+                    near(length(t.eyes - eyes), 0);
+                    near(length(t.facing.rotate({1, 0, 0}) - facing.rotate({1, 0, 0})), 0, .001f);
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        near(length(toe + t.crawlOrigin - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                        near(length(view.position(leg.lower) - view.position(leg.upper)),
+                             b.rig.thigh[i] * scale, .001f);
+                    }
+                    check(nearest < .005f, "moving pelvis detached both supporting toes");
+                }
+            }
+    });
+    test("body: outward steps stay in narrow lanes through sideways diagonal and reversing pulls", [] {
+        const auto b = longFootBody(.22f);
+        for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+            for (float sideways : {-1.f, 0.f, 1.f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, left = cross(n, up);
+                t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                body::State state; state.weight = state.crawlWeight = 1;
+                int steps = 0, previousSwing = -1;
+                std::array<Vec3, 2> previousToes{};
+                for (int frame = 0; frame < 1000; ++frame) {
+                    const bool moving = frame >= 30;
+                    const Vec3 direction = normalized(left * sideways +
+                        up * (sideways == 0 ? 1.f : frame < 350 ? .4f : 0.f));
+                    if (moving) t.crawlOrigin += direction * ((frame < 650 ? 1.f : -1.f) * .003f * scale);
+                    t.crawlMotion = moving ? .8f : 0;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                    const int swing = state.outwardFeet.swinging();
+                    if (swing >= 0 && previousSwing < 0) ++steps;
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 ankle = view.position(leg.foot), pelvis = view.position(b.rig.hipRoot);
+                        const float width = dot(ankle - pelvis, left * (i ? 1.f : -1.f));
+                        check(width >= .099f * scale && width <= .231f * scale,
+                              ("outward step escaped its lane: " + std::to_string(width / scale) +
+                               " at frame " + std::to_string(frame)).c_str());
+                        const Vec3 toe = t.crawlOrigin + ankle + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                        nearest = std::min(nearest, std::abs(dot(toe, n)));
+                        if (frame && (1 - i) != swing && (1 - i) != previousSwing)
+                            near(length(toe - previousToes[i]), 0, .005f);
+                        previousToes[i] = toe;
+                    }
+                    check(nearest < .005f, "narrow sideways stepping detached both feet");
+                    previousSwing = swing;
+                }
+                if (sideways != 0) check(steps > 5, "sideways lane limits prevented stepping");
+            }
+    });
+    test("body: looking left and right while outward leaves resting hips knees and feet steady", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float pitch : {0.f, -1.1f}) for (int support : {-1, 0, 1}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    if (support >= 0) {
+                        t.crawlTouches = 1u << support;
+                        for (int i = 0; i < 2; ++i) {
+                            const Vec3 grip{(i ? 1.f : -1.f) * (i == support ? .12f : .3f) * scale,
+                                            .7f * scale, i == support ? .035f : .6f};
+                            t.hands[i] = {true, t.tilt.rotate(grip), t.tilt};
+                        }
+                    }
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    std::vector<float> reference;
+                    for (int frame = 0; frame < 400; ++frame) {
+                        const float glance = frame < 60 ? 0.f : .7f * std::sin((frame - 60) * .04f);
+                        t.facing = t.tilt * Quat::yaw(3.14159265f + glance) *
+                                   Quat::around({1, 0, 0}, pitch);
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        if (frame == 59) reference = pose;
+                        if (frame < 60) continue;
+                        check(state.crawlTurn.outward() && !state.crawlTurn.turning() &&
+                              state.outwardFeet.swinging() < 0, "a backward glance requested a body step");
+                        for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                            const float change = length(view.position(joint) - b.at(reference, joint));
+                            check(change < .002f, ("backward glance moved lower joint " +
+                                std::to_string(joint) + " by " + std::to_string(change)).c_str());
+                        }
+                        body::Pose old(reference.data(), static_cast<int>(b.rig.parent.size()));
+                        near(length(view.direction(b.rig.hipRoot, b.rig.hipForward) -
+                                    old.direction(b.rig.hipRoot, b.rig.hipForward)), 0, .002f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                    }
+                }
+    });
+    test("body: real sideways headset travel during outward glances does not sway the pelvis or belt", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (float travel : {0.f, .003f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    t.crawlTouches = 1u << support;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f,
+                                                         i == support ? .035f : .6f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    body::Pose rest(const_cast<float*>(b.rest.data()), static_cast<int>(b.rig.parent.size()));
+                    const int waist = b.rig.spine.front();
+                    const Vec3 waistForward = rest.local(waist, {0, 0, 1});
+                    Vec3 restingHip{}, restingWaist{};
+                    float restingYaw = 0, maximumChestYaw = 0;
+                    for (int frame = 0; frame < 650; ++frame) {
+                        const float glance = frame < 60 ? 0 : .65f * std::sin((frame - 60) * .04f);
+                        // An eye-centred tracker travels about a real neck;
+                        // rotating orientation at a fixed point missed this.
+                        t.eyes = up + n * .4f + side * (.14f * std::sin(glance)) +
+                                 n * (.14f * (std::cos(glance) - 1));
+                        t.facing = t.tilt * Quat::yaw(3.14159265f + glance);
+                        if (frame >= 60) t.crawlOrigin += side * travel;
+                        t.crawlMotion = frame >= 60 && travel > 0 ? .8f : 0;
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                        const Vec3 hip = view.position(b.rig.hipRoot) + t.crawlOrigin;
+                        const Vec3 belt = view.position(waist) + t.crawlOrigin;
+                        const Vec3 beltForward = normalized(view.direction(waist, waistForward));
+                        if (frame == 59) {
+                            restingHip = hip; restingWaist = belt; restingYaw = dot(beltForward, side);
+                        }
+                        if (frame < 60) continue;
+                        const float travelled = static_cast<float>(frame - 59) * travel;
+                        near(dot(hip - restingHip, side), travelled, .002f);
+                        near(dot(belt - restingWaist, side), travelled, .002f);
+                        near(dot(beltForward, side), restingYaw, .002f);
+                        near(result.handError[support], 0, .005f);
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                        const int chest = b.rig.spine.back();
+                        const Vec3 chestForward = normalized(view.direction(chest,
+                            rest.local(chest, {0, 0, 1})));
+                        maximumChestYaw = std::max(maximumChestYaw, std::abs(dot(chestForward, side)));
+                        if (travel == 0) check(state.outwardFeet.swinging() < 0,
+                                              "looking around started a resting footstep");
+                    }
+                    check(maximumChestYaw > .02f, "stabilizing the waist also froze the upper chest");
+                }
+    });
+    test("body: an outward waist anchor transports with camera roll and building corners", [] {
+        const auto b = longFootBody(.22f);
+        for (bool corner : {false, true}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f}; t.crawlNormal = {0, 0, 1};
+            body::State state; state.weight = state.crawlWeight = 1;
+            Vec3 before{};
+            for (int frame = 0; frame < 350; ++frame) {
+                const float roll = 1.5707963f * std::clamp((frame - 60) / 180.f, 0.f, 1.f);
+                const Quat frameTurn = Quat::around(corner ? Vec3{0, 1, 0} : Vec3{0, 0, 1}, roll);
+                t.tilt = corner ? Quat{} : frameTurn;
+                t.crawlNormal = frameTurn.rotate({0, 0, 1});
+                t.crawlAhead = t.crawlStep = frameTurn.rotate({0, 1, 0});
+                t.eyes = corner ? frameTurn.rotate({0, 1, .4f}) : Vec3{0, 1, .4f};
+                t.facing = frameTurn * Quat::yaw(3.14159265f);
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                check(state.crawlTurn.outward(), "a deliberate roll/corner lost the outward stance");
+                const Vec3 hip = view.position(b.rig.hipRoot);
+                near(dot(hip, t.crawlNormal), .12f, .002f);
+                if (frame) check(length(hip - before) < .025f, "the anchored pelvis snapped during a turn");
+                before = hip;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                }
+                check(nearest < .005f, "waist stabilization lifted both feet during a turn");
+            }
+        }
+    });
+    test("body: raising the outward body restores eye height with fixed tracking and real limb lengths", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float scale : {.85f, 1.2f}) for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                for (float pitch : {0.f, -1.2f}) for (bool outward : {false, true}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                    t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.eyes = up * scale + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    t.facing = t.tilt * Quat::yaw(outward ? 3.14159265f : 0.f) *
+                               Quat::around({1, 0, 0}, pitch);
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .25f : -.25f, .7f * scale, .25f}),
+                                      t.tilt};
+                    body::Config config; config.hideHead = false; config.crawlTorsoTwist = 0;
+                    auto previous = config; previous.crawlOutwardEyeLift = previous.crawlEyeLift;
+                    body::State state, oldState;
+                    state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+                    auto pose = b.rest, oldPose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                    const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                    const auto oldResult = body::solve(old, b.rig, t, previous, oldState,
+                                                       true, 1.f / 90, scale);
+                    const Vec3 raise = up * (outward ? .08f : 0.f);
+                    for (int joint : {b.rig.head, b.rig.hipRoot, static_cast<int>(b.rig.spine.back())})
+                        near(length(view.position(joint) - old.position(joint) - raise), 0, .002f);
+                    near(dot(view.position(b.rig.hipRoot), n), outward ? .12f : .45f, .002f);
+                    near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                t.facing.rotate({0, 0, -1})), 0, .002f);
+                    for (int i = 0; i < 2; ++i) {
+                        near(result.handError[i], 0, .005f); near(oldResult.handError[i], 0, .005f);
+                        near(length(view.position(b.rig.arms[i].hand) - wristOf(t.hands[i], i)), 0, .005f);
+                        const auto& leg = b.rig.legs[i];
+                        near(length(view.position(leg.upper) - view.position(leg.lower)),
+                             b.rig.thigh[i] * scale, .002f);
+                        near(length(view.position(leg.lower) - view.position(leg.foot)),
+                             b.rig.shin[i] * scale, .002f);
+                        const Vec3 toe = view.position(leg.foot) + normalized(
+                            view.direction(leg.foot, b.rig.footForward[i])) *
+                            (b.rig.forefootLength[i] * scale) -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                            (b.rig.ankleHeight[i] * scale);
+                        if (outward) near(dot(toe, n), 0, .005f);
+                    }
+                }
+    });
+    test("body: outward body height blends through both turn directions with supporting toes retained", [] {
+        const auto b = longFootBody(.22f);
+        for (float direction : {-1.f, 1.f}) for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::Config config; config.hideHead = false;
+            auto previous = config; previous.crawlOutwardEyeLift = previous.crawlEyeLift;
+            body::State state, oldState;
+            state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+            float priorRaise = 0;
+            for (int frame = 0; frame < 650; ++frame) {
+                const float yaw = frame < 50 ? 0 : frame < 150 ? (frame - 50) * .0314159265f :
+                                  frame < 350 ? 3.14159265f :
+                                  frame < 450 ? (450 - frame) * .0314159265f : 0;
+                t.facing = t.tilt * Quat::yaw(yaw * direction);
+                auto pose = b.rest, oldPose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                body::solve(old, b.rig, t, previous, oldState, true, 1.f / 90);
+                const float raise = dot(view.position(b.rig.head) - old.position(b.rig.head), up);
+                near(raise, .08f * state.crawlTurn.outwardWeight(state.crawlTurn.angle()), .002f);
+                check(std::abs(raise - priorRaise) < .012f, "outward body height snapped during a turn");
+                priorRaise = raise;
+                if (frame == 330) near(raise, .08f, .002f);
+                if (frame == 600) near(raise, 0, .002f);
+                if (!state.crawlTurn.engaged()) continue;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(dot(toe, n)));
+                }
+                check(nearest < .005f, "raising the outward body detached both supporting feet");
+            }
+        }
+    });
+    test("body: native reach turns ignore head-only looks and keep outward legs steady", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (bool startOutward : {false, true}) for (bool handNear : {false, true}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = t.crawlReachTurn = true;
+                    t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up; t.crawlHands = 1u << support;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f,
+                            i == support || handNear ? .035f : .55f}), t.tilt};
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    std::vector<float> reference;
+                    for (int frame = 0; frame < 420; ++frame) {
+                        const float time = static_cast<float>(std::max(0, frame - 60));
+                        const float yaw = (startOutward ? 3.14159265f : 0.f) + 2.9f * std::sin(time * .025f);
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0},
+                            -1.4f * std::sin(time * .017f)) *
+                            Quat::around({0, 0, 1}, .35f * std::sin(time * .04f));
+                        t.eyes = up + n * .25f + side * (.1f * std::sin(time * .025f)) +
+                                 up * (.03f * std::sin(time * .017f));
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const auto result = body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                        if (frame == 59) reference = pose;
+                        check(!state.crawlTurn.turning() && state.crawlTurn.outward() == startOutward,
+                              "a head-only look triggered the native stance change");
+                        const float armReach = b.rig.upperArm[support] + b.rig.forearm[support];
+                        const float distance = length(wristOf(t.hands[support], support) -
+                                                      view.position(b.rig.arms[support].upper));
+                        const float inner = std::abs(b.rig.upperArm[support] - b.rig.forearm[support]);
+                        const float outside = std::max({0.f, distance - armReach, inner - distance});
+                        near(result.handError[support], outside, .005f);
+                        if (frame < 60 || !startOutward) continue;
+                        for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                            const float change = length(view.position(joint) - b.at(reference, joint));
+                            check(change < .003f, ("looking around changed lower joint " +
+                                std::to_string(joint) + " by " + std::to_string(change) +
+                                " at frame " + std::to_string(frame)).c_str());
+                        }
+                        check(state.outwardFeet.swinging() < 0, "looking around started a footstep");
+                        near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) -
+                                    t.facing.rotate({0, 0, -1})), 0, .002f);
+                    }
+                }
+    });
+    test("body: a completed outward handoff settles to the fresh resumed body height without a pause", [] {
+        const auto b = longFootBody(.22f);
+        for (float direction : {-1.f, 1.f}) for (float change : {-.12f, .12f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::Config config; config.hideHead = false;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int round = 0; round < 2; ++round) {
+                int landed = -1;
+                Vec3 previousHip{};
+                std::vector<float> pose;
+                for (int frame = 0; frame < 600; ++frame) {
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    t.facing = Quat::yaw(frame < 100 ? 0.f : direction * 2.9670597f) *
+                               Quat::around({1, 0, 0}, -.8f);
+                    const float after = landed < 0 ? 0.f : std::clamp((frame - landed) / 20.f, 0.f, 1.f);
+                    t.eyes = {0, 1.f + change * after, .25f + .15f * weight};
+                    const bool away = frame >= 150 && frame < 210;
+                    t.crawlTouches = away ? 1 : 3;
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, {i ? .22f : -.22f, .7f, i && away ? .45f : .035f}, {}};
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    if (landed < 0 && state.crawlTurn.outward() && !state.crawlTurn.turning()) landed = frame;
+                    if (landed >= 0 && frame > landed)
+                        check(std::abs(view.position(b.rig.hipRoot).y - previousHip.y) < .009f,
+                              "automatic body height refresh jumped instead of settling");
+                    previousHip = view.position(b.rig.hipRoot);
+                }
+                check(landed > 210, "the test did not exercise an actual outward handoff");
+                body::State resumed; resumed.weight = resumed.crawlWeight = 1;
+                std::vector<float> fresh;
+                for (int frame = 0; frame < 90; ++frame) {
+                    fresh = b.rest;
+                    body::Pose view(fresh.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, resumed, true, 1.f / 90);
+                }
+                check(resumed.crawlTurn.outward(), "the comparison did not enter a fresh outward pose");
+                for (int joint : {b.rig.hipRoot, 2, 4, 5, 6})
+                    near(b.at(pose, joint).y, b.at(fresh, joint).y, .005f);
+                const Vec3 hip = b.at(pose, b.rig.hipRoot);
+                const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                const Vec3 neck = t.eyes - F * b.rig.eyesFromHead.x - U * b.rig.eyesFromHead.y;
+                for (int frame = 0; frame < 180; ++frame) {
+                    t.facing = Quat::yaw(direction * 2.9670597f + .7f * std::sin(frame * .04f)) *
+                               Quat::around({1, 0, 0}, -.8f + .5f * std::sin(frame * .03f));
+                    const Vec3 look = t.facing.rotate({0, 0, -1}), crown = t.facing.rotate({0, 1, 0});
+                    t.eyes = neck + look * b.rig.eyesFromHead.x + crown * b.rig.eyesFromHead.y;
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    near(length(view.position(b.rig.hipRoot) - hip), 0, .003f);
+                }
+                // Return without recreating state: the next outward handoff
+                // must refresh its own height just as the first one did.
+                for (int frame = 0; frame < 400; ++frame) {
+                    const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                    t.facing = Quat::around({1, 0, 0}, -.8f);
+                    t.eyes = {0, 1.f + change, .25f + .15f * weight};
+                    const bool away = frame >= 10 && frame < 70;
+                    t.crawlTouches = away ? 1 : 3;
+                    t.hands[1].grip.z = away ? .45f : .035f;
+                    pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                }
+                check(!state.crawlTurn.engaged(), "the round-trip comparison did not return to the wall");
+            }
+        }
+    });
+    test("body: a free palm returning after turning requests the left or right stance change", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (float direction : {-1.f, 1.f}) for (float scale : {.85f, 1.2f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, scale, .25f};
+            t.crawlHands = 1u << support;
+            body::State state; state.weight = state.crawlWeight = 1;
+            float previousAngle = 0;
+            for (int frame = 0; frame < 850; ++frame) {
+                const float yaw = frame < 60 ? 0 : frame < 160 ? (frame - 60) * .0314159265f :
+                                  frame < 430 ? 3.14159265f : frame < 530 ?
+                                  (530 - frame) * .0314159265f : 0;
+                const float depth = frame >= 60 && frame < 180 ? .05f : frame < 230 ? .55f : frame < 270 ?
+                    .55f - .5f * (frame - 230) / 40 : frame < 400 ? .05f :
+                    frame < 580 ? .55f : frame < 620 ? .55f - .5f * (frame - 580) / 40 : .05f;
+                t.facing = Quat::yaw(yaw * direction);
+                t.crawlTouches = (frame >= 270 && frame < 400) || frame >= 620 ? 3u : 1u << support;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, {(i ? .12f : -.12f) * scale, .7f * scale,
+                                         i == support ? .035f : depth}, {}};
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const auto result = body::solve(view, b.rig, t, {}, state, true, 1.f / 90, scale);
+                const float delta = std::remainder(state.crawlTurn.angle() - previousAngle, 6.2831853f);
+                near(result.handError[support], 0, .005f);
+                if (std::abs(delta) > .0001f)
+                    check(delta * direction * (frame < 430 ? 1.f : -1.f) > 0,
+                          "the recontact body turn went against the player's turn");
+                previousAngle = state.crawlTurn.angle();
+                if (frame < 230) check(!state.crawlTurn.engaged(), "looking back alone changed the stance");
+                if (frame == 410)
+                    check(state.crawlTurn.outward(), "the returning palm did not turn outward");
+                if (frame == 560)
+                    check(state.crawlTurn.outward(), "looking toward the wall alone turned back");
+                if (frame == 820) check(!state.crawlTurn.engaged(), "a new recontact did not turn back");
+                if (!state.crawlTurn.engaged()) continue;
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * (b.rig.forefootLength[i] * scale) -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                        (b.rig.ankleHeight[i] * scale);
+                    near(length(toe - state.crawlTurn.feet()[i]), 0, .005f);
+                    nearest = std::min(nearest, std::abs(toe.z));
+                }
+                check(nearest < .005f, "the recontact turn lost both supporting feet");
+            }
+        }
+    });
+    test("body: downward handoffs keep the neck aligned through rolled turns and animated poses", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (float direction : {-1.f, 1.f})
+                for (float scale : {.85f, 1.f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                    t.crawlTurnAway = t.crawlReachTurn = true;
+                    t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                    t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                    body::Config config; config.hideHead = false;
+                    body::State state; state.weight = state.crawlWeight = 1;
+                    for (int frame = 0; frame < 700; ++frame) {
+                        const bool returning = frame >= 400;
+                        const bool away = (frame >= 150 && frame < 210) || (frame >= 450 && frame < 510);
+                        const float yaw = frame < 100 || returning ? 0.f : direction * 2.9670597f;
+                        t.facing = t.tilt * Quat::yaw(yaw) * Quat::around({1, 0, 0}, -1.2f);
+                        const float outward = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        t.eyes = up * scale + n * (.25f + .15f * outward);
+                        t.crawlTouches = away ? 1 : 3;
+                        for (int i = 0; i < 2; ++i)
+                            t.hands[i] = {true, t.tilt.rotate({(i ? .22f : -.22f) * scale, .7f * scale,
+                                i && away ? .45f : .035f}), t.tilt};
+                        auto pose = b.rest;
+                        body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                        const int chest = b.rig.spine.back(), neck = b.rig.neck.front();
+                        const float sway = state.crawlTurn.turning() ? .25f * std::sin(frame * .03f) : 0.f;
+                        view.turn(b.rig.below[chest], Quat::around({1, 0, 0}, sway), view.position(chest));
+                        view.turn(b.rig.below[neck], Quat::around({1, 0, 0}, -.8f * sway),
+                                  view.position(neck));
+                        body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                        if (frame == 390)
+                            check(state.crawlTurn.outward(), ("downward handoff failed outward hip " +
+                                std::to_string(b.rig.hipRoot) + " roll " + std::to_string(roll) +
+                                " scale " + std::to_string(scale) +
+                                " direction " + std::to_string(direction) +
+                                " angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        if (frame == 690) check(!state.crawlTurn.engaged(), "downward handoff failed return");
+                        const float weight = state.crawlTurn.outwardWeight(state.crawlTurn.angle());
+                        if (!state.crawlTurn.turning() || weight < .01f) continue;
+                        const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                        const Vec3 target = t.eyes - (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                            cross(U, F) * b.rig.eyesFromHead.z) * scale -
+                            up * (config.crawlEyeLift * (1 - weight));
+                        const float neckError = length(view.position(b.rig.head) - target);
+                        check(returning || neckError < .025f, ("downward neck error " +
+                            std::to_string(neckError) +
+                            " frame " + std::to_string(frame) + " hip " + std::to_string(b.rig.hipRoot) +
+                            " roll " + std::to_string(roll) + " scale " + std::to_string(scale) +
+                            " angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        for (int joint : b.rig.all) {
+                            const int parent = b.rig.parent[joint];
+                            if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                            near(length(view.position(joint) - view.position(parent)),
+                                 length(b.at(b.rest, joint) - b.at(b.rest, parent)) * scale, .003f);
+                        }
+                        float nearest = 1;
+                        for (int i = 0; i < 2; ++i) {
+                            const auto& leg = b.rig.legs[i];
+                            const Vec3 toe = view.position(leg.foot) + normalized(
+                                view.direction(leg.foot, b.rig.footForward[i])) *
+                                (b.rig.forefootLength[i] * scale) -
+                                normalized(view.direction(leg.foot, b.rig.footUp[i])) *
+                                (b.rig.ankleHeight[i] * scale);
+                            nearest = std::min(nearest, std::abs(dot(toe - t.floor, n)));
+                        }
+                        check(nearest < .005f, "downward neck fit detached both supporting feet");
+                    }
+                }
+    });
+    test("body: held palms grips proximity and contact flicker cannot replace a fresh reach", [] {
+        const auto b = longFootBody(.22f);
+        for (unsigned touches : {0u, 1u, 2u, 3u}) for (bool tracked : {false, true}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, 1, .25f};
+            t.crawlHands = 3;
+            t.hands[0] = {true, {-.12f, .7f, .035f}, {}};
+            t.hands[1] = {tracked, {.12f, .7f, .035f}, {}};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 350; ++frame) {
+                t.facing = Quat::yaw(frame < 60 ? 0.f : 3.14159265f);
+                t.crawlTouches = touches;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+            }
+            check(!state.crawlTurn.engaged(), "an unchanged palm placement triggered the stance change");
+        }
+        // Contact flicker without a physically withdrawn hand cannot arm
+        // the new gesture, even when the player looks all the way around.
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.crawlTurnAway = t.crawlReachTurn = true;
+        t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+        t.crawlAhead = t.crawlStep = {0, 1, 0}; t.eyes = {0, 1, .25f};
+        t.hands[0] = {true, {-.12f, .7f, .035f}, {}};
+        t.hands[1] = {true, {.12f, .7f, .035f}, {}};
+        body::State state; state.weight = state.crawlWeight = 1;
+        for (int frame = 0; frame < 300; ++frame) {
+            t.facing = Quat::yaw(frame < 60 ? 0.f : 3.14159265f);
+            t.crawlTouches = frame == 60 ? 3u : 1u;
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+        }
+        check(!state.crawlTurn.engaged(), "stationary contact flicker armed the reach gesture");
+    });
+    test("body: a returning palm triggers the handoff without simultaneous two-hand wall contact", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::Config config; config.hideHead = false;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 750; ++frame) {
+                const int free = 1 - support;
+                t.eyes = {0, 1, .25f + .15f * state.crawlTurn.outwardWeight(state.crawlTurn.angle())};
+                t.facing = Quat::yaw(direction * (frame < 60 ? 0.f : frame < 400 ? 2.9670597f : .2f));
+                t.crawlTouches = frame < 140 ? 1u << support : frame < 150 ? 0u :
+                                 frame < 460 ? 1u << free : frame < 470 ? 0u : 1u << support;
+                for (int i = 0; i < 2; ++i) {
+                    const bool contact = t.crawlTouches & (1u << i);
+                    t.hands[i] = {true, {i ? .12f : -.12f, .7f, contact ? .035f : .5f}, {}};
+                }
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                check(t.crawlTouches != 3, "test accidentally supplied simultaneous contact");
+                if (frame < 150)
+                    check(!state.crawlTurn.engaged(), "a look without recontact turned the body");
+                if (frame == 350 || frame == 450)
+                    check(state.crawlTurn.outward(), "the new handoff did not hold the outward pose");
+                if (frame == 350)
+                    check(state.crawlTurn.angle() * direction > 0, "handoff reversed the requested turn");
+                if (frame == 740) check(!state.crawlTurn.engaged(), "the opposite handoff did not turn back");
+                for (int joint : b.rig.all) {
+                    const int parent = b.rig.parent[joint];
+                    if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                    near(length(view.position(joint) - view.position(parent)),
+                         length(b.at(b.rest, joint) - b.at(b.rest, parent)), .003f);
+                }
+            }
+        }
+    });
+    test("body: recontact latches a brief tap but rejects tracking recovery and an earlier placement", [] {
+        const auto b = longFootBody(.22f);
+        for (int support : {0, 1}) for (int mode = 0; mode < 3; ++mode) {
+            const int free = 1 - support;
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+            t.crawlTurnAway = t.crawlReachTurn = true;
+            t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+            t.crawlAhead = t.crawlStep = {0, 1, 0}; t.crawlHands = 1u << support;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 350; ++frame) {
+                t.eyes = {0, 1, .25f + .15f * state.crawlTurn.outwardWeight(state.crawlTurn.angle())};
+                const int lookAt = mode == 2 ? 180 : 100;
+                t.facing = Quat::yaw(frame < lookAt ? 0.f : 2.9670597f);
+                const bool contact = frame < 60 || frame == 150 || (mode != 0 && frame > 150);
+                t.crawlTouches = (1u << support) | (contact ? 1u << free : 0u);
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, {i ? .12f : -.12f, .7f,
+                        i == support || contact ? .035f : .5f}, {}};
+                if (mode == 1 && frame >= 130 && frame <= 150) t.hands[free].tracked = false;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (frame < 150) check(!state.crawlTurn.engaged(), "the reach fired before recontact");
+            }
+            check(state.crawlTurn.outward() == (mode == 0),
+                  "brief recontact tracking recovery or an old placement was interpreted incorrectly");
+        }
+    });
+    test("body: outward chest meets the tracked neck without moving the waist or shoulders", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1})
+                for (float scale : {.85f, 1.2f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.crawlHands = t.crawlTouches = 1u << support;
+                const Vec3 neck = up * (.92f * scale) + n * .17f;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, t.tilt.rotate({(i ? .12f : -.12f) * scale, .7f * scale,
+                        i == support ? .035f : .55f}), t.tilt};
+                body::Config config; config.hideHead = false;
+                body::State state; state.weight = state.crawlWeight = 1;
+                std::vector<float> reference;
+                for (int frame = 0; frame < 420; ++frame) {
+                    const float time = static_cast<float>(std::max(0, frame - 60));
+                    t.facing = t.tilt * Quat::yaw(3.14159265f + .9f * std::sin(time * .025f)) *
+                        Quat::around({1, 0, 0}, -1.4f * std::sin(time * .017f)) *
+                        Quat::around({0, 0, 1}, .25f * std::sin(time * .04f));
+                    const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                    t.eyes = neck + (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                             cross(U, F) * b.rig.eyesFromHead.z) * scale;
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90, scale);
+                    if (frame == 59) reference = pose;
+                    if (frame < 60) continue;
+                    near(length(view.position(b.rig.head) - neck), 0, .025f);
+                    for (int joint : {b.rig.hipRoot, static_cast<int>(b.rig.spine.front()),
+                                      static_cast<int>(b.rig.spine.back()), b.rig.arms[0].clavicle,
+                                      b.rig.arms[1].clavicle})
+                        check(length(view.position(joint) - b.at(reference, joint)) < .006f,
+                              ("a glance displaced outward joint " + std::to_string(joint) + " by " +
+                               std::to_string(length(view.position(joint) - b.at(reference, joint))) +
+                               " at frame " + std::to_string(frame) + " roll " + std::to_string(roll) +
+                               " hip " + std::to_string(b.rig.hipRoot) + " support " +
+                               std::to_string(support)).c_str());
+                    for (int joint : b.rig.all) {
+                        const int parent = b.rig.parent[joint];
+                        if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                        near(length(view.position(joint) - view.position(parent)),
+                             length(b.at(b.rest, joint) - b.at(b.rest, parent)) * scale, .003f);
+                    }
+                    near(length(normalized(view.direction(b.rig.head, b.rig.headForward)) - F), 0, .002f);
+                    check(state.outwardFeet.swinging() < 0, "neck alignment started a false step");
+                }
+            }
+    });
+    test("body: outward chest shape ignores the native animation's changing lumbar arch", [] {
+        const auto b = longFootBody(.22f);
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.crawlTurnAway = t.crawlReachTurn = true;
+        t.crawlDistance = .25f; t.crawlNormal = {0, 0, 1};
+        t.crawlAhead = t.crawlStep = {0, 1, 0};
+        t.facing = Quat::yaw(3.14159265f); t.eyes = {0, 1, .4f};
+        body::State state; state.weight = state.crawlWeight = 1;
+        body::Config config; config.hideHead = false;
+        std::vector<float> reference;
+        for (int frame = 0; frame < 360; ++frame) {
+            auto pose = b.rest;
+            body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+            if (frame >= 90) {
+                const float arch = .7f * std::sin((frame - 90) * .04f);
+                const int low = b.rig.spine.front(), high = b.rig.spine.back();
+                view.turn(b.rig.below[low], Quat::around({1, 0, 0}, arch), view.position(low));
+                view.turn(b.rig.below[high], Quat::around({1, 0, 0}, -1.8f * arch), view.position(high));
+            }
+            body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+            check(state.crawlTurn.outward(), "native arch lost the outward pose");
+            if (frame == 89) reference = pose;
+            if (frame < 90) continue;
+            for (int joint : {b.rig.hipRoot, 2, 3, 4, 5, 6}) {
+                near(length(view.position(joint) - b.at(reference, joint)), 0, .005f);
+                const Vec3 forward = view.direction(joint, {0, 0, 1});
+                body::Pose rest(reference.data(), static_cast<int>(b.rig.parent.size()));
+                near(length(forward - rest.direction(joint, {0, 0, 1})), 0, .005f);
+            }
+        }
+    });
+    test("body: vent palm support moves only the upper body and cannot turn the back toward the surface", [] {
+        const auto b = longFootBody(.22f);
+        for (bool planted : {false, true}) {
+            body::Targets t;
+            t.head = t.airborne = t.surfaceHands = true;
+            t.plant = t.kneel = planted;
+            t.surfaceNormal = {0, 1, 0}; t.eyes = {0, .4f, 0};
+            t.tilt = Quat::around({1, 0, 0}, -1.5707963f);
+            t.facing = t.tilt * Quat::yaw(.9f); t.crawlTouches = 1;
+            t.hands[0] = {true, {-.2f, .035f, -.25f}, t.tilt};
+            t.hands[1] = {true, {.4f, .4f, .15f}, t.tilt};
+            body::Config config; config.hideHead = false; config.yawDrift = config.yawSpeed = 0;
+            body::State state, oldState;
+            state.weight = state.crawlWeight = oldState.weight = oldState.crawlWeight = 1;
+            std::vector<float> pose, old;
+            for (int frame = 0; frame < 150; ++frame) {
+                pose = old = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::Pose before(old.data(), static_cast<int>(b.rig.parent.size()));
+                t.surfaceHands = false; body::solve(before, b.rig, t, config, oldState, true, 1.f / 90);
+                t.surfaceHands = true; body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                check(!state.crawlTurn.ready(), "vent contact enabled outdoor back rotation");
+                for (int joint : {b.rig.hipRoot, 21, 22, 23, 25, 26, 27})
+                    near(length(view.position(joint) - b.at(old, joint)), 0, .002f);
+            }
+            check(std::abs(state.crawlTwist) > .05f,
+                  "one vent palm did not allow upper-spine look/reach motion");
+            body::Pose after(pose.data(), static_cast<int>(b.rig.parent.size()));
+            body::Pose before(old.data(), static_cast<int>(b.rig.parent.size()));
+            const int chest = b.rig.spine.back();
+            check(length(after.direction(chest, {0, 0, 1}) - before.direction(chest, {0, 0, 1})) > .02f,
+                  "vent upper-spine movement faded out with the outdoor crawl blend");
+        }
+    });
+    test("body: version 10 vent contact packets reject outdoor legs and back rotation", [] {
+        using namespace native_body;
+        Command command;
+        command.flags = bodyOn | ventHands | crawlHandFlags(1) | crawlTouchFlags(2);
+        command.crawlNormal = {0, 1, 0};
+        check(commandFormat(10, 272) && validCrawl(command), "version 10 vent was rejected");
+        for (uint32_t wrong : {crawl, crawlPlanted, crawlHandSync, crawlTurnAway}) {
+            command.flags |= wrong;
+            check(!validCrawl(command), "vent packet enabled outdoor leg or back-turn behavior");
+            command.flags &= ~wrong;
+        }
+        command.version = 9;
+        check(!validCrawl(command), "an old command version accepted vent upper-body flags");
+    });
+    test("body: moving outward crawl keeps the chest below the tracked neck across game poses", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                t.crawlDistance = .25f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                t.crawlHands = t.crawlTouches = 1;
+                body::Config config; config.hideHead = false;
+                body::State state; state.weight = state.crawlWeight = 1;
+                for (int frame = 0; frame < 700; ++frame) {
+                    const bool moving = frame >= 120 && frame < 450;
+                    if (moving) t.crawlOrigin += up * .003f;
+                    t.crawlMotion = moving ? .8f : 0;
+                    t.facing = t.tilt * Quat::yaw(3.14159265f) * Quat::around({1, 0, 0}, -.7f);
+                    t.eyes = up * (moving ? .88f : 1.f) + n * (frame < 80 ? .25f : .40f);
+                    for (int i = 0; i < 2; ++i)
+                        t.hands[i] = {true, t.tilt.rotate({i ? .22f : -.22f, .7f,
+                            i ? .5f : .035f}), t.tilt};
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    const int chest = b.rig.spine.back(), neck = b.rig.neck.front();
+                    const float sway = moving ? .55f * std::sin(frame * .035f) : 0.f;
+                    view.turn(b.rig.below[chest], Quat::around({1, 0, 0}, sway), view.position(chest));
+                    view.turn(b.rig.below[neck], Quat::around({1, 0, 0}, -.8f * sway), view.position(neck));
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    const Vec3 F = t.facing.rotate({0, 0, -1}), U = t.facing.rotate({0, 1, 0});
+                    const Vec3 target = t.eyes - (F * b.rig.eyesFromHead.x + U * b.rig.eyesFromHead.y +
+                        cross(U, F) * b.rig.eyesFromHead.z);
+                    const float error = length(view.position(b.rig.head) - target);
+                    check(error < .025f, ("outward motion left the tracked neck by " + std::to_string(error) +
+                        " at frame " + std::to_string(frame)).c_str());
+                    const float neckUp = dot(view.position(b.rig.head) - view.position(neck), up);
+                    check(neckUp > .045f, ("outward movement folded the neck into the chest by " +
+                        std::to_string(neckUp) + " at frame " + std::to_string(frame)).c_str());
+                    near(dot(view.position(b.rig.hipRoot), n), .12f + .10f * state.crawlOutwardMotion, .003f);
+                    for (int joint : b.rig.all) {
+                        const int parent = b.rig.parent[joint];
+                        if (parent < 0 || parent == joint || joint == b.rig.pelvis) continue;
+                        near(length(view.position(joint) - view.position(parent)),
+                             length(b.at(b.rest, joint) - b.at(b.rest, parent)), .003f);
+                    }
+                }
+            }
+    });
+    test("body: the native neck fit leaves wall-facing crawling unchanged", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (int support : {0, 1}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0});
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                t.eyes = up + Vec3{0, 0, .25f}; t.crawlHands = t.crawlTouches = 1u << support;
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, t.tilt.rotate({i ? .12f : -.12f, .7f, i == support ? .035f : .55f}),
+                                  t.tilt};
+                body::Config config; config.hideHead = false;
+                body::State state, reference;
+                state.weight = state.crawlWeight = reference.weight = reference.crawlWeight = 1;
+                for (int frame = 0; frame < 180; ++frame) {
+                    t.facing = t.tilt * Quat::yaw(.7f * std::sin(frame * .03f)) *
+                        Quat::around({1, 0, 0}, -1.4f * std::sin(frame * .02f));
+                    auto pose = b.rest, oldPose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    body::Pose old(oldPose.data(), static_cast<int>(b.rig.parent.size()));
+                    t.crawlReachTurn = false;
+                    body::solve(old, b.rig, t, config, reference, true, 1.f / 90);
+                    t.crawlReachTurn = true;
+                    body::solve(view, b.rig, t, config, state, true, 1.f / 90);
+                    for (size_t i = 0; i < pose.size(); ++i) near(pose[i], oldPose[i], .0002f);
+                }
+            }
+    });
+    test("body: native outward pulls keep planted strides through full head motion and idle sway", [] {
+        for (const auto& b : {testBody(), splitPelvisBody(), longFootBody(.22f)})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (bool sideways : {false, true}) {
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.crawlTurnAway = t.crawlReachTurn = true;
+                t.crawlDistance = .25f; t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1}, side = cross(n, up);
+                t.crawlNormal = n; t.crawlAhead = t.crawlStep = up; t.crawlHands = 1;
+                t.hands[0] = {true, t.tilt.rotate({-.12f, .7f, .035f}), t.tilt};
+                t.hands[1] = {true, t.tilt.rotate({.25f, .7f, .55f}), t.tilt};
+                body::State state, control;
+                state.weight = state.crawlWeight = control.weight = control.crawlWeight = 1;
+                int steps = 0, previous = -1;
+                for (int frame = 0; frame < 800; ++frame) {
+                    const float time = static_cast<float>(std::max(0, frame - 60));
+                    if (frame >= 60) t.crawlOrigin += (sideways ? side : up) * .003f;
+                    t.crawlMotion = frame >= 60 ? .8f : 0;
+                    t.eyes = up + n * .25f; t.facing = t.tilt * Quat::yaw(3.14159265f);
+                    auto steady = b.rest;
+                    body::Pose old(steady.data(), static_cast<int>(b.rig.parent.size()));
+                    body::solve(old, b.rig, t, {}, control, true, 1.f / 90);
+                    t.eyes += side * (.08f * std::sin(time * .04f)) + up * (.04f * std::sin(time * .03f));
+                    t.facing = t.tilt * Quat::yaw(3.14159265f + .8f * std::sin(time * .035f)) *
+                        Quat::around({1, 0, 0}, -1.35f * std::sin(time * .015f)) *
+                        Quat::around({0, 0, 1}, .25f * std::sin(time * .03f));
+                    auto pose = b.rest;
+                    body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                    // The native writer supplies its animated pose each job.
+                    // Include changing torso/neck motion, rather than only
+                    // fresh bind-pose frames as in the earlier gaze checks.
+                    const int spine = b.rig.spine.front();
+                    view.turn(b.rig.below[spine], Quat::around({1, 0, 0}, .08f * std::sin(time * .02f)),
+                              view.position(spine));
+                    body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                    check(state.crawlTurn.outward() && !state.crawlTurn.turning(),
+                          "look/idle motion left the outward climbing stance");
+                    for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28}) {
+                        const float error = length(view.position(joint) - old.position(joint));
+                        check(error < .006f, ("head/idle motion steered crawling joint " +
+                            std::to_string(joint) + " by " + std::to_string(error)).c_str());
+                    }
+                    const int swing = state.outwardFeet.swinging();
+                    if (swing >= 0 && previous < 0) ++steps;
+                    previous = swing;
+                }
+                check(steps >= 3, "stabilizing the native pose prevented actual hand-pull steps");
+            }
+    });
+    test("body: outward walking steps and pelvis do not steer with casual head yaw", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) for (float sideways : {0.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::State state, control; state.weight = state.crawlWeight = 1;
+            control.weight = control.crawlWeight = 1;
+            for (int frame = 0; frame < 900; ++frame) {
+                if (frame >= 60) t.crawlOrigin += normalized(up + cross(n, up) * sideways) * .004f;
+                t.crawlMotion = frame >= 60 ? .8f : 0;
+                t.facing = t.tilt * Quat::yaw(3.14159265f);
+                auto steady = b.rest;
+                body::Pose old(steady.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(old, b.rig, t, {}, control, true, 1.f / 90);
+                t.facing = t.tilt * Quat::yaw(3.14159265f + .65f * std::sin(frame * .035f));
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                for (int joint : {b.rig.hipRoot, 21, 22, 23, 24, 25, 26, 27, 28})
+                    near(length(view.position(joint) - old.position(joint)), 0, .002f);
+                check(state.outwardFeet.swinging() == control.outwardFeet.swinging(),
+                      "head yaw changed the outward step timing");
+            }
+        }
+    });
+    test("body: requested turns finish a footstep and can start while hand-pull travel continues", [] {
+        const auto b = longFootBody(.22f);
+        for (float speed : {.18f, .54f}) for (float pitch : {0.f, -1.5f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 650; ++frame) {
+                const float yaw = frame < 180 ? 3.14159265f : frame < 240 ?
+                    3.14159265f * (240 - frame) / 60 : frame < 360 ? 0 :
+                    frame < 420 ? 3.14159265f * (frame - 360) / 60 : 3.14159265f;
+                t.facing = Quat::yaw(yaw) * Quat::around({1, 0, 0}, pitch);
+                if (frame >= 30) t.crawlOrigin += Vec3{0, speed / 90, 0};
+                t.crawlMotion = frame >= 30 ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                float nearest = 1;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    const Vec3 toe = view.position(leg.foot) + normalized(
+                        view.direction(leg.foot, b.rig.footForward[i])) * b.rig.forefootLength[i] -
+                        normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                    nearest = std::min(nearest, std::abs(dot(toe, t.crawlNormal)));
+                }
+                check(nearest < .005f, "the queued moving turn lost both wall contacts");
+                if (frame == 330)
+                    check(!state.crawlTurn.engaged(), "an outward footstep indefinitely delayed the return");
+                if (frame == 600)
+                    check(state.crawlTurn.outward(), "the moving player had to stop before turning outward");
+            }
+        }
+    });
+    test("body: left/right head turns work while looking steeply up or down without nod-driven flips", [] {
+        const auto b = splitPelvisBody();
+        for (float pitch : {-1.5f, 1.5f}) for (float direction : {-1.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 550; ++frame) {
+                const float yaw = frame < 60 ? 0 : frame < 160 ?
+                    3.14159265f * (frame - 60) / 100 : frame < 260 ? 3.14159265f :
+                    frame < 360 ? 3.14159265f * (360 - frame) / 100 : 0;
+                t.facing = Quat::yaw(yaw * direction) * Quat::around({1, 0, 0}, pitch);
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (frame < 60) check(!state.crawlTurn.engaged(), "a steep nod selected the outward stance");
+                if (frame == 250)
+                    check(state.crawlTurn.outward(), "a steep gaze ignored the left/right head turn");
+            }
+            check(!state.crawlTurn.engaged(), "the steep-gaze return failed to face the wall again");
+        }
+    });
+    test("body: outward foot support survives climbing travel and returns to the normal crawl stance", [] {
+        const auto b = longFootBody(.22f);
+        for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = t.crawlTurnAway = true;
+            t.crawlDistance = .4f; t.tilt = Quat::around({0, 0, 1}, roll);
+            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+            t.eyes = up + n * .4f; t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+            body::State state; state.weight = state.crawlWeight = 1;
+            for (int frame = 0; frame < 700; ++frame) {
+                const float angle = frame < 40 ? 0 : frame < 140 ? -(frame - 40) * .0314159265f :
+                                    frame < 400 ? -3.14159265f :
+                                    frame < 500 ? -3.14159265f + (frame - 400) * .0314159265f : 0;
+                t.facing = t.tilt * Quat::yaw(angle);
+                if (frame >= 230 && frame < 330) t.crawlOrigin += up * .004f;
+                t.crawlMotion = frame >= 230 && frame < 330 ? .8f : 0;
+                auto pose = b.rest;
+                body::Pose view(pose.data(), static_cast<int>(b.rig.parent.size()));
+                body::solve(view, b.rig, t, {}, state, true, 1.f / 90);
+                if (state.crawlTurn.engaged()) {
+                    float nearest = 1;
+                    for (int i = 0; i < 2; ++i) {
+                        const auto& leg = b.rig.legs[i];
+                        const Vec3 toe = view.position(leg.foot) +
+                            normalized(view.direction(leg.foot, b.rig.footForward[i])) *
+                            b.rig.forefootLength[i] -
+                            normalized(view.direction(leg.foot, b.rig.footUp[i])) * b.rig.ankleHeight[i];
+                        const Vec3 worldToe = t.crawlOrigin + toe;
+                        const float error = length(worldToe - state.crawlTurn.feet()[i]);
+                        check(error < .005f, ("turn toe error " + std::to_string(error) +
+                            " at frame " + std::to_string(frame) + ", foot " + std::to_string(i) +
+                            ", angle " + std::to_string(state.crawlTurn.angle())).c_str());
+                        nearest = std::min(nearest, std::abs(dot(worldToe, n)));
+                        check(dot(toe - view.position(b.rig.hipRoot), up) < -.01f,
+                              "outward travel raised a foot above the pelvis");
+                    }
+                    check(nearest < .005f, "outward travel detached both feet");
+                }
+                if (frame == 390) check(state.crawlTurn.outward(), "moving ended the outward stance");
+            }
+            check(!state.crawlTurn.engaged(), "facing the wall again did not restore crawling");
+            near(state.crawlTurn.angle(), 0, .001f);
+            check(state.crawlFeet.ready(), "returning lost the normal planted foot state");
+        }
+    });
+    test("body: pressing hands moves the upper torso away while feet retain their contacts", [] {
+        const auto b = splitPelvisBody();
+        body::Targets t;
+        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+        t.eyes = {0, 1, .4f}; t.crawlDistance = .4f;
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        body::State state;
+        const auto before = solved(b, t, state);
+        const auto contacts = state.crawlFeet.feet();
+        t.eyes.z += .2f;
+        const auto after = solved(b, t, state);
+        const int chest = b.rig.spine.back();
+        check(b.at(after, chest).z - b.at(before, chest).z > .06f,
+              "hand pressure moved the eyes without carrying the chest away from the wall");
+        near(b.at(after, b.rig.hipRoot).z, .45f, .002f);
+        for (int i = 0; i < 2; ++i)
+            near(length(state.crawlFeet.feet()[i] - contacts[i]), 0, .003f);
+    });
+    test("body: raised crawling viewpoint clears the chest without moving controller targets", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float pitch : {-1.2f, 0.f, .6f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                        body::Targets t;
+                        t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                        t.tilt = Quat::around({0, 0, 1}, roll);
+                        const Vec3 up = t.tilt.rotate({0, 1, 0}), normal{0, 0, 1};
+                        t.crawlNormal = normal; t.crawlAhead = t.crawlStep = up;
+                        t.eyes = up * scale + normal * .4f;
+                        t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                        t.crawlDistance = .4f;
+                        for (int i = 0; i < 2; ++i) {
+                            t.hands[i].tracked = true;
+                            t.hands[i].orientation = t.tilt;
+                            t.hands[i].grip = t.tilt.rotate({i ? .25f : -.25f, .75f * scale, .2f});
+                        }
+                        body::Config config; config.hideHead = false;
+                        auto previous = config; previous.crawlEyeLift = 0;
+                        body::State oldState, state;
+                        body::Result result;
+                        const auto old = solved(b, t, oldState, previous, scale);
+                        const auto pose = solved(b, t, state, config, scale, &result);
+                        for (const int joint : {b.rig.head, static_cast<int>(b.rig.spine.back()),
+                                               b.rig.hipRoot})
+                            near(length(b.at(pose, joint) - b.at(old, joint) + up * .08f), 0, .002f);
+                        near(dot(b.at(pose, b.rig.hipRoot), normal), .45f, .002f);
+                        for (int i = 0; i < 2; ++i) {
+                            near(result.handError[i], 0, .002f);
+                            near(length(b.at(pose, b.rig.arms[i].hand) - wristOf(t.hands[i], i)),
+                                 0, .002f);
+                        }
+                    }
+    });
+    test("body: raised eye alignment does not affect ground vent or stock crawl poses", [] {
+        const auto b = splitPelvisBody();
+        for (int mode = 0; mode < 4; ++mode) {
+            auto t = lookingAhead({0, 1.7f, 0});
+            t.plant = mode == 1;
+            t.kneel = mode == 1;
+            t.crawl = mode >= 2;
+            t.crawlHandSync = mode == 0; // A stale sync flag alone cannot raise a non-crawl pose.
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.airborne = mode == 3;
+            body::Config previous; previous.crawlEyeLift = 0;
+            body::State oldState, state;
+            const auto old = solved(b, t, oldState, previous);
+            const auto pose = solved(b, t, state);
+            for (int joint = 0; joint < static_cast<int>(b.rig.parent.size()); ++joint)
+                near(length(b.at(pose, joint) - b.at(old, joint)), 0, .00001f);
+        }
+    });
+    test("body: hand-synced crawl keeps the pelvis steady with raised eye alignment", [] {
+        const auto b = testBody();
+        for (float clearance : {.25f, .4f, .75f, 1.f})
+            for (float pitch : {-1.2f, 0.f, .6f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                    body::Targets t;
+                    t.head = t.crawl = t.crawlPlanted = t.airborne = true;
+                    t.tilt = Quat::around({0, 0, 1}, roll);
+                    const Vec3 up = t.tilt.rotate({0, 1, 0});
+                    t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                    t.eyes = Vec3{0, 0, clearance} + up;
+                    t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                    body::State oldState, state;
+                    const auto old = solved(b, t, oldState);
+                    t.crawlHandSync = true;
+                    const auto pose = solved(b, t, state);
+                    body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+                    const Vec3 pelvisUp = normalized(view.direction(b.rig.pelvis, b.rig.pelvisUp));
+                    near(dot(pelvisUp, up), std::cos(.12f), .001f);
+                    near(length(b.at(pose, b.rig.head) - b.at(old, b.rig.head) + up * .08f), 0, .001f);
+                    for (const auto& leg : b.rig.legs) {
+                        near(length(b.at(pose, leg.lower) - b.at(pose, leg.upper)), b.rig.thigh[0], .001f);
+                        near(length(b.at(pose, leg.foot) - b.at(pose, leg.lower)), b.rig.shin[0], .001f);
+                    }
+                }
+    });
+    test("body: crawling corrects the separate native pelvis rather than only a_body", [] {
+        const auto b = splitPelvisBody();
+        const int pelvis = b.rig.hipRoot;
+        bool oldCorrectionFails = false;
+        for (float pitch : {-1.1f, -.5f, .8f})
+            for (float roll : {0.f, 1.5707963f, 3.14159265f}) {
+                auto animated = b.rest;
+                body::Pose source(animated.data(), pelvis + 1);
+                source.turn(b.rig.below[pelvis], Quat::around({1, 0, 0}, pitch), source.position(pelvis));
+                body::Targets t;
+                t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                t.tilt = Quat::around({0, 0, 1}, roll);
+                const Vec3 up = t.tilt.rotate({0, 1, 0});
+                t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+                t.eyes = up + Vec3{0, 0, .4f}; t.facing = t.tilt;
+                body::State state;
+                const auto result = solved(b, t, state, {}, 1, nullptr, &animated);
+                body::Pose pose(const_cast<float*>(result.data()), pelvis + 1);
+                body::State neutralState;
+                const auto neutral = solved(b, t, neutralState);
+                for (const int joint : {pelvis, b.rig.head, static_cast<int>(b.rig.spine.back())})
+                    near(length(pose.position(joint) - b.at(neutral, joint)), 0, .001f);
+                const Vec3 hipUp = normalized(pose.direction(pelvis, b.rig.hipUp));
+                near(dot(hipUp, up), std::cos(.12f), .001f);
+                near(dot(pose.position(pelvis) - t.floor, t.crawlNormal), .51f, .002f);
+                auto oldBody = b;
+                oldBody.rig.hipRoot = oldBody.rig.pelvis;
+                oldBody.rig.hipForward = oldBody.rig.pelvisForward;
+                oldBody.rig.hipUp = oldBody.rig.pelvisUp;
+                body::State oldState;
+                const auto oldResult = solved(oldBody, t, oldState, {}, 1, nullptr, &animated);
+                body::Pose oldPose(const_cast<float*>(oldResult.data()), pelvis + 1);
+                oldCorrectionFails |= dot(normalized(oldPose.direction(pelvis, b.rig.hipUp)), up) < .8f;
+                for (int i = 0; i < 2; ++i) {
+                    const auto& leg = b.rig.legs[i];
+                    near(length(pose.position(leg.lower) - pose.position(leg.upper)), b.rig.thigh[0], .001f);
+                    near(length(pose.position(leg.foot) - pose.position(leg.lower)), b.rig.shin[0], .001f);
+                    near(dot(pose.position(i ? 28 : 24), t.crawlNormal), 0, .002f);
+                    check(dot(pose.position(leg.upper) - pose.position(leg.foot), up) > .3f,
+                        "resting feet remained folded beside the hips");
+                }
+                near(length(pose.position(b.rig.head) - oldPose.position(b.rig.head)), 0, .001f);
+            }
+        check(oldCorrectionFails, "the fixture did not expose the old root-only pelvis correction");
+    });
+    test("body: crawl forefeet attach with raised heels diagonal shins and pelvis clear of the wall", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float clearance : {.25f, .4f, .75f})
+                    for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                        for (float motion : {0.f, 1.f}) {
+                            body::Targets t;
+                            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                            t.tilt = Quat::around({0, 0, 1}, roll);
+                            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                            t.eyes = (up + n * clearance) * scale; t.facing = t.tilt;
+                            t.crawlMotion = motion;
+                            body::State state;
+                            body::Result result;
+                            body::Config config; config.hideHead = false;
+                            const auto solvedPose = solved(b, t, state, config, scale, &result);
+                            body::Pose pose(const_cast<float*>(solvedPose.data()),
+                                            static_cast<int>(b.rig.parent.size()));
+                            near(result.headError, 0, .001f);
+                            near(dot(pose.position(b.rig.hipRoot), n), .51f * scale, .002f);
+                            for (int i = 0; i < 2; ++i) {
+                                const auto& leg = b.rig.legs[i];
+                                const Vec3 ankle = pose.position(leg.foot), knee = pose.position(leg.lower);
+                                const Vec3 forward = normalized(
+                                    pose.direction(leg.foot, b.rig.footForward[i]));
+                                const Vec3 soleUp = normalized(pose.direction(leg.foot, b.rig.footUp[i]));
+                                const Vec3 heel = ankle - forward * (b.rig.forefootLength[i] * scale * .5f) -
+                                    soleUp * (b.rig.ankleHeight[i] * scale);
+                                near(dot(pose.position(i ? 28 : 24), n), 0, .002f);
+                                check(dot(heel, n) > .05f * scale, "heel stayed flat against the wall");
+                                check(dot(forward, n) < -.35f, "foot lost its diagonal toe contact");
+                                const Vec3 outward = t.tilt.rotate({i ? 1.f : -1.f, 0, 0});
+                                near(dot(forward, outward), .46984631f, .001f);
+                                near(dot(forward, up), .67101007f, .001f);
+                                check(dot(knee - ankle, up) > .16f * scale, "shin stayed nearly horizontal");
+                                check(dot(knee - ankle, n) > .07f * scale,
+                                    "shin did not slope into the wall");
+                                check(dot(pose.position(leg.upper) - ankle, up) > .38f * scale,
+                                    "feet stayed folded beside the hips");
+                                near(length(knee - pose.position(leg.upper)), b.rig.thigh[i] * scale, .001f);
+                                near(length(knee - ankle), b.rig.shin[i] * scale, .001f);
+                            }
+                        }
+    });
+    test("body: every saved camera distance sets absolute pelvis clearance across body sizes", [] {
+        for (const auto& b : {testBody(), splitPelvisBody()})
+            for (float scale : {.85f, 1.2f})
+                for (float roll : {0.f, 1.5707963f, 3.14159265f})
+                    for (float pitch : {-1.f, 0.f, 1.f}) {
+                        body::State state;
+                        for (int cm : {25, 40, 70, 100}) {
+                            const float distance = static_cast<float>(cm) / 100;
+                            body::Targets t;
+                            t.head = t.crawl = t.crawlPlanted = t.crawlHandSync = t.airborne = true;
+                            t.tilt = Quat::around({0, 0, 1}, roll);
+                            const Vec3 up = t.tilt.rotate({0, 1, 0}), n{0, 0, 1};
+                            t.crawlNormal = n; t.crawlAhead = t.crawlStep = up;
+                            t.floor = n * -.3f;
+                            t.eyes = t.floor + up * scale + n * distance;
+                            t.facing = t.tilt * Quat::around({1, 0, 0}, pitch);
+                            t.crawlDistance = distance;
+                            body::Result result;
+                            const auto pose = solved(b, t, state, {}, scale, &result);
+                            const Vec3 pelvis = b.at(pose, b.rig.hipRoot);
+                            near(dot(pelvis - t.floor, n), distance + .05f, .002f);
+                            near(result.headError, 0, .001f);
+                            for (int i = 0; i < 2; ++i) {
+                                const auto& leg = b.rig.legs[i];
+                                const Vec3 hip = b.at(pose, leg.upper), knee = b.at(pose, leg.lower);
+                                const Vec3 ankle = b.at(pose, leg.foot), toe = b.at(pose, i ? 28 : 24);
+                                near(length(knee - hip), b.rig.thigh[i] * scale, .001f);
+                                near(length(ankle - knee), b.rig.shin[i] * scale, .001f);
+                                check(dot(toe - pelvis, up) < 0, "saved distance raised toes above pelvis");
+                                const Vec3 outward = t.tilt.rotate({i ? 1.f : -1.f, 0, 0});
+                                check(dot(ankle - pelvis, outward) >= .1f * scale - .002f,
+                                    "saved distance let a foot cross the body centre");
+                                if (distance <= .6f)
+                                    near(dot(toe - t.floor, n), 0, .003f);
+                            }
+                        }
+                    }
+    });
+    test("body: outdoor steps alternate and a stopped phase does not animate", [] {
+        const auto b = testBody();
+        body::Targets t;
+        t.head = t.crawl = t.airborne = true;
+        t.eyes = {0, 1, .4f};
+        t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+        body::State state;
+        auto first = solved(b, t, state);
+        t.crawlPhase = 3.14159265f;
+        auto next = solved(b, t, state);
+        const float left = b.at(next, b.rig.legs[0].foot).y - b.at(first, b.rig.legs[0].foot).y;
+        const float right = b.at(next, b.rig.legs[1].foot).y - b.at(first, b.rig.legs[1].foot).y;
+        check(left < -.12f && right > .12f, "crawl feet did not alternate");
+        const auto stopped = solved(b, t, state);
+        for (size_t i = 0; i < next.size(); ++i) near(stopped[i], next[i]);
+    });
+    test("body: outdoor crawl keeps its torso frame while the player looks around", [] {
+        const auto b = testBody();
+        for (float pitch : {-1.f, 0.f, 1.f}) {
+            body::Targets t;
+            t.head = t.crawl = true;
+            t.eyes = {0, 1, .4f};
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = {0, 1, 0};
+            t.facing = Quat::yaw(.6f) * Quat::around({1, 0, 0}, pitch);
+            body::State state;
+            const auto pose = solved(b, t, state);
+            body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+            const Vec3 torso = normalized(view.direction(b.rig.pelvis, b.rig.pelvisUp));
+            const Vec3 chest = normalized(view.direction(b.rig.pelvis, b.rig.pelvisForward));
+            near(torso.x, 0);
+            check(torso.y > .3f && chest.z < -.3f, "gaze reversed the crawling body");
+            near(b.at(pose, b.rig.pelvis).z, .32f, .002f);
+        }
+    });
+    test("body: outdoor crawl roll is applied once to the body feet and tracked hands", [] {
+        const auto b = testBody();
+        for (float angle : {0.f, 1.5707963f, 3.14159265f}) {
+            body::Targets t;
+            t.head = t.crawl = t.airborne = true;
+            t.tilt = Quat::around({0, 0, 1}, angle);
+            const Vec3 up = t.tilt.rotate({0, 1, 0});
+            t.crawlNormal = {0, 0, 1}; t.crawlAhead = t.crawlStep = up;
+            t.eyes = Vec3{0, 0, .4f} + up;
+            t.facing = t.tilt;
+            for (int i = 0; i < 2; ++i) {
+                t.hands[i].tracked = true;
+                t.hands[i].grip = t.eyes + t.tilt.rotate({i ? .25f : -.25f, -.3f, -.15f});
+                t.hands[i].orientation = t.tilt;
+            }
+            body::State state;
+            body::Result result;
+            const auto pose = solved(b, t, state, {}, 1, &result);
+            body::Pose view(const_cast<float*>(pose.data()), static_cast<int>(b.rig.parent.size()));
+            const Vec3 torso = view.direction(b.rig.pelvis, b.rig.pelvisUp);
+            const Vec3 along = normalized(torso - t.crawlNormal * dot(torso, t.crawlNormal));
+            near(length(along - up), 0);
+            for (int i = 0; i < 2; ++i) {
+                check(result.handError[i] < .002f, "crawl arm missed the tracked controller");
+                check(b.at(pose, b.rig.legs[i].foot).z > .03f, "rolled foot went through the wall");
+            }
+        }
+    });
     test("body: the rest pose gives the references and broken rigs are refused", [] {
         auto b=testBody();
         near(b.rig.eyeHeight,1.7f);
@@ -10667,6 +19395,7 @@ int main() {
     test("body: the controller wall-roll gesture turns hips and legs; gaze alone does not", [] {
         GameTrackingRig rig;
         rig.handClimb(true);
+        rig.wallHands(3); // both hands hold the wall
         auto f = trackedFrame();
         for (auto& h : f.hands) h.squeeze = 0;
         const Vec3 feet{0, 9, -4.1f};
@@ -10730,6 +19459,577 @@ int main() {
         t.facing=Quat::yaw(3.14159265f+1.75f);
         for(int i=0;i<20;++i){pose=b.rest;body::solve(view,b.rig,t,{},s,true,.02f);}
         check(s.yaw>1.75f-.65f&&s.yaw<1.75f,"the hips did not follow the head");
+    });
+    test("body: a frozen native pose still runs with alternating feet in all wall travel directions", [] {
+        for (const auto b : {testBody(), testBody(true), splitPelvisBody()}) {
+            for (Vec3 direction : {Vec3{1, 0, 0}, Vec3{-1, 0, 0}, Vec3{0, 1, 0},
+                                   normalized(Vec3{1, 1, 0}), normalized(Vec3{-1, 1, 0})}) {
+                auto t = lookingAhead({0, 0, .95f - .20f * std::abs(direction.y)});
+                t.wallRun = true; t.runNormal = {0, 0, 1}; t.runAhead = direction; t.runSpeed = 8;
+                t.up = {0, 1, 0}; t.floor = {}; t.tilt = {};
+                const Vec3 left = cross(t.runNormal, direction);
+                for (int i = 0; i < 2; ++i)
+                    t.hands[i] = {true, t.eyes - t.runNormal * .35f + left * (i ? -.35f : .35f),
+                                  gripFacing({0, 0, 1})};
+                body::Config config; config.hideHead = false;
+                body::State state;
+                body::Result result;
+                auto first = solved(b, t, state, config, 1, &result);
+                check(result.solved && result.headError < .005f, "run lost the tracked head");
+                for (int i = 0; i < 2; ++i)
+                    check(result.handError[i] < .035f, "run replaced the player's arms");
+                body::Pose view(first.data(), static_cast<int>(b.rig.parent.size()));
+                const Vec3 hipsFacing = view.direction(b.rig.hipRoot, b.rig.hipForward);
+                const Vec3 wallFacing = normalized(hipsFacing - t.runNormal * dot(hipsFacing, t.runNormal));
+                check(dot(wallFacing, direction) > .99f,
+                      "run body did not face actual wall travel");
+                const float vertical = std::abs(direction.y);
+                const Vec3 above = t.up - direction * dot(t.up, direction);
+                const Vec3 bank = normalized(t.runNormal + above * .85f);
+                const Quat tilt = Quat::around(cross(t.runNormal, direction), .5f + .45f * vertical);
+                check(dot(normalized(view.direction(b.rig.hipRoot, b.rig.hipUp)), tilt.rotate(bank)) > .99f,
+                      "horizontal run lost its directional body bank");
+                const Vec3 chestAxis = normalized(view.position(b.rig.head) - view.position(b.rig.pelvis));
+                if (vertical > .9f)
+                    check(dot(chestAxis, t.runNormal) < .7f, "vertical upper body remained straight");
+                if (vertical < .1f) {
+                    check(dot(bank, t.runNormal) < .8f, "horizontal pelvis remained upright");
+                    const Vec3 torso = normalized(view.position(b.rig.head) -
+                                                  view.position(b.rig.pelvis));
+                    check(dot(torso, t.runNormal) < .87f, "actual torso lost the horizontal running bank");
+                }
+                t.runPhase = 3.14159265f;
+                const auto second = solved(b, t, state, config);
+                for (int i = 0; i < 2; ++i)
+                    check(length(b.at(second, b.rig.legs[i].foot) - b.at(first, b.rig.legs[i].foot)) > .15f,
+                          "frozen source pose froze the generated foot cycle");
+                const float firstLead = dot(b.at(first, b.rig.legs[0].foot) -
+                                            b.at(first, b.rig.legs[1].foot), direction);
+                const float secondLead = dot(b.at(second, b.rig.legs[0].foot) -
+                                             b.at(second, b.rig.legs[1].foot), direction);
+                check(firstLead > .75f && secondLead < -.75f,
+                      "run collapsed back into short alternating steps");
+            }
+        }
+    });
+    test("running body: joystick stance follows view while down and sideways travel only steer steps", [] {
+        for (const auto b : {testBody(), testBody(true), splitPelvisBody()}) {
+            for (const Vec3 direction : {Vec3{0, 1, 0}, Vec3{0, -1, 0}, Vec3{1, 0, 0},
+                                         Vec3{-1, 0, 0}, normalized(Vec3{1, 1, 0})}) {
+                for (const float yaw : {-1.f, 0.f, 1.f}) {
+                    for (const float angle : {.4f, .9f, 1.5707963f}) {
+                        const Quat view = Quat::around({1, 0, 0}, angle);
+                        auto t = lookingAhead({0, 0, 1.25f});
+                        t.wallRun = true; t.runNormal = {0, 0, 1}; t.runAhead = direction; t.runSpeed = 6;
+                        const Quat neutralHead = Quat::yaw(yaw) * t.facing;
+                        t.facing = view * neutralHead; t.tilt = view;
+                        const Vec3 viewAhead = normalized(view.rotate(neutralHead.rotate({0, 0, -1})));
+                        for (int i = 0; i < 2; ++i)
+                            t.hands[i] = {true, t.eyes + (view * neutralHead).rotate(
+                                Vec3{i ? -.25f : .25f, -.15f, -.25f}),
+                                view * neutralHead * gripFacing({0, 0, 1})};
+                        float firstLead = 0;
+                        for (int phase = 0; phase < 12; ++phase) {
+                            t.runPhase = phase * 6.2831853f / 12;
+                            body::State state;
+                            body::Config config; config.hideHead = false;
+                            body::Result result;
+                            auto pose = solved(b, t, state, config, 1, &result);
+                            body::Pose actual(pose.data(), static_cast<int>(b.rig.parent.size()));
+                            if (angle > 1.5f) {
+                                const Vec3 hips = actual.direction(b.rig.hipRoot, b.rig.hipForward);
+                                const Vec3 facing = normalized(hips - t.runNormal * dot(hips, t.runNormal));
+                                check(dot(actual.direction(b.rig.hipRoot, b.rig.hipUp), t.runNormal) > .99f,
+                                      "forward chest bend tilted the whole pelvis instead of the upper body");
+                                check(dot(facing, viewAhead) > .99f,
+                                      "backward or sideways travel twisted the hips away from the view");
+                                const Vec3 torso = normalized(actual.position(b.rig.spine.back()) -
+                                                              actual.position(b.rig.spine.front()));
+                                near(dot(torso, viewAhead), std::sin(.85f), .003f);
+                                near(dot(torso, t.runNormal), std::cos(.85f), .003f);
+                                for (size_t segment = 0; segment + 1 < b.rig.spine.size(); ++segment) {
+                                    const Vec3 axis = normalized(actual.position(b.rig.spine[segment + 1]) -
+                                                                 actual.position(b.rig.spine[segment]));
+                                    check(dot(axis, torso) > .999f,
+                                          "joystick lean bent the chest instead of the straight upper body");
+                                }
+                            }
+                            check(result.headError < .005f, "joystick stance detached the head");
+                            check(dot(actual.direction(b.rig.head, b.rig.headForward),
+                                      t.facing.rotate({0, 0, -1})) > .999f,
+                                  "stance rotated the tracked head");
+                            for (int joint : {b.rig.pelvis, b.rig.hipRoot, 2, 3, 4, 21, 22, 23, 25, 26, 27})
+                                check(dot(actual.position(joint), t.runNormal) > .04f,
+                                      "joystick stance put a body joint through the facade");
+                            for (int i = 0; i < 2; ++i)
+                                if (result.handError[i] >= .035f)
+                                    throw std::runtime_error(
+                                      "joystick hand error " + std::to_string(result.handError[i]) +
+                                      " angle " + std::to_string(angle) + " yaw " + std::to_string(yaw) +
+                                      " travel " + std::to_string(direction.x) + "," +
+                                      std::to_string(direction.y));
+                            const float lead = dot(actual.position(b.rig.legs[0].foot) -
+                                                   actual.position(b.rig.legs[1].foot), direction);
+                            if (!phase) firstLead = lead;
+                            if (phase == 6)
+                                check(firstLead > .70f && lead < -.70f,
+                                      "view-following stance lost alternating travel-direction steps");
+                        }
+                    }
+                }
+            }
+        }
+    });
+    test("joystick run straightens inherited spine arch before leaning the whole upper body", [] {
+        for (const auto b : {testBody(true), splitPelvisBody()}) {
+            auto t = lookingAhead({0, 0, 1.1f});
+            t.wallRun = true; t.runNormal = {0, 0, 1}; t.runAhead = {0, -1, 0}; t.runSpeed = 6;
+            t.tilt = Quat::around({1, 0, 0}, 1.5707963f); t.facing = t.tilt * t.facing;
+            auto source = b.rest;
+            body::Pose native(source.data(), static_cast<int>(b.rig.parent.size()));
+            native.turn(b.rig.below[2], Quat::around({1, 0, 0}, .60f), native.position(2));
+            native.turn(b.rig.below[3], Quat::around({1, 0, 0}, -.45f), native.position(3));
+            body::State state; body::Config config; config.hideHead = false; body::Result result;
+            auto pose = solved(b, t, state, config, 1, &result, &source);
+            body::Pose actual(pose.data(), static_cast<int>(b.rig.parent.size()));
+            const Vec3 axis = normalized(actual.position(4) - actual.position(2));
+            check(dot(normalized(actual.position(3) - actual.position(2)), axis) > .999f &&
+                  dot(normalized(actual.position(4) - actual.position(3)), axis) > .999f,
+                  "inherited arch survived in the running spine");
+            near(dot(axis, Vec3{0, -1, 0}), std::sin(.85f), .003f);
+            check(result.headError < .005f, "straight upper body detached the tracked head");
+        }
+    });
+    test("joystick torso tuning rotates the straight trunk and leaves momentum poses unchanged", [] {
+        const auto b = splitPelvisBody();
+        for (bool joystick : {false, true}) {
+            auto t = lookingAhead({0, 0, 1.25f});
+            t.wallRun = true; t.runNormal = {0, 0, 1}; t.runAhead = {0, -1, 0}; t.runSpeed = 6;
+            if (joystick) {
+                t.tilt = Quat::around({1, 0, 0}, 1.5707963f); t.facing = t.tilt * t.facing;
+            }
+            Vec3 first{};
+            for (float degrees : {0.f, 20.f, 50.f, 80.f}) {
+                t.runTorsoAngle = degrees * .0174532925f;
+                body::State state; body::Config config; config.hideHead = false; body::Result result;
+                auto pose = solved(b, t, state, config, 1, &result);
+                body::Pose actual(pose.data(), static_cast<int>(b.rig.parent.size()));
+                const Vec3 trunk = normalized(actual.position(4) - actual.position(2));
+                if (!degrees) first = trunk;
+                if (joystick) {
+                    near(dot(trunk, Vec3{0, -1, 0}), std::sin(t.runTorsoAngle), .003f);
+                    near(dot(trunk, t.runNormal), std::cos(t.runTorsoAngle), .003f);
+                    check(dot(normalized(actual.position(3) - actual.position(2)), trunk) > .999f,
+                          "changing torso angle curved the spine");
+                } else near(length(trunk - first), 0, .003f);
+                check(result.headError < .005f, "torso angle moved the tracked head");
+            }
+        }
+    });
+    test("body v14 carries the run angle without changing the wire size or legacy packet meanings", [] {
+        using namespace native_body;
+        Command c; c.flags = bodyOn | wallRun | airborne;
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = {0, 1, 0}; c.crawlMotion = 6;
+        check(c.version == 16 && commandFormat(14, 272) && commandFormat(15, 288),
+              "new run-angle format rejected");
+        for (float angle : {0.f, .85f, 1.3962634f}) {
+            c.crawlDistance = angle; check(validCrawl(c), "angle rejected");
+        }
+        for (float angle : {-.1f, 1.5f, std::numeric_limits<float>::quiet_NaN()}) {
+            c.crawlDistance = angle; check(!validCrawl(c), "bad run angle accepted");
+        }
+        c.version = 12; c.bytes = 272; c.flags = bodyOn | kick | airborne;
+        check(commandFormat(12, 272) && validCrawl(c), "legacy unused field acquired a new meaning");
+        c.flags = bodyOn | 0x40000u;
+        check(!validCrawl(c), "unsupported body pose flag was accepted");
+    });
+    test("wall-run screenshot tuning is fixed and retired profile keys cannot change it", [] {
+        using namespace vr_settings;
+        check(fixedRunTorsoAngle == 15 && fixedRunCameraDistance == 110 &&
+              fixedMomentumCameraTilt == 30 && fixedMomentumCameraDistance == 90 &&
+              fixedMomentumBodyTilt == 50 && fixedMomentumForwardLean == 30 &&
+              fixedMomentumStepLength == 100 && fixedMomentumStepPace == 100, "screenshot values changed");
+        const Values expected;
+        const auto loaded = withTabOnly(expected,
+            "wall_run_torso_angle_deg=80\nwall_run_camera_distance_cm=40\n"
+            "momentum_camera_tilt_deg=-30\nmomentum_camera_distance_cm=160\n"
+            "momentum_body_tilt_deg=0\nmomentum_forward_lean_deg=0\n"
+            "momentum_step_length_pct=50\nmomentum_step_pace_pct=150\n");
+        check(loaded == expected, "retired settings from an older preview still apply");
+        const auto saved = tabOnlyText(expected);
+        check(saved.find("momentum_") == std::string::npos &&
+              saved.find("wall_run_torso_angle_deg") == std::string::npos &&
+              saved.find("wall_run_camera_distance_cm") == std::string::npos,
+              "retired tuning was still saved");
+    });
+    test("momentum camera tuning reverses roll and excludes vertical or joystick runs", [] {
+        auto f = trackedFrame(); f.seconds = 1.f / 90;
+        for (auto& hand : f.hands) hand.squeeze = 0;
+        const Vec3 feet{0, 10, -.1f};
+        const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, 8, false};
+        Pose heads[3];
+        for (int index = 0; index < 3; ++index) {
+            GameTrackingRig rig; rig.handClimb(true); rig.wallRunCameraTilt(true);
+            rig.wallRunBody(true, 0, {8, 0, 0});
+            rig.momentumWallRun(1.2f, (index - 1) * .34906585f, .85f, .5f);
+            const auto view = holdFor(rig, f, feet, wall, 2);
+            heads[index] = view.headPose;
+            near(dot(view.headPose.position - wall.anchor, wall.normal), 1.2f, .015f);
+            rig.wallRunBody(true, 0, {0, 8, 0});
+            const auto vertical = holdFor(rig, f, feet, wall, 2);
+            near(dot(vertical.headPose.position - wall.anchor, wall.normal), .75f, .015f);
+            f.hands[0].stickY = 1; rig.wallRunCameraDistance(.9f);
+            const auto joystick = holdFor(rig, f, feet, wall, 2);
+            near(dot(joystick.headPose.position - wall.anchor, wall.normal), .9f, .015f);
+            f.hands[0].stickY = 0;
+        }
+        const Vec3 axis = heads[1].orientation.rotate({0, 0, -1});
+        const Vec3 up = heads[1].orientation.rotate({0, 1, 0});
+        float roll[2]{};
+        for (int k : {0, 2}) {
+            const Vec3 tilted = heads[k].orientation.rotate({0, 1, 0});
+            roll[k / 2] = std::atan2(dot(cross(up, tilted), axis), dot(up, tilted));
+            near(length(heads[k].position - heads[1].position), 0, .003f);
+        }
+        check(std::abs(roll[0]) > .02f && roll[0] * roll[1] < 0, "signed camera tilt did not reverse bank");
+        near(roll[0] + roll[1], 0, .003f);
+    });
+    test("momentum body tuning controls bank lean and stride without changing other run modes", [] {
+        const auto b = splitPelvisBody();
+        auto t = lookingAhead({0, 0, .95f}); t.wallRun = true;
+        t.runNormal = {0, 0, 1}; t.runAhead = {1, 0, 0}; t.runSpeed = 8;
+        body::Config config; config.hideHead = false;
+        for (float bank : {0.f, .85f, 1.5f}) for (float lean : {0.f, .5f, 1.f}) {
+            t.runBank = bank; t.runLean = lean;
+            body::State state; body::Result result;
+            auto pose = solved(b, t, state, config, 1, &result);
+            body::Pose actual(pose.data(), static_cast<int>(b.rig.parent.size()));
+            const Vec3 wanted = Quat::around({0, 1, 0}, lean).rotate(normalized(Vec3{0, bank, 1}));
+            near(length(normalized(actual.direction(b.rig.hipRoot, b.rig.hipUp)) - wanted), 0, .003f);
+            check(result.headError < .005f, "momentum body tuning moved the tracked head");
+        }
+        t.runBank = .85f; t.runLean = .5f;
+        float spans[2]{};
+        for (int k = 0; k < 2; ++k) {
+            t.runStride = k ? 1.5f : .5f;
+            body::State state; auto pose = solved(b, t, state, config);
+            spans[k] = std::abs(dot(b.at(pose, 23) - b.at(pose, 27), t.runAhead));
+        }
+        check(spans[1] > spans[0] + .15f, "stride control did not lengthen the generated steps");
+        for (bool joystick : {false, true}) {
+            t.runAhead = {0, -1, 0}; t.runStride = 1;
+            if (joystick) { t.tilt = Quat::around({1, 0, 0}, 1.5707963f); t.facing = t.tilt * t.facing; }
+            body::State firstState; auto first = solved(b, t, firstState, config);
+            t.runBank = 2; t.runLean = 1; t.runStride = .5f;
+            body::State nextState; auto next = solved(b, t, nextState, config);
+            for (int joint : {1, 2, 3, 4, 6, 21, 22, 23, 25, 26, 27})
+                near(length(b.at(first, joint) - b.at(next, joint)), 0, .004f);
+            t.runBank = .85f; t.runLean = .5f;
+        }
+    });
+    test("momentum step pace changes only horizontal animation and keeps the high-speed cadence cap", [] {
+        for (Vec3 direction : {Vec3{1, 0, 0}, Vec3{0, 1, 0}}) for (bool joystick : {false, true}) {
+            GameMotionFrame frame; frame.active = true; frame.standing = joystick;
+            const SurfaceHold wall{{0, 0, 1}, {0, 10, 0}, 30, false};
+            WallRunBody slow, fast, fasterTravel;
+            for (int tick = 0; tick < 10; ++tick) {
+                check(slow.update(frame, wall, direction * 30, true, false, 0, .01f, .5f), "run stopped");
+                check(fast.update(frame, wall, direction * 30, true, false, 0, .01f, 1.5f), "run stopped");
+                fasterTravel.update(frame, wall, direction * 60, true, false, 0, .01f, 1.5f);
+            }
+            if (joystick || direction.y) near(slow.phase(), fast.phase(), .001f);
+            else near(fast.phase(), slow.phase() * 3, .001f);
+            near(fasterTravel.phase(), fast.phase(), .001f);
+            near(fast.speed(), 30); near(fasterTravel.speed(), 60);
+        }
+    });
+    test("controlled flips is a separate saved switch and retired wall settings have no controls", [] {
+        using namespace vr_settings;
+        Values values;
+        check(!values.controlledFlips && !values.flips, "new flip mode was enabled by default");
+        check(choose(Item::controlledFlips, 1, values) && values.controlledFlips && !values.flips,
+              "controlled mode changed the original flips setting");
+        check(withTabOnly(Values{}, tabOnlyText(values)) == values, "controlled mode did not persist");
+        for (const auto& row : rows())
+            check(std::string(row.title).find("MOMENTUM ") == std::string::npos &&
+                  std::string(row.title).find("JOYSTICK ") == std::string::npos,
+                  "retired tuning still has a menu row");
+    });
+    test("body protocol separates official dive kicks from new and legacy wall runs", [] {
+        using namespace native_body;
+        Command c; c.flags = bodyOn | kick | airborne; c.kick = {1, -2, 3};
+        check(commandFormat(c.version, c.bytes) && validCrawl(c) && kickCommand(c) && !wallRunCommand(c),
+              "current dive kick became a wall run");
+        c.version = 11; c.bytes = commandBytesV11;
+        check(commandFormat(c.version, c.bytes) && validCrawl(c) && kickCommand(c) && !wallRunCommand(c),
+              "official 0.5.0 dive packet lost compatibility");
+        c.version = 15; c.bytes = commandBytesV15; c.kick = {.85f, .5f, 1};
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = {1, 0, 0}; c.crawlMotion = 8;
+        check(validCrawl(c) && wallRunCommand(c) && !kickCommand(c), "legacy run became a dive kick");
+        near(length(runTuning(c) - c.kick), 0);
+        c.version = 16; c.bytes = sizeof(c); c.flags |= wallRun;
+        check(!validCrawl(c), "one packet enabled both dive and wall running");
+    });
+    test("body v15 appends validated momentum tuning and preserves 272-byte legacy packets", [] {
+        using namespace native_body;
+        Command c; c.flags = bodyOn | wallRun | airborne;
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = {1, 0, 0}; c.crawlMotion = 8;
+        check(c.version == 16 && commandFormat(15, 288) && commandFormat(14, 272) &&
+              !commandFormat(15, 272) && !commandFormat(14, 288) && validCrawl(c), "body formats changed");
+        c.runBank = 3; check(!validCrawl(c), "bad bank accepted"); c.runBank = .85f;
+        c.runLean = 2; check(!validCrawl(c), "bad lean accepted"); c.runLean = .5f;
+        c.runStride = 0; check(!validCrawl(c), "bad stride accepted"); c.runStride = 1;
+        c.runReserved = 1; check(!validCrawl(c), "reserved tuning data accepted");
+    });
+    test("wall run camera tilt: optional momentum bank follows the body without moving the eyes", [] {
+        for (const Vec3 velocity : {Vec3{8, 0, 0}, Vec3{-8, 0, 0}, Vec3{0, 8, 0}, Vec3{6, 6, 0}}) {
+            GameTrackingRig camera, baseline;
+            camera.handClimb(true); baseline.handClimb(true);
+            camera.wallRunCameraTilt(true);
+            camera.wallRunBody(true, 0, velocity); baseline.wallRunBody(true, 0, velocity);
+            auto frame = trackedFrame(), control = trackedFrame();
+            frame.seconds = control.seconds = 1.f / 90;
+            for (auto& h : frame.hands) h.squeeze = 0;
+            for (auto& h : control.hands) h.squeeze = 0;
+            const Vec3 feet{0, 10, -.1f};
+            const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, length(velocity), false};
+            const auto normal = holdFor(baseline, control, feet, wall, 2);
+            const auto banked = holdFor(camera, frame, feet, wall, 2);
+            const Vec3 up = normal.headPose.orientation.rotate({0, 1, 0});
+            const Vec3 bankUp = banked.headPose.orientation.rotate({0, 1, 0});
+            const Vec3 look = normal.headPose.orientation.rotate({0, 0, -1});
+            const float roll = std::atan2(dot(cross(up, bankUp), look), dot(up, bankUp));
+            if (velocity.y == 0) near(roll, std::copysign(.17453293f, velocity.x), .001f);
+            else if (velocity.x == 0) near(roll, 0, .001f);
+            else check(roll > 0 && roll < .1746f, "diagonal camera tilt did not fade toward vertical");
+            near(length(normal.headPose.position - banked.headPose.position), 0, .003f);
+            near(length(banked.headPose.orientation.rotate({0, 0, -1}) - look), 0, .003f);
+            near(banked.viewTilt, normal.viewTilt, .001f);
+            check(!banked.standing, "cosmetic bank entered the joystick standing view");
+            const Vec3 left{banked.eyes[0][12], banked.eyes[0][13], banked.eyes[0][14]};
+            const Vec3 right{banked.eyes[1][12], banked.eyes[1][13], banked.eyes[1][14]};
+            near(length(left - right), .064f, .001f);
+            near(length((left + right) * .5f - banked.headPose.position), 0, .001f);
+            for (int i = 0; i < 2; ++i)
+                near(length(banked.grips[i].position - banked.headPose.position),
+                     length(normal.grips[i].position - normal.headPose.position), .003f);
+        }
+    });
+    test("wall run camera tilt: ground grips vents joystick and disabling cannot retain the bank", [] {
+        for (int mode = 0; mode < 6; ++mode) {
+            GameTrackingRig camera, baseline;
+            camera.handClimb(true); baseline.handClimb(true);
+            camera.wallRunCameraTilt(true);
+            auto frame = trackedFrame(), control = trackedFrame();
+            frame.seconds = control.seconds = 1.f / 90;
+            for (auto& h : frame.hands) h.squeeze = 0;
+            for (auto& h : control.hands) h.squeeze = 0;
+            const Vec3 feet{0, 10, -.1f};
+            const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, 8, false};
+            camera.wallRunBody(true, 0, {8, 0, 0}); baseline.wallRunBody(true, 0, {8, 0, 0});
+            holdFor(camera, frame, feet, wall, 1);
+            holdFor(baseline, control, feet, wall, 1);
+            auto support = wall;
+            if (mode == 0) camera.wallRunCameraTilt(false);
+            if (mode == 1) frame.hands[0].stickY = control.hands[0].stickY = 1;
+            if (mode == 2) {
+                camera.wallRunBody(true, 1, {8, 0, 0}); baseline.wallRunBody(true, 1, {8, 0, 0});
+            }
+            if (mode == 3) support = {{0, 1, 0}, feet, 8, false};
+            if (mode == 4) support = {{0, 0, 1}, wall.anchor, 8, true, true};
+            if (mode == 5) support = {};
+            const auto actual = holdFor(camera, frame, feet, support, 2);
+            const auto normal = holdFor(baseline, control, feet, support, 2);
+            for (const Vec3 axis : {Vec3{0, 1, 0}, Vec3{0, 0, -1}})
+                near(length(actual.headPose.orientation.rotate(axis) -
+                            normal.headPose.orientation.rotate(axis)), 0, .001f);
+            near(length(actual.headPose.position - normal.headPose.position), 0, .003f);
+            camera.reset(); baseline.reset();
+            camera.wallRunCameraTilt(false);
+            const auto reset = holdFor(camera, frame, feet, support, 1);
+            const auto resetBase = holdFor(baseline, control, feet, support, 1);
+            near(length(reset.headPose.orientation.rotate({0, 1, 0}) -
+                        resetBase.headPose.orientation.rotate({0, 1, 0})), 0, .001f);
+        }
+    });
+    test("running view: momentum runs gain room while grips floor and vents keep their view", [] {
+        auto f = trackedFrame();
+        f.seconds = 1.f / 90;
+        const Vec3 feet{0, 10, -.1f};
+        const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, 8, false};
+        GameTrackingRig rig; rig.handClimb(true); rig.wallDistance(.25f);
+        rig.wallRunBody(true, 0, {8, 0, 0});
+        const auto run = holdFor(rig, f, feet, wall, 2.f);
+        near(dot(run.headPose.position - wall.anchor, wall.normal), .95f, .015f);
+        rig.wallRunBody(true, 1, {8, 0, 0});
+        const auto grip = holdFor(rig, f, feet, wall, 2.f);
+        near(dot(grip.headPose.position - wall.anchor, wall.normal), .25f, .015f);
+        rig.wallRunBody(true, 0, {0, 8, 0});
+        const auto upward = holdFor(rig, f, feet, wall, 2.f);
+        near(dot(upward.headPose.position - wall.anchor, wall.normal), .75f, .015f);
+        for (bool vent : {false, true}) {
+            const SurfaceHold support = vent ? SurfaceHold{{0, 0, 1}, {0, 10, -1}, 8, true, true} :
+                                              SurfaceHold{};
+            GameTrackingRig fresh, control; fresh.handClimb(true); control.handClimb(true);
+            fresh.wallRunBody(true, 0, {8, 0, 0});
+            const auto actual = holdFor(fresh, f, feet, support, 2.f);
+            const auto baseline = holdFor(control, f, feet, support, 2.f);
+            near(length(actual.headPose.position - baseline.headPose.position), 0, .002f);
+        }
+    });
+    test("running view: joystick adds clearance without changing angle and releases it on grip or floor", [] {
+        for (const Vec3 velocity : {Vec3{6, 0, 0}, Vec3{0, 6, 0}, normalized(Vec3{1, 1, 0}) * 6.f}) {
+            GameTrackingRig rig, originalAngle;
+            rig.handClimb(true); originalAngle.handClimb(true);
+            rig.wallDistance(.25f); originalAngle.wallDistance(.25f);
+            auto frame = trackedFrame(), control = trackedFrame();
+            frame.seconds = control.seconds = 1.f / 90;
+            for (auto& h : frame.hands) h.squeeze = 0;
+            for (auto& h : control.hands) h.squeeze = 0;
+            const Vec3 feet{0, 10, -.1f};
+            const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, 6, false};
+            rig.wallRunBody(true, 0, velocity);
+            holdFor(rig, frame, feet, wall, 2);
+            holdFor(originalAngle, control, feet, wall, 2);
+            frame.hands[0].stickY = control.hands[0].stickY = 1;
+            const auto running = holdFor(rig, frame, feet, wall, 2);
+            const auto before = holdFor(originalAngle, control, feet, wall, 2);
+            const float room = .95f - .20f * std::abs(normalized(velocity).y);
+            near(dot(running.headPose.position - wall.anchor, wall.normal), .90f, .015f);
+            for (const Vec3 axis : {Vec3{0, 1, 0}, Vec3{0, 0, -1}})
+                near(length(running.headPose.orientation.rotate(axis) -
+                            before.headPose.orientation.rotate(axis)), 0, .002f);
+            near(running.viewTilt, before.viewTilt, .002f);
+            check(running.standing, "joystick clearance disabled the existing wall-standing view");
+            frame.hands[0].stickY = 0;
+            const auto momentum = holdFor(rig, frame, feet, wall, 2);
+            near(dot(momentum.headPose.position - wall.anchor, wall.normal), room, .015f);
+            rig.wallRunBody(true, 1, velocity);
+            const auto grip = holdFor(rig, frame, feet, wall, 2);
+            near(dot(grip.headPose.position - wall.anchor, wall.normal), .25f, .015f);
+            rig.wallRunBody(true, 0, velocity);
+            const auto ground = holdFor(rig, frame, feet, {}, 2);
+            const auto normalGround = holdFor(originalAngle, control, feet, {}, 2);
+            near(length(ground.headPose.position - normalGround.headPose.position), 0, .005f);
+        }
+    });
+    test("joystick camera distance changes live across directions and survives recentering", [] {
+        for (Vec3 travel : {Vec3{6, 0, 0}, Vec3{0, 6, 0}, normalized(Vec3{1, 1, 0}) * 6.f}) {
+            GameTrackingRig rig; rig.handClimb(true); rig.wallRunBody(true, 0, travel);
+            auto f = trackedFrame(); f.seconds = 1.f / 90; f.hands[0].stickY = 1;
+            for (auto& hand : f.hands) hand.squeeze = 0;
+            const Vec3 feet{0, 10, -.1f};
+            const SurfaceHold wall{{0, 0, 1}, {0, 10, -1}, 6, false};
+            for (float room : {.65f, 1.3f, .9f}) {
+                rig.wallRunCameraDistance(room);
+                const auto out = holdFor(rig, f, feet, wall, 2);
+                near(dot(out.headPose.position - wall.anchor, wall.normal), room, .015f);
+            }
+            rig.wallRunCameraDistance(1.1f); rig.reset(); rig.wallRunBody(true, 0, travel);
+            const auto reset = holdFor(rig, f, feet, wall, 2);
+            near(dot(reset.headPose.position - wall.anchor, wall.normal), 1.1f, .015f);
+        }
+    });
+    test("running body: leaning poses keep hips spine knees and ankles outside the facade", [] {
+        const auto b = splitPelvisBody();
+        for (Vec3 direction : {Vec3{1, 0, 0}, Vec3{-1, 0, 0}, Vec3{0, 1, 0}, normalized(Vec3{1, 1, 0})}) {
+            auto t = lookingAhead({0, 0, .95f - .20f * std::abs(direction.y)});
+            t.wallRun = true; t.runNormal = {0, 0, 1}; t.runAhead = direction; t.runSpeed = 8;
+            t.facing = body::between({0, 0, -1}, {0, 1, 0}, direction, t.runNormal);
+            body::State state;
+            for (int phase = 0; phase < 24; ++phase) {
+                t.runPhase = phase * 6.2831853f / 24;
+                const auto pose = solved(b, t, state);
+                for (int joint : {b.rig.pelvis, b.rig.hipRoot, 2, 3, 4, 21, 22, 23, 25, 26, 27})
+                    check(dot(b.at(pose, joint), t.runNormal) > .045f,
+                          "running body joint entered the facade");
+            }
+        }
+    });
+    test("body: run travel rather than headset yaw advances and steers the animation", [] {
+        GameMotionFrame frame; frame.active = frame.standing = true;
+        SurfaceHold hold{{0, 0, 1}, {0, 10, 0}, 8, false};
+        WallRunBody run;
+        check(run.update(frame, hold, {8, 0, 0}, true, false, 0, .01f), "run did not start");
+        const float first = run.phase();
+        frame.headPose.orientation = Quat::yaw(2);
+        check(run.update(frame, hold, {8, 0, 0}, true, false, 0, .01f), "run stopped on head turn");
+        check(run.phase() > first && dot(run.ahead(), Vec3{1, 0, 0}) > .999f,
+              "gaze chose the cycle or facing direction");
+        for (int i = 0; i < 50; ++i)
+            run.update(frame, hold, {0, 8, 0}, true, false, 0, .01f);
+        check(dot(run.ahead(), Vec3{0, 1, 0}) > .999f, "diagonal-to-vertical turn was not followed");
+        check(!run.update(frame, hold, {}, true, false, 0, .01f), "stationary body kept running");
+        check(run.update(frame, hold, {8, 0, 0}, true, false, 0, .01f), "momentum run did not resume");
+        frame.standing = false; hold.speed = 2;
+        check(run.update(frame, hold, {2, 0, 0}, true, false, 0, .01f),
+              "decelerating run flickered into the crawl pose");
+        frame.standing = true; hold.speed = 8;
+        hold.crawl = true;
+        check(run.update(frame, hold, {8, 0, 0}, true, true, 0, .01f),
+              "native supported wall run was mistaken for ground movement");
+        check(!run.update(frame, hold, {8, 0, 0}, true, true, 1, .01f), "wall grip kept running");
+    });
+    test("body: fast wall travel retains a normal running cadence without changing velocity", [] {
+        GameMotionFrame frame; frame.active = frame.standing = true;
+        for (const Vec3 direction : {Vec3{1, 0, 0}, Vec3{-1, 0, 0}, normalized(Vec3{1, 1, 0})}) {
+            for (const float speed : {6.f, 12.f, 30.f, 60.f}) {
+                WallRunBody normal, fast, slower;
+                for (int tick = 0; tick < 90; ++tick) {
+                    const SurfaceHold wall{{0, 0, 1}, {0, 10, 0}, speed, false};
+                    check(normal.update(frame, wall, direction * 6.f, true, false, 0, 1.f / 90),
+                          "reference wall run stopped");
+                    check(fast.update(frame, wall, direction * speed, true, false, 0, 1.f / 90),
+                          "fast wall run stopped");
+                    check(slower.update(frame, wall, direction * 3.f, true, false, 0, 1.f / 90),
+                          "slow wall run stopped");
+                    near(std::sin(fast.phase()), std::sin(normal.phase()), .0001f);
+                    near(std::cos(fast.phase()), std::cos(normal.phase()), .0001f);
+                    near(fast.speed(), speed, .0001f);
+                    check(dot(fast.ahead(), direction) > .999f, "cadence cap changed travel facing");
+                }
+                check(std::abs(slower.phase() - normal.phase()) > 1.f,
+                      "cadence cap sped up slower wall movement");
+            }
+        }
+    });
+    test("body: wall-run eligibility excludes ground vents stationary grabs and invalid support", [] {
+        GameMotionFrame frame; frame.active = frame.standing = true;
+        SurfaceHold hold{{0, 0, 1}, {0, 10, 0}, 8, false};
+        check(wallRunPose(frame, hold, true, false, 0, false), "stick wall run was excluded");
+        frame.standing = false;
+        check(wallRunPose(frame, hold, true, false, 0, true), "momentum wall run was excluded");
+        check(!wallRunPose(frame, hold, true, false, 0, false), "hand climbing acquired run legs");
+        check(!wallRunPose(frame, hold, true, true, 0, true), "ground acquired run legs");
+        check(!wallRunPose(frame, hold, true, false, 1, true), "attached palm did not restore crawl");
+        check(!wallRunPose(frame, hold, false, false, 0, true), "disabled feature acquired run legs");
+        frame.ventCrawl = true;
+        check(!wallRunPose(frame, hold, true, false, 0, true), "vent acquired run legs");
+        frame.ventCrawl = false; hold.normal = {0, 1, 0};
+        check(!wallRunPose(frame, hold, true, false, 0, true), "floor acquired run legs");
+        hold.normal = {0, 0, 1}; hold.speed = 0;
+        check(!wallRunPose(frame, hold, true, false, 0, true), "stationary wall acquired run legs");
+    });
+    test("body: version 12 running packets require a valid wall direction and cycle", [] {
+        using namespace native_body;
+        Command c; c.flags = bodyOn | wallRun | airborne;
+        c.crawlNormal = {0, 0, 1}; c.crawlAhead = {1, 0, 0}; c.crawlMotion = 8;
+        check(commandFormat(12, 272) && validCrawl(c), "new run packet was rejected");
+        for (uint32_t flag : {native_body::standing, kneel, crawl, crawlPlanted, crawlHandSync,
+                              crawlLeftHeld, crawlRightHeld, crawlLeftTouch, crawlRightTouch,
+                              crawlTurnAway, ventHands}) {
+            c.flags |= flag;
+            check(!validCrawl(c), "incompatible run mode was accepted");
+            c.flags &= ~flag;
+        }
+        c.crawlAhead = c.crawlNormal;
+        check(!validCrawl(c), "parallel travel and normal were accepted");
+        c.crawlAhead = {1, 0, 0}; c.crawlPhase = -1;
+        check(!validCrawl(c), "negative run phase was accepted");
+        c.crawlPhase = 0; c.crawlMotion = 0;
+        check(!validCrawl(c), "zero-speed run was accepted");
+        c.version = 10;
+        check(!validCrawl(c), "old packet enabled run mode");
     });
     test("body: the game's pose stays untouched until the body blends in, and comes back", [] {
         auto b=testBody(true);
@@ -10910,6 +20210,28 @@ int main() {
                 const Vec3 hip=b.at(pose,b.rig.legs[i].upper),foot=b.at(pose,b.rig.legs[i].foot);
                 check(std::fabs(foot.x-hip.x)<.12f,"a wall's foot is not under its hip");
             }
+    test("body: a dive's legs kick out at him from the hips, whatever the game's air pose", [] {
+        for(const bool odd:{false,true}){
+            auto b=testBody(odd);
+            body::Targets t;t.head=true;t.airborne=true;
+            t.eyes={0,1.6f,0};t.facing={};
+            t.kick=true;t.kickAt={0,.4f,-1.6f};
+            body::State s;body::Result r;
+            const auto kicked=solved(b,t,s,{},1,&r);
+            check(r.solved,"the kicking body was not solved");
+            for(int i=0;i<2;++i){
+                const auto& leg=b.rig.legs[i];
+                const Vec3 hip=b.at(kicked,leg.upper),foot=b.at(kicked,leg.foot);
+                check(dot(normalized(foot-hip),normalized(t.kickAt-hip))>.97f,"a kicking leg does not point at him");
+                check(length(foot-hip)>(b.rig.thigh[i]+b.rig.shin[i])*(i==1?.9f:.7f),"a kicking leg is folded");
+            }
+            // Without it the air pose is the game's.
+            body::State q;
+            t.kick=false;
+            const auto air=solved(b,t,q,{},1,&r);
+            const auto& leg=b.rig.legs[1];
+            check(dot(normalized(b.at(air,leg.foot)-b.at(air,leg.upper)),normalized(t.kickAt-b.at(air,leg.upper)))<.97f,
+                  "the game's air pose already kicked");
         }
     });
     test("body: on a wall the body stands up in the world and plants no feet", [] {
@@ -11023,6 +20345,34 @@ int main() {
                     for(const auto& fin:b.rig.arms[side].fingers)
                         for(size_t k=1;k<=3;++k)
                             near(bendOf(b,made,fin,k,heroHinge(b,made,fin,side)),c.fistBend[k-1],.02f);
+            }
+        }
+    });
+    test("body: an open hand's fingers lie side by side, not in the rest pose's fan", [&] {
+        for(const bool odd:{false,true}){
+            auto b=testBody(odd,true);
+            body::Config c;c.hideHead=false;
+            body::State s;
+            const auto pose=solved(b,heroHandsOut(0),s,c);
+            for(int side=0;side<2;++side){
+                const auto& arm=b.rig.arms[side];
+                const auto& fingers=arm.fingers;
+                const Vec3 palm=heroPalm(b,pose,side),along=normalized(b.at(pose,arm.finger)-b.at(pose,arm.hand));
+                const Vec3 across=normalized(cross(palm,along));
+                const auto inPalm=[&](const std::vector<int16_t>& f){
+                    const Vec3 v=normalized(b.at(pose,f[2])-b.at(pose,f[1]));
+                    return normalized(v-palm*dot(v,palm));
+                };
+                for(size_t i=1;i<fingers.size();++i){
+                    // Each finger's first bone within 8 degrees of the next's in the palm's plane, where the rest
+                    // pose fans them 12 to 15 ("hands look a bit goofy with fingers spread too wide", October 25).
+                    check(dot(inPalm(fingers[i]),inPalm(fingers[i-1]))>std::cos(.14f),"an open hand's fingers fan out");
+                    // Square across the fingers, each tip as far from the next as its knuckle to 1.5 times as far
+                    // (the rest pose's fan: 2.1 to 2.3 times), never crossing.
+                    const float tips=dot(b.at(pose,fingers[i][4])-b.at(pose,fingers[i-1][4]),across);
+                    const float knuckles=dot(b.at(pose,fingers[i][1])-b.at(pose,fingers[i-1][1]),across);
+                    check(tips/knuckles>.9f&&tips/knuckles<1.5f,"an open hand's fingertips fan out or crowd together");
+                }
             }
         }
     });
@@ -11327,6 +20677,17 @@ int main() {
         s.handTracked[1]=false;
         check(hintFor(s)==Hint::tracking,"an untracked controller");
         check(hintFor(tPose(.9f,.6f))==Hint::standUp,"a seated player");
+        // A headset whose floor is off: a 1.70 m player's eyes measured 1.05 m up, and eyes 2.50 m up (players
+        // on the Discord, October 21 and 19). HEIGHT's range, 1.20 to 2.20 m, still counts at either end.
+        check(hintFor(tPose(1.05f,.6f))==Hint::floor,"a floor half a metre too high");
+        check(hintFor(tPose(2.5f,.6f))==Hint::floor,"a floor 0.8 m too low");
+        check(hintFor(tPose(1.13f,.38f))==Hint::none&&hintFor(tPose(2.05f,.65f))==Hint::none,
+              "the shortest or the tallest player HEIGHT names did not count");
+        // Within that range, the controllers' span: the user, 1.88 m, holds them 1.65 m apart, at eyes 1.76 m up
+        // (October 26) and at the 1.33 m a Quest Pro gave with its floor 0.42 m too high (October 27, the
+        // panel's "1.43"; each arm 0.61 m from shoulders placed at that size).
+        check(hintFor(tPose(1.758f,.56f))==Hint::none,"the user's own T-pose");
+        check(hintFor(tPose(1.334f,.61f))==Hint::floor,"the user's T-pose under a floor 0.42 m too high");
         // Arms hanging down: the wrists 0.6 m under the shoulders.
         s=tPose(1.62f,.6f);
         for(auto& grip:s.grips)grip.position+=Vec3{grip.position.x<0?.6f:-.6f,-.6f,0};
@@ -11350,8 +20711,12 @@ int main() {
         s.grips[1].position+=Vec3{0,.01f,0};
         c.update(s);
         check(c.hint()==Hint::still,"a moving hand held still");
-        for(int h=0;h<=static_cast<int>(Hint::still);++h)
+        for(int h=0;h<=static_cast<int>(Hint::floor);++h)
             check(body_calibration::hintText(static_cast<Hint>(h))[0]!=0,"a hint without text");
+        // What the panel and the launcher show: the height, from HEIGHT's share (a 1.88 m player's eyes are
+        // 1.76 m up: the user, October 27).
+        near(body_calibration::height(1.758f),1.878f,1e-3f);
+        near(body_calibration::height(seated::eyeHeight(170)),1.7f,1e-4f);
     });
     test("calibration: a short lapse pauses the hold, a longer one starts it over", [] {
         body_calibration::Calibration c;c.start();
@@ -11375,6 +20740,66 @@ int main() {
         hold(c,tPose(1.62f,.6f),45);
         hold(c,tPose(1.62f,.3f),27);
         check(c.phase()==body_calibration::Phase::waiting&&c.progress()==0,"a long lapse kept the hold");
+    });
+    test("seated play: the space rises from the measured seat to the standing eyes, HEIGHT before a calibration", [] {
+        using namespace seated;
+        // HEIGHT's eyes, else a calibration's made standing, else the default; one made sitting is none.
+        near(standingEye(175, 1.5f, defaultEye), 1.638f);
+        check(standingEye(0, 1.62f, defaultEye) == 1.62f, "a standing calibration was not taken");
+        check(standingEye(0, 1.2f, defaultEye) == defaultEye, "a seated calibration was taken for a standing one");
+        check(standingEye(300, 1.62f, defaultEye) == 1.62f, "a height out of range was taken");
+        const float dt = 1.f / 90;
+        Lift lift;
+        check(lift.update(dt, false, true, 1.2f, false, 1.65f) == 0, "raised while SEATED was off");
+        // On: nothing until a second of play has measured the seat, then up to the standing eyes, eased in.
+        float now{};
+        for (int i = 0; i < 80; ++i)
+            now = lift.update(dt, true, true, 1.2f, false, 1.65f);
+        check(now == 0 && !lift.measures(), "raised before the seat was measured");
+        for (int i = 0; i < 20; ++i)
+            now = lift.update(dt, true, true, 1.2f, false, 1.65f);
+        check(lift.measures() == 1, "no seat measured after a second of play");
+        near(lift.seatedEye(), 1.2f, 1e-4f);
+        check(now > 0 && now < .45f, "the lift came in all at once");
+        for (int i = 0; i < 180; ++i)
+            now = lift.update(dt, true, true, 1.2f, false, 1.65f);
+        near(now, .45f);
+        // Menus measure nothing; a recenter measures again, the lift kept meanwhile.
+        for (int i = 0; i < 200; ++i)
+            lift.update(dt, true, false, 1.f, false, 1.65f);
+        check(lift.measures() == 1, "a menu measured the seat");
+        lift.update(dt, true, true, 1.1f, true, 1.65f);
+        check(lift.lift() > .44f, "a recenter dropped the player to the floor");
+        for (int i = 0; i < 400; ++i)
+            now = lift.update(dt, true, true, 1.1f, false, 1.65f);
+        check(lift.measures() == 2, "the recenter's seat was not measured");
+        near(now, .55f);
+        // Standing with SEATED on lowers nothing below the floor; a deep seat raises at most maxLift.
+        Lift tall, low;
+        for (int i = 0; i < 400; ++i) {
+            tall.update(dt, true, true, 1.75f, false, 1.65f);
+            low.update(dt, true, true, .35f, false, 1.65f);
+        }
+        check(tall.lift() == 0 && tall.measures() == 1, "a standing player was lowered");
+        near(low.lift(), Lift::maxLift);
+        // Off again: on the floor at once, and measured anew when it comes back on.
+        check(lift.update(dt, false, true, 1.1f, false, 1.65f) == 0 && lift.seatedEye() == 0, "off kept the lift");
+        // What the game's world takes is raised by it; the frame itself is a copy.
+        XrFrame f;
+        f.head.position = {0, 1.2f, 0};
+        f.eyes[0].pose.position = {-.03f, 1.2f, 0};
+        f.hands[1].grip.position = {.2f, .9f, -.3f};
+        f.hands[1].aim.position = {.2f, .9f, -.35f};
+        const auto up = raised(f, .45f);
+        near(up.head.position.y, 1.65f);
+        near(up.eyes[0].pose.position.y, 1.65f);
+        near(up.hands[1].grip.position.y, 1.35f);
+        near(up.hands[1].aim.position.y, 1.35f);
+        check(up.head.position.x == 0 && up.hands[1].grip.position.z == -.3f && f.head.position.y == 1.2f,
+              "raising moved more than the height, or the frame it came from");
+        check(raised(f, 0).head.position.y == 1.2f &&
+                  raised(f, std::numeric_limits<float>::quiet_NaN()).head.position.y == 1.2f,
+              "nothing to raise by raised the frame");
     });
     test("calibration panel: ahead of the head, facing it; drawn while the calibration shows", [] {
         const auto panel=body_calibration::panelPose({{.2f,1.6f,.1f},Quat::yaw(1.5707963f)});
@@ -11410,10 +20835,10 @@ int main() {
     });
     test("overlay text: capitals, digits and punctuation in strokes on the text's plane", [] {
         for(const char* text:{"BODY CALIBRATION","STAND TALL, LOOK AHEAD","ARMS STRAIGHT OUT TO THE SIDES",
-                              "PRESS B TO SKIP","EYE HEIGHT 1.63 M","SPIDER-MAN NOW HAS YOUR SIZE",
+                              "PRESS B TO SKIP","HEIGHT 1.88 M","SPIDER-MAN NOW HAS YOUR SIZE",
                               "REDO IT IN SETTINGS, SPIDY VR","0123456789%:()!?+=/<>'"})
             for(const char* c=text;*c;++c)check(*c==' '||drawable(*c),"a character the panel uses has no glyph");
-        for(int h=0;h<=static_cast<int>(body_calibration::Hint::still);++h)
+        for(int h=0;h<=static_cast<int>(body_calibration::Hint::floor);++h)
             for(const char* c=body_calibration::hintText(static_cast<body_calibration::Hint>(h));*c;++c)
                 check(*c==' '||drawable(*c),"a hint uses a character without a glyph");
         check(drawable('a')&&!drawable('#')&&!drawable('~'),"lower case or unknown characters");
@@ -11961,6 +21386,90 @@ int main() {
         check(deliver(blow({0,-.9f,-.44f},5),true,5,flow).kind==BlowKind::Finisher,"a finisher in the air was something else");
         near(speedOf(punches.config(),.5f),4.85f);
     });
+    test("free combat: vertical punches override hidden calls and every finisher count", [] {
+        const Punches punches;
+        const Flow flow;
+        const auto upper = punches.blow({0, .9f, -.44f}, 5);
+        const auto down = punches.blow({0, -.9f, -.44f}, 5);
+        for (int count = 1; count <= 10; ++count) {
+            for (auto cue : {CueWay::None, CueWay::Up, CueWay::Down, CueWay::Left, CueWay::Right}) {
+                const auto up = deliver(upper, false, count, flow, {}, cue, 1.5f, true);
+                check(up.kind == BlowKind::Launch && up.fly && up.velocity.y > 8,
+                      "a hidden call or finisher replaced the uppercut");
+                near(up.damage, upper.damage * flow.damage(count), .01f);
+                const auto airUp = deliver(upper, true, count, flow, {}, cue, 1.5f, true);
+                check(airUp.kind == BlowKind::Juggle && airUp.velocity.y > 8,
+                      "uppercut did not relaunch an airborne enemy");
+                const auto slam = deliver(down, true, count, flow, {}, cue, 1.5f, true);
+                check(slam.kind == BlowKind::Slam && slam.fly && slam.velocity.y < -20,
+                      "a hidden call or finisher replaced the ground slam");
+                near(slam.damage, down.damage * flow.damage(count) * 1.6f, .01f);
+                const auto floor = deliver(down, false, count, flow, {}, cue, 1.5f, true);
+                check(floor.knockback == Knockback::Knockdown && !floor.fly,
+                      "a hidden call or finisher prevented the grounded knockdown");
+            }
+        }
+        check(deliver(upper, false, 5, flow).kind == BlowKind::Finisher,
+              "visuals-on finisher behavior changed");
+        const auto weak = deliver(punches.blow({0, 1, -.1f}, 3), false, 1, flow, {}, CueWay::Up, 1.5f, true);
+        check(weak.kind == BlowKind::Hit && !weak.fly, "a hidden call bypassed uppercut strength");
+        const auto jab = deliver(punches.blow({0, 0, -1}, 3), false, 1, flow, {}, CueWay::Down, 1.5f, true);
+        check(jab.kind == BlowKind::Hit && jab.knockback != Knockback::Knockdown,
+              "a hidden call turned a straight jab into a smash");
+    });
+    test("free combat: vertical web strikes need no call but retain aim, speed and free-hand gates", [] {
+        for (Vec3 way : {Vec3{0, 1, -.45f}, Vec3{0, -1, -.45f}}) {
+            Fight f;
+            f.wish.target = 7;
+            f.wish.freeDirections = true;
+            f.rest();
+            const auto opened = f.punch(way, 5);
+            check(opened && opened->target == 7, "an intentional vertical swing needed a hidden call");
+            check(dot(f.strike.direction(), normalized(way)) > .99f,
+                  "vertical strike lost the hand direction");
+            Fight on;
+            on.wish.target = 7;
+            on.rest();
+            check(!on.punch(way, 5), "visuals-on opened an uncalled vertical strike");
+            Fight slow;
+            slow.wish.target = 7;
+            slow.wish.freeDirections = true;
+            slow.rest();
+            check(!slow.punch(way, 1), "a slow motion opened a strike");
+            Fight busy;
+            busy.wish.target = 7;
+            busy.wish.freeDirections = true;
+            busy.rest(.5f, false);
+            check(!busy.punch(way, 5, nullptr, false), "an occupied hand opened a vertical strike");
+            Fight away;
+            away.wish.target = 7;
+            away.wish.freeDirections = true;
+            away.rest();
+            check(!away.punch({way.x, way.y, .5f}, 5),
+                  "a vertical swing away from the enemy opened a strike");
+            const Walled wall;
+            Fight blocked;
+            blocked.wish.target = 7;
+            blocked.wish.freeDirections = true;
+            blocked.rest();
+            check(!blocked.punch(way, 5, &wall), "a vertical strike passed through a wall");
+        }
+    });
+    test("free combat: settings default to called combat and preserve older packet layouts", [] {
+        using namespace game_swing;
+        Settings s;
+        check(s.version == 20 && s.bytes == 96 && s.combatVisuals == 1 &&
+                  offsetof(Settings, combatVisuals) == 56,
+              "free combat broke the settings defaults or layout");
+        s.combatVisuals = 0;
+        check(validSettings(s), "free combat setting refused");
+        s.combatVisuals = 2;
+        check(!validSettings(s), "invalid combat mode accepted");
+        Settings old;
+        old.version = 10;
+        old.bytes = settingsBytesV10;
+        check(validSettings(old) && old.combatVisuals == 1, "old settings changed combat semantics");
+    });
     test("hit stop: the game's time stops for a blow and eases back, longer for a finisher", [] {
         HitStop stop;
         near(stop.timeScale(),1);
@@ -12001,6 +21510,59 @@ int main() {
         try{HitStopTuning t;t.scale=0;HitStop bad(t);}catch(const std::invalid_argument&){refused=true;}
         check(refused,"a stop that halts the game accepted");
     });
+    test("web strike: a dive - the player's own flight on course for the marked enemy - flies him there, the blow his speed's", [] {
+        const PunchConfig punch;
+        // Swinging down at the thug six metres off, from 2 m up and 2.5 m out: 14 m/s at his middle.
+        const auto diver=[]{Fight f;f.feet={0,2,-2.5f};f.wish.target=7;return f;};
+        const auto at=[](const Fight& f,float speed){
+            const Vec3 chest=f.feet+Vec3{0,f.strike.config().chest,0};
+            return normalized(f.targets[0].middle()-chest)*speed;
+        };
+        const auto dive=[&](Fight& f,Vec3 v,bool grounded=false,std::uint64_t marked=7){
+            f.rest(.2f);
+            return f.strike.dive(v,grounded,f.head(),f.feet,f.targets,f.open,marked,punch);
+        };
+        Fight f=diver();
+        const auto opened=dive(f,at(f,14));
+        check(opened&&opened->hand==WebStrike::diveHand&&opened->target==7&&f.strike.diving(),"a dive on course opened no strike");
+        near(f.strike.fistSpeed(),speedOf(punch,f.strike.diveStrength(14)),.001f);
+        check(f.strike.diveStrength(14)>=.85f,"a dive's blow is not a heavy one");
+        const auto flown=f.fly(false);
+        check(flown.landed&&!flown.missed,"the dive's blow did not land");
+        near(length(Vec3{f.feet.x,0,f.feet.z+6}),.95f,.1f);
+        check(flown.fastest>=13&&flown.fastest<=26*1.25f+.01f,"the dive did not keep the player's speed");
+        check(f.strike.phase()==WebStrike::Phase::Hanging,"after a dive's blow in the air the player did not hang");
+        // None: nobody marked, on the ground, too slow, off course, too far yet, going away, or flying already.
+        Fight none=diver();
+        check(!dive(none,at(none,14),false,0),"a dive with nobody marked");
+        check(!dive(none,at(none,14),true),"a dive from the ground");
+        check(!dive(none,at(none,8)),"a dive at 8 m/s");
+        check(!dive(none,at(none,14)+Vec3{6,0,0}),"a dive that would pass him by");
+        Fight far;far.feet={0,2.5f,1};far.wish.target=7;
+        check(!dive(far,at(far,14)),"a dive half a second off");
+        check(!dive(none,at(none,14)*-1.f),"a dive going away from him");
+        Fight busy=diver();
+        dive(busy,at(busy,14));
+        check(!busy.strike.dive(at(busy,14),false,busy.head(),busy.feet,busy.targets,busy.open,7,punch),
+              "a second dive during the first");
+        // As hard as it was fast.
+        WebStrike s;
+        near(s.diveStrength(9),.85f);
+        near(s.diveStrength(20),1);
+        near(s.diveStrength(40),1);
+        check(s.diveStrength(8.9f)==0,"a slow flight has a dive's strength");
+        bool refused{};
+        try{WebStrikeConfig c;c.diveFull=c.diveSpeed;WebStrike bad(c);}catch(const std::invalid_argument&){refused=true;}
+        check(refused,"a dive whose hardest blow is its slowest accepted");
+    });
+    test("moments: a dive's slows the last of its way, even straight after another", [] {
+        SlowMoments m;
+        check(m.start(Moment::blow),"no moment for a blow");
+        for(int i=0;i<70;++i)m.update(1.f/90,true);
+        check(!m.start(Moment::called),"a moment straight after another");
+        check(m.start(Moment::dive)&&m.count(Moment::dive)==1,"a dive straight after a moment was refused");
+        check(m.timeScale()<=1,"the dive's moment sped the game up");
+    });
     test("web strike configuration rejects invalid tuning", [] {
         auto bad=[](auto change){WebStrikeConfig c;change(c);try{WebStrike s(c);return false;}catch(const std::invalid_argument&){return true;}};
         check(bad([](WebStrikeConfig& c){c.maxDistance=1;}),"a reach inside the fist's own accepted");
@@ -12009,6 +21571,16 @@ int main() {
         check(bad([](WebStrikeConfig& c){c.aim=std::numeric_limits<float>::quiet_NaN();}),"NaN aim accepted");
         check(bad([](WebStrikeConfig& c){c.heldAim=.9f;}),"a held thug harder to aim at than a free one accepted");
         check(!bad([](WebStrikeConfig&){}),"defaults rejected");
+    });
+    test("the game's own blow sounds: its sound engine's ids, and where on him a blow lands", [] {
+        // FNV-1, 32 bits, of the lowercased name, as the game's 1bb8a10 makes them.
+        check(game_sound::audioId("")==0x811c9dc5u&&game_sound::audioId("a")==0x050c5d7eu,"the ids are not FNV-1");
+        check(game_sound::audioId("Hero_Combo_Depth")==game_sound::audioId("hero_combo_depth"),
+              "the ids are not of the lowercased name");
+        check(game_sound::locationOf(1.6f,1.8f)==0&&game_sound::locationOf(1.f,1.8f)==1&&
+              game_sound::locationOf(.4f,1.8f)==2,"a blow's place on him");
+        check(game_sound::locationOf(1.f,0)==1&&game_sound::locationOf(std::numeric_limits<float>::quiet_NaN(),1.8f)==1,
+              "no height to place it by is not the torso");
     });
     test("impact sounds: each a WAV in memory, the harder the blow the longer and louder", [] {
         const auto samples=[](const std::vector<std::uint8_t>& wave){
@@ -12229,6 +21801,134 @@ int main() {
         check(!blocked.target && blocked.surface, "a thug behind the pillar was taken");
         near(blocked.aimPoint.z, -10.4f, .05f);
     });
+    test("EYE AIM: the eyes pick a web ball's thug or surface, and the ball leaves the hand that pulled", [] {
+        // A wall across the way 30 m ahead, and a floor at the player's feet for a look straight down.
+        struct Range : WorldQueries {
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+                if (d.y < -.9f && o.y - 1.2f <= distance * -d.y)
+                    return RayHit{o + d * ((o.y - 1.2f) / -d.y), {0, 1, 0}, 3, true};
+                if (d.z >= 0)
+                    return {};
+                const float wallAt = (o.z + 30) / -d.z;
+                if (wallAt > 0 && wallAt <= distance)
+                    return RayHit{o + d * wallAt, {0, 0, 1}, 1, true};
+                return {};
+            }
+            bool exists(std::uint64_t) const override {
+                return true;
+            }
+        } world;
+        Shooter s;
+        // The right hand points straight ahead; the eyes look ahead and to the left, meeting the wall at x -6.
+        const Pose hand{{.3f, 1.2f, 0}, {}};
+        const ShooterGaze eyes{{0, 1.7f, 0}, normalized(Vec3{-.2f, 0, -1})};
+        auto shot = s.aim(1, hand, {}, world, &eyes);
+        const Vec3 seen{-6, 1.7f, -30};
+        check(shot.gazed && shot.surface && !shot.target && shot.hand == 1, "the eyes' wall was not the aim");
+        near(length(shot.origin - (hand.position + Vec3{0, 0, -ShooterConfig{}.muzzle})), 0);
+        near(length(shot.direction - normalized(seen - shot.origin)), 0);
+        near(length(shot.aimPoint - seen), ShooterConfig{}.beyond, .001f);
+        check(!s.aim(1, hand, {}, world).gazed && std::abs(s.aim(1, hand, {}, world).aimPoint.x - .3f) < .01f,
+              "without the eyes the hand's line changed");
+        // A thug on the hand's line and one on the eyes': the eyes' is the one; one on the eyes' line
+        // behind the wall is not, there the hand's own thug is not either.
+        const ShooterTarget handThug{21, {.3f, 1.2f, -20}}, eyeThug{22, {-4, 1.7f, -20}},
+            hiddenThug{23, {-8, 1.7f, -40}};
+        const ShooterTarget both[] = {handThug, eyeThug};
+        shot = s.aim(1, hand, both, world, &eyes);
+        check(shot.target == 22 && shot.gazed, "the thug the eyes look at was not taken");
+        near(length(shot.direction - normalized(eyeThug.centre - shot.origin)), 0);
+        check(s.aim(1, hand, both, world).target == 21, "without the eyes the hand's thug was not taken");
+        const ShooterTarget hidden[] = {handThug, hiddenThug};
+        shot = s.aim(1, hand, hidden, world, &eyes);
+        check(!shot.target && shot.surface && shot.gazed, "a thug the eyes cannot see, or the hand's, was taken");
+        // Looking at the sky: open air along the eyes, 60 m out from them.
+        const ShooterGaze up{{0, 1.7f, 0}, normalized(Vec3{-.3f, 1, .2f})};
+        shot = s.aim(1, hand, {}, world, &up);
+        check(shot.gazed && !shot.surface, "the sky is no surface");
+        near(length(shot.aimPoint - (up.origin + up.direction * ShooterConfig{}.range)), 0, .01f);
+        // Looking down at the hand itself: the hand aims as it points.
+        const ShooterGaze down{{.3f, 1.8f, 0}, {0, -1, 0}};
+        shot = s.aim(1, hand, {}, world, &down);
+        check(!shot.gazed && shot.surface, "the hand looked at aimed at itself");
+        near(shot.aimPoint.z, -30.4f);
+        // A gaze that is no direction is no gaze.
+        const ShooterGaze none{{0, 1.7f, 0}, {}};
+        check(!s.aim(1, hand, {}, world, &none).gazed, "a gaze of no direction aimed");
+    });
+    test("EYE AIM: Virtual Desktop's shared eyes give the gaze at half confidence, never a broken one", [] {
+        std::uint8_t state[vd_eyes::bytes]{};
+        const auto put = [&](Quat left, Quat right, float confidence) {
+            state[vd_eyes::leftValidAt] = state[vd_eyes::rightValidAt] = 1;
+            const float l[4]{left.x, left.y, left.z, left.w}, r[4]{right.x, right.y, right.z, right.w},
+                c[2]{confidence, confidence};
+            std::memcpy(state + vd_eyes::leftPoseAt, l, sizeof l);
+            std::memcpy(state + vd_eyes::rightPoseAt, r, sizeof r);
+            std::memcpy(state + vd_eyes::confidenceAt, c, sizeof c);
+        };
+        // A Quest Pro's eyes at exactly half (its runtime wants more), 10 and 14 degrees left, 5 up.
+        const Quat up = Quat::around({1, 0, 0}, .0873f);
+        put(Quat::yaw(.1745f) * up, Quat::yaw(.2443f) * up, .5f);
+        Quat gaze;
+        check(vd_eyes::gaze(state, gaze), "half-confident eyes gave no gaze");
+        const Vec3 ahead = gaze.rotate({0, 0, -1});
+        check(std::abs(std::atan2(-ahead.x, -ahead.z) - .2094f) < .01f, "the gaze is not between the eyes");
+        check(std::abs(std::asin(ahead.y) - .0873f) < .01f, "the gaze lost the eyes' pitch");
+        // A blink (one eye not valid), an unsure eye, or bytes that are not this layout: none.
+        state[vd_eyes::rightValidAt] = 0;
+        check(!vd_eyes::gaze(state, gaze), "one eye made a gaze");
+        put(Quat::yaw(.1745f), Quat::yaw(.1745f), .3f);
+        check(!vd_eyes::gaze(state, gaze), "an unsure eye made a gaze");
+        put({0, 0, 0, 0}, {}, .9f);
+        check(!vd_eyes::gaze(state, gaze), "a zero orientation made a gaze");
+    });
+    test("EYE AIM: a zip waits for the game's camera to be on the eyes' point, a moment at most", [] {
+        using game_pad::CameraLook;
+        using game_pad::EyeZip;
+        // The camera's close band: the head's loose one turns nothing 4 degrees off, the eyes' does, and
+        // rests within a degree.
+        const auto off = [](float degrees) {
+            const float a = degrees * 3.14159265f / 180;
+            return Vec3{std::sin(a), 0, -std::cos(a)};
+        };
+        CameraLook loose, close;
+        check(loose.update(off(4), {0, 0, -1}, true) == 0, "the head's band turned the camera 4 degrees off");
+        check(close.update(off(4), {0, 0, -1}, true, true) > 0, "the eyes' band left the camera 4 degrees off");
+        check(close.update(off(1.5f), {0, 0, -1}, true, true) > 0, "the eyes' band stopped short of a degree");
+        check(close.update(off(.6f), {0, 0, -1}, true, true) == 0, "the eyes' band kept turning within a degree");
+        check(close.update(off(-2), {0, 0, -1}, true, true) == 0 &&
+                  close.update(off(-3), {0, 0, -1}, true, true) < 0,
+              "at rest it starts again past 2.5 degrees, the other way");
+        game_pad::CameraPitch pitch;
+        check(pitch.update(normalized(Vec3{0, .07f, -1}), {0, 0, -1}, true) == 0 &&
+                  pitch.update(normalized(Vec3{0, .07f, -1}), {0, 0, -1}, true, true) > 0,
+              "the pitch's close band");
+        EyeZip z;
+        check(!z.update(.01f, false, true, 20, 0), "no stick, no zip");
+        check(z.update(.01f, true, false, 20, 0) && z.update(.01f, true, false, 0, 0),
+              "without the eyes the zip goes at once and stays, as before");
+        check(!z.update(.01f, false, false, 0, 0), "let go, no zip");
+        check(!z.update(.1f, true, true, 20, 1) && !z.update(.1f, true, true, 4, 1),
+              "out before the camera came onto the point");
+        check(z.update(.01f, true, true, 2, -2.5f), "held with the camera on the point");
+        check(z.update(.01f, true, true, 30, 0), "taken back as the camera moved on");
+        check(z.settled() == 1 && z.late() == 0, "the zip on the point uncounted");
+        check(!z.update(.01f, false, true, 0, 0), "let go");
+        float waited = 0;
+        bool out = false;
+        while (!out && waited < 1) {
+            out = z.update(.05f, true, true, 40, 0);
+            waited += .05f;
+        }
+        check(out && waited > EyeZip::waitSeconds - .06f && waited < EyeZip::waitSeconds + .06f,
+              "a camera that never came round held the zip back more than a moment");
+        check(z.late() == 1 && z.settled() == 1, "the late zip uncounted");
+        // Where the camera looks for the eyes' point: from where it stands, behind and above the head.
+        const Vec3 camera{0, 3, 4}, point{-4, 1.7f, -20}, gaze = normalized(point - Vec3{0, 1.7f, 0});
+        near(length(game_pad::cameraLookAt(camera, point, true, gaze) - normalized(point - camera)), 0);
+        near(length(game_pad::cameraLookAt(camera, point, false, gaze) - gaze), 0);
+        near(length(game_pad::cameraLookAt(camera, camera + Vec3{0, 0, -.5f}, true, gaze) - gaze), 0);
+    });
     test("web shooter configuration rejects invalid tuning", [] {
         auto bad = [](auto change) {
             ShooterConfig c;
@@ -12249,6 +21949,23 @@ int main() {
     test("VR settings tab: seven sections, every setting once, a list's choices one per step", [] {
         using namespace vr_settings;
         const auto& all = rows();
+        check(all[5].item == Item::smartAnchor && all[4].item == Item::airWebs,
+              "smart anchor missing under webs holding in open air");
+        check(all[6].item == Item::webRange && all[7].item == Item::webSpeed && all[6].choices.size() == 9,
+              "web range and web speed missing under the smart anchor");
+        check(all[11].item == Item::elasticWeb && all[10].item == Item::weight && all[11].choices.size() == 4,
+              "elastic web missing under the weight");
+        check(all[12].item == Item::softRelease && all[12].choices.size() == 4,
+              "soft release missing under the elastic web");
+        check(all[13].item == Item::swingAssist && all[13].choices.empty(),
+              "swing assist missing under the soft release");
+        check(all[15].item == Item::slingshotSpeed && all[14].item == Item::webSlingshot,
+              "slingshot speed missing under the web slingshot");
+        check(all[16].item == Item::betterClimbing && all[17].item == Item::twoHandZip &&
+                  all[18].item == Item::ropeSteering,
+              "the hand gestures missing under better climbing");
+        check(all[14].item == Item::webSlingshot, "slingshot missing under SWINGING");
+        check(all[16].item == Item::betterClimbing, "better climbing missing under SWINGING");
         uint64_t seen = 0;
         unsigned headings = 0;
         static_assert(static_cast<unsigned>(lastItem) < 63, "more settings than the test's bits");
@@ -12275,12 +21992,16 @@ int main() {
         const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},     {5, "SWINGING"}, {8, "VENOM"},
                                                            {11, "COMFORT"}, {14, "HAPTICS"}, {21, "DISPLAY"},
                                                            {29, "BODY"},    {31, "EXPERIMENTAL"}};
+        // settings ingame into nice sections"), each with a setting in the tab.
+        const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},     {8, "SWINGING"}, {19, "COMFORT"},
+                                                           {22, "HAPTICS"}, {30, "DISPLAY"}, {40, "BODY"},
+                                                           {44, "EXPERIMENTAL"}};
         check(headings == std::size(sections),
               "the sections: webs, swinging, venom, comfort, haptics, display, body, experimental");
         for (const auto& [at, title] : sections) {
             check(all[at].item == Item::none && std::strcmp(all[at].title, title) == 0, "a section out of place");
             size_t next = at + 1;
-            while (next < all.size() && all[next].page)
+            while (next < all.size() && all[next].place != Place::tab)
                 ++next;
             check(next < all.size() && all[next].item != Item::none, "a section with no setting in the tab");
         }
@@ -12314,13 +22035,54 @@ int main() {
         for (size_t i = 0; i < std::size(realistic); ++i)
             check(all[36 + i].item == realistic[i], "the realistic flips' rows out of order");
         check(std::strcmp(all[36].title, "REALISTIC FLIPS") == 0 && all[36].choices.empty(),
+        // BODY: the calibration, then your height and seated play (the user, October 23: "add proper height
+        // calibration or override for seated mode").
+        check(all[41].item == Item::calibrate && all[42].item == Item::height &&
+                  all[42].choices.size() == std::size(heights) && std::strcmp(all[42].choices[0], "AUTO") == 0 &&
+                  std::strcmp(all[42].choices[8], "190 CM") == 0 && all[43].item == Item::seated &&
+                  all[43].choices.empty(),
+              "BODY: CALIBRATE BODY, then HEIGHT (AUTO, 150 to 190 cm), then SEATED, a switch");
+        check(all[45].item == Item::flips && all[45].choices.empty() && std::strcmp(all[44].title, "EXPERIMENTAL") == 0,
+              "the flips: a switch under EXPERIMENTAL");
+        check(all[47].item == Item::flipSpeed && all[47].choices.size() == std::size(flipSpeeds),
+              "the flip speed under the flips");
+        check(all[48].item == Item::handClimb && all[48].choices.empty(),
+              "hand wall climbing switch under the flips");
+        const Item realistic[] = {Item::realisticFlips,        Item::automaticStrength,    Item::automaticSpeed,
+                                  Item::automaticMinimumSpeed, Item::automaticReleaseFlip, Item::automaticResponse,
+                                  Item::automaticHandStrength, Item::automaticFalloff,     Item::automaticHandThreshold,
+                                  Item::automaticAirBrake,     Item::automaticCombat};
+        check(all.size() == 51 + std::size(realistic), "the realistic flips' rows are not the last");
+        for (size_t i = 0; i < std::size(realistic); ++i)
+            check(all[51 + i].item == realistic[i], "the realistic flips' rows out of order");
+        check(std::strcmp(all[51].title, "REALISTIC FLIPS") == 0 && all[51].choices.empty(),
               "realistic flips: a switch, first of its rows");
-        // The wall view has no row of its own any more: it turned only while
-        // Spidy held the player on a wall, so it was never a choice of its own
-        // and the launcher's one "Wall running" now carries both (the player,
-        // October 14: "i dont get why we have a wall run and a wall stand
-        // options where wall run actually controlls wheter i stand or crawl",
-        // then "also merge the two options").
+        check(all[46].item == Item::controlledFlips && all[49].item == Item::wallRunCameraTilt, "custom switches misplaced");
+        // EYE AIM, before the realistic flips: what the eyes aim, off by default (only a headset that tracks
+        // the eyes can).
+        check(all[50].item == Item::eyeAim && std::strcmp(all[50].title, "EYE AIM") == 0 &&
+                  all[50].choices.size() == 4 && std::strcmp(all[50].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[50].choices[1], "WEB BALLS") == 0 && std::strcmp(all[50].choices[2], "ZIPS") == 0 &&
+                  std::strcmp(all[50].choices[3], "BOTH") == 0 && all[50].place == Place::tab,
+              "EYE AIM: OFF, WEB BALLS, ZIPS, BOTH, in the tab before the realistic flips");
+        {
+            Values v;
+            check(v.eyeAim == 0 && defaultChoice(Item::eyeAim) == 0, "eye aim on by default");
+            check(choose(Item::eyeAim, 3, v) && v.eyeAim == (eyeAimShots | eyeAimZips) && choice(Item::eyeAim, v) == 3,
+                  "BOTH is web balls and zips");
+            check(choose(Item::eyeAim, 2, v) && v.eyeAim == eyeAimZips && choose(Item::eyeAim, 1, v) &&
+                      v.eyeAim == eyeAimShots && !choose(Item::eyeAim, 4, v),
+                  "ZIPS, WEB BALLS, and nothing past BOTH");
+            check(tabOnlyText({}).find("eye_aim=0\n") != std::string::npos &&
+                      withTabOnly({}, "eye_aim=2\n").eyeAim == eyeAimZips && withTabOnly({}, "eye_aim=9\n").eyeAim == 3,
+                  "spidy_vr.ini keeps EYE AIM as eye_aim, within its range");
+        }
+
+        // The wall view has no row of its own (the player, October 14: "i dont
+        // get why we have a wall run and a wall stand options where wall run
+        // actually controlls wheter i stand or crawl", then "also merge the
+        // two options"), nor the wall camera's distance (October 24); since
+        // October 25 neither is a setting at all.
         for (const auto& row : all)
             check(row.item != Item::standOnWalls, "the wall view still has a row of its own");
         check(all[23].item == Item::screenSize && all[25].item == Item::hud && all[25].choices.size() == 4 &&
@@ -12348,10 +22110,54 @@ int main() {
             check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
         check(all[22].item == Item::view && std::strcmp(all[22].title, "VR VIEW") == 0 && all[22].choices.size() == 2 &&
                   std::strcmp(all[22].choices[0], "VR") == 0 && std::strcmp(all[22].choices[1], "GAME SCREEN") == 0,
-              "the view above the game screen's rows: VR, or GAME SCREEN");
-        // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is.
+            check(std::strcmp(row.title, "STAND ON WALLS") != 0 &&
+                      std::strcmp(row.title, "WALL CAMERA DISTANCE") != 0,
+                  "the wall view or the wall camera's distance has a row again");
+        check(all[32].item == Item::screenSize && all[34].item == Item::hud && all[34].choices.size() == 4 &&
+                  std::strcmp(all[34].choices[0], "OFF") == 0 && std::strcmp(all[34].choices[3], "LARGE") == 0,
+              "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
+        check(all[33].item == Item::screenDepth && std::strcmp(all[33].title, "GAME SCREEN 3D") == 0 &&
+                  all[33].choices.size() == 4 && std::strcmp(all[33].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[33].choices[3], "HIGH") == 0,
+              "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
+        // The marks' look after the HUD (the player, October 21: "an optional alternative set of our custom
+        // ingame vr ui in more scifi techy style like the base game ui"): the printed ones first.
+        check(all[35].item == Item::uiStyle && std::strcmp(all[35].title, "UI STYLE") == 0 &&
+                  all[35].choices.size() == 2 && std::strcmp(all[35].choices[0], "COMIC") == 0 &&
+                  std::strcmp(all[35].choices[1], "TECH") == 0,
+              "the UI style after the HUD: COMIC, or TECH");
+        check(all[37].item == Item::nearClip && std::strcmp(all[37].title, "NEAR CLIP") == 0 &&
+                  all[37].choices.size() == std::size(nearClips) && std::strcmp(all[37].choices[6], "10 CM") == 0,
+              "the near clip under the UI style: 1 to 10 cm");
+        check(all[38].item == Item::recordingFov && std::strcmp(all[38].title, "RECORDING FOV") == 0 &&
+                  all[38].choices.size() == std::size(recording_fov::choices) &&
+                  std::strcmp(all[38].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[38].choices[1], "70\xC2\xB0") == 0 &&
+                  std::strcmp(all[38].choices[8], "160\xC2\xB0") == 0,
+              "the recording FOV under DISPLAY: OFF, then 70 to 160 degrees");
+        check(all[39].item == Item::recordingSmoothing && all[39].choices.size() == 9 &&
+                  std::strcmp(all[39].choices[0], "OFF") == 0,
+              "the recording smoothing last under DISPLAY: OFF, then 10 to 100");
+        // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
         for (const auto& row : all)
-            check(row.page == (row.item == Item::view), "a row on the wrong page");
+            check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
+        check(all[31].item == Item::view && std::strcmp(all[31].title, "VR VIEW") == 0 && all[31].choices.size() == 2 &&
+                  std::strcmp(all[31].choices[0], "VR") == 0 && std::strcmp(all[31].choices[1], "GAME SCREEN") == 0,
+              "the view above the game screen's rows: VR, or GAME SCREEN");
+        // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is; the realistic
+        // flips' thresholds and how a spin builds and dies away are the launcher's alone (the user,
+        // October 25: "cleanup the redundant"). The other 43 rows are the tab's.
+        for (const auto& row : all) {
+            const bool launcherOnly =
+                row.item == Item::automaticMinimumSpeed || row.item == Item::automaticResponse ||
+                row.item == Item::automaticFalloff || row.item == Item::automaticHandThreshold;
+            check(row.place == (row.item == Item::view ? Place::page
+                                : launcherOnly           ? Place::launcher
+                                                         : Place::tab),
+                  "a row in the wrong place");
+        }
+        check(std::count_if(all.begin(), all.end(), [](const Row& r) { return r.place == Place::tab; }) == 57,
+              "the tab's own rows");
         check(all[1].item == Item::webStyle && std::strcmp(all[1].title, "WEB STYLE") == 0 &&
                   all[1].choices.size() == 2 && std::strcmp(all[1].choices[0], "REALISTIC") == 0 &&
                   std::strcmp(all[1].choices[1], "ARCADE") == 0,
@@ -12370,12 +22176,24 @@ int main() {
               "HAPTICS: the vibration, body haptics, then the web, wind, combat and movement switches");
         check(all[30].item == Item::calibrate && all[30].choices.size() == 2 &&
                   std::strcmp(all[30].choices[1], "ON RESUME") == 0,
+        check(all[9].item == Item::swingSpeed && all[10].item == Item::weight, "SWINGING: the swing speed, the weight");
+        check(all[20].item == Item::snapTurn && all[21].item == Item::smoothTurn, "COMFORT: snap and smooth turning");
+        // HAPTICS (October 20): the controllers' vibration, the bHaptics level and its four groups' switches.
+        check(all[24].item == Item::blowSounds && std::strcmp(all[24].title, "BLOW SOUNDS") == 0 &&
+                  all[24].choices.size() == 3 && std::strcmp(all[24].choices[0], "GAME") == 0 &&
+                  std::strcmp(all[24].choices[2], "OFF") == 0,
+              "BLOW SOUNDS under the vibration: GAME, SPIDY or OFF");
+        check(all[23].item == Item::haptics && all[25].item == Item::bodyHaptics &&
+                  std::strcmp(all[25].title, "BODY HAPTICS") == 0 && all[26].item == Item::hapticWebs &&
+                  all[27].item == Item::hapticWind && all[28].item == Item::hapticCombat &&
+                  all[29].item == Item::hapticMovement && all[26].choices.empty() && all[29].choices.empty(),
+              "HAPTICS: the vibration, body haptics, then the web, wind, combat and movement switches");
+        check(all[41].item == Item::calibrate && all[41].choices.size() == 2 &&
+                  std::strcmp(all[41].choices[1], "ON RESUME") == 0,
               "the body's calibration: NO, or ON RESUME");
-        // Every setting has a row but the wall view, which the launcher's one
-        // "Wall running" now carries along with who holds you on the wall.
+        // Every setting has a row.
         constexpr uint64_t everySetting = (uint64_t{2} << static_cast<unsigned>(lastItem)) - 2;
-        constexpr uint64_t noRowOfItsOwn = uint64_t{1} << static_cast<unsigned>(Item::standOnWalls);
-        check(seen == (everySetting & ~noRowOfItsOwn), "a setting missing");
+        check(seen == everySetting, "a setting missing");
         auto choicesOf = [&](Item item) {
             return std::find_if(all.begin(), all.end(), [&](const Row& r) { return r.item == item; })->choices.size();
         };
@@ -12388,6 +22206,18 @@ int main() {
                   choicesOf(Item::airWebs) == 0 && choicesOf(Item::aimMarkers) == 0,
               "lists: one choice per step; switches: the game's own ON and OFF");
         check(choicesOf(Item::calibrate) == 2, "the calibration's switch names its two choices");
+    });
+    test("combat visuals choice persists without disabling punching or web aiming", [] {
+        using namespace vr_settings;
+        Values v;
+        check(v.combatVisuals && defaultChoice(Item::combatVisuals) == 1, "combat artwork hidden by default");
+        check(choose(Item::combatVisuals, 0, v) && !v.combatVisuals && v.punch && v.aimMarkers,
+              "hiding artwork disabled combat or web aiming");
+        const auto loaded = withTabOnly(Values{}, tabOnlyText(v));
+        check(loaded == v, "combat visuals choice did not persist");
+        check(withTabOnly(Values{}, "hand_climb=1\n").combatVisuals, "old settings hid combat artwork");
+        check(choose(Item::combatVisuals, 1, v) && v.combatVisuals && v.punch && v.aimMarkers,
+              "enabling artwork changed combat or web aiming");
     });
     test("near clip menu keeps geometry close to the headset", [] {
         using namespace vr_settings;
@@ -12418,11 +22248,12 @@ int main() {
             check(withTabOnly(Values{}, tabOnlyText(v)).recordingFov == v.recordingFov,
                   "the recording FOV did not come back from the tab's own file");
         }
-        check(!choose(Item::recordingFov, 4, v) && !choose(Item::recordingFov, -1, v), "a choice out of range taken");
-        // Off at 0 or below, else 130-150: a hand-written 100 shows as 130.
+        check(!choose(Item::recordingFov, 9, v) && !choose(Item::recordingFov, -1, v), "a choice out of range taken");
+        // Off at 0 or below, else 70-160: a hand-written 60 shows as 70.
         check(withTabOnly(Values{}, "recording_fov=-20\n").recordingFov == 0 &&
-                  withTabOnly(Values{}, "recording_fov=100\n").recordingFov == 130 &&
-                  withTabOnly(Values{}, "recording_fov=170\n").recordingFov == 150,
+                  withTabOnly(Values{}, "recording_fov=60\n").recordingFov == 70 &&
+                  withTabOnly(Values{}, "recording_fov=100\n").recordingFov == 100 &&
+                  withTabOnly(Values{}, "recording_fov=170\n").recordingFov == 160,
               "the recording FOV's range");
         // The window's shape, at least the angle across, centred, and never
         // less than the eyes' lens (lopsided here, and taller than 16:9).
@@ -12446,20 +22277,66 @@ int main() {
             near(recording_fov::covering(quest, degrees, 16.f / 9).right, std::tan(degrees * .00872664626f), .0001f);
         near(2 * std::atan(recording_fov::covering(quest, 0, 16.f / 9).right) * 57.2957795f, 128.5f, .1f);
     });
+    test("recording smoothing: OFF, then 10 to 100, kept in spidy_vr.ini; it turns, never moves", [] {
+        using namespace vr_settings;
+        Values v;
+        check(v.recordingSmoothing == 0, "smoothing started on");
+        for (int i = 0; i < static_cast<int>(steps(Item::recordingSmoothing).size()); ++i) {
+            check(choose(Item::recordingSmoothing, i, v) == (i > 0) &&
+                      choice(Item::recordingSmoothing, v) == i,
+                  "strength did not round trip");
+            check(withTabOnly(Values{}, tabOnlyText(v)).recordingSmoothing == v.recordingSmoothing,
+                  "strength did not save");
+        }
+        check(!choose(Item::recordingSmoothing, 9, v) && v.recordingSmoothing == 100,
+              "a choice out of range taken");
+        Mat4 initial{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        auto target = initial;
+        const auto turn = Quat::around({1, 1, 1}, .5f);
+        for (int r = 0; r < 3; ++r) {
+            const auto q = turn.rotate({initial[r * 4], initial[r * 4 + 1], initial[r * 4 + 2]});
+            target[r * 4] = q.x;
+            target[r * 4 + 1] = q.y;
+            target[r * 4 + 2] = q.z;
+        }
+        target[12] = .2f;
+        target[13] = .3f;
+        target[14] = .4f;
+        SpectatorSmoothing filter;
+        filter.update(initial, .01f, true, 150);
+        const auto smooth = filter.update(target, .01f, true, 150);
+        near(smooth[12], .2f);
+        near(smooth[13], .3f);
+        near(smooth[14], .4f);
+        check(std::abs(smooth[0] - target[0]) > .001f, "rotation was not smoothed");
+        filter.reset();
+        const auto off = filter.update(target, .01f, false, 150);
+        for (int i = 0; i < 16; ++i)
+            near(off[i], target[i]);
+    });
     test("VR settings only the tab offers: kept as key=value lines, read back sanitized, the rest left", [] {
         using namespace vr_settings;
         const Values defaults;
-        check(tabOnlyText(defaults) == "near_clip_mm=20\nhand_climb=0\nwall_distance_cm=40\nrealistic_flips=0\n"
+        check(tabOnlyText(defaults) == "controlled_flips=0\nnear_clip_mm=20\nhand_climb=0\n"
+                                       "wall_run_camera_tilt=1\n"
+                                       "realistic_flips=0\n"
                                        "rotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
                                        "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\n"
                                        "angular_drag_ms=3000\nhand_speed_min_cm=100\nair_rotation_brake=1\n"
-                                       "body_haptics_webs=1\nbody_haptics_wind=1\nbody_haptics_combat=1\n"
-                                       "body_haptics_movement=1\nrecording_fov=0\nui_style=0\n",
+                                       "flips_in_combat=1\nbody_haptics_webs=1\nbody_haptics_wind=1\nbody_haptics_combat=1\n"
+                                       "body_haptics_movement=1\nrecording_fov=0\nui_style=0\ncombat_visuals=1\nblow_sounds=0\n"
+                                       "web_slingshot=0\nbetter_climbing=0\nheight_cm=0\nseated=0\neye_aim=0\n"
+                                       "smart_anchor=0\nelastic_web=0\nsoft_release=0\nswing_assist=0\n"
+                                       "slingshot_speed=0\nrecording_smoothing=0\n"
+                                       "two_hand_zip=0\nrope_steering=0\nweb_range_m=100\nweb_speed=0\n",
               "the defaults' text");
         Values changed = defaults;
         changed.recordingFov = 140;
+        changed.webSlingshot = true;
+        changed.betterClimbing = true;
         changed.handClimb = true;
-        changed.wallDistance = 75;
+        changed.wallRunCameraTilt = false;
+        changed.controlledFlips = true;
         changed.nearClipMm = 50;
         changed.realisticFlips = true;
         changed.automaticReleaseFlip = false;
@@ -12471,18 +22348,35 @@ int main() {
         changed.automaticFalloff = 1000;
         changed.automaticHandThreshold = 200;
         changed.automaticAirBrake = false;
+        changed.automaticCombat = false;
         changed.hapticWind = false;
         changed.hapticCombat = false;
         changed.uiStyle = 1;
-        check(withTabOnly(defaults, tabOnlyText(changed)) == changed, "the settings did not come back");
+        changed.combatVisuals = true;
+        changed.blowSounds = 2;
+        changed.heightCm = 178;
+        changed.seated = true;
+        changed.eyeAim = 3;
+        check(withTabOnly(defaults, tabOnlyText(changed)) == sanitized(changed),
+              "the settings did not come back");
+        check(withTabOnly(defaults, "height_cm=40\n").heightCm == 120 &&
+                  withTabOnly(defaults, "height_cm=999\n").heightCm == 220 &&
+                  withTabOnly(defaults, "height_cm=-5\n").heightCm == 0,
+              "a height past either end, or below AUTO");
+        check(withTabOnly(defaults, "blow_sounds=9\n").blowSounds == 2 &&
+                  withTabOnly(defaults, "blow_sounds=-1\n").blowSounds == 0,
+              "blow sounds past either end");
         check(withTabOnly(defaults, "ui_style=7\n").uiStyle == 1 && withTabOnly(defaults, "ui_style=-2\n").uiStyle == 0,
               "a UI style past either end");
-        // Windows' line ends, a line of another build, no number, and a
-        // distance out of range: the rest still counts.
-        auto read = withTabOnly(defaults, "hand_climb=1\r\nfuture_row=3\nwall_distance_cm=near\n");
-        check(read.handClimb && read.wallDistance == 40, "a bad line spoiled the good one");
+        // Windows' line ends, a line of another build, no number, and an
+        // older file's wall distance (no setting since October 25): the rest
+        // still counts.
+        Values climbing = defaults;
+        climbing.handClimb = true;
+        auto read = withTabOnly(defaults, "hand_climb=1\r\nfuture_row=3\nnear_clip_mm=near\n");
+        check(read == climbing, "a bad line spoiled the good one");
         read = withTabOnly(defaults, "wall_distance_cm=5\nhand_climb=2");
-        check(read.handClimb && read.wallDistance == wallDistances[0], "a value out of range was kept");
+        check(read == climbing, "an older file's wall distance changed a setting");
         // Nothing saved yet, and the launcher's settings untouched.
         Values launched = defaults;
         launched.swingSpeed = 40;
@@ -12558,6 +22452,7 @@ int main() {
                   defaultChoice(Item::standOnWalls) == 1 && choose(Item::standOnWalls, 0, v) && !v.standOnWalls &&
                   !choose(Item::standOnWalls, 0, v) && choose(Item::standOnWalls, 1, v) && v.standOnWalls,
               "standing on walls: ON by default, a switch");
+        check(defaults.standOnWalls, "standing on walls: on unless run_game_vr.py says otherwise");
         check(!defaults.triggerWebs && choice(Item::webButton, defaults) == 0 && defaultChoice(Item::webButton) == 0 &&
                   choose(Item::webButton, 1, v) && v.triggerWebs && choice(Item::webButton, v) == 1 &&
                   !choose(Item::webButton, 1, v) && !choose(Item::webButton, 2, v),
@@ -12721,6 +22616,34 @@ int main() {
             m = flipFrame(rig, f, false, true);
         near(length(m.flipTilt.rotate({0, 1, 0}) - Vec3{0, 1, 0}), 0, .001f);
     });
+    test("realistic flips: FLIPS IN COMBAT off, in a fight the stick turns nothing and steers the flight again",
+         [] {
+        for (const bool inCombat : {true, false}) {
+            GameTrackingRig rig;
+            RealisticFlipSettings settings;
+            settings.enabled = true;
+            settings.inCombat = inCombat;
+            rig.automaticFlips(settings);
+            rig.flips(true);
+            rig.flipSpeed(3.14159265f);
+            RealisticFlight fight{{}, {}, true, false};
+            fight.fighting = true;
+            rig.flight(fight);
+            auto f = trackedFrame();
+            flipFrame(rig, f, false, false);
+            flipFrame(rig, f, false, true);
+            f.hands[0].stickY = 1;
+            GameMotionFrame m;
+            for (int i = 0; i < 45; ++i)
+                m = flipFrame(rig, f, false, true);
+            if (inCombat)
+                check(!levelTilt(m.flipTilt) && length(m.swing.move) < .001f,
+                      "with FLIPS IN COMBAT on, the stick did not turn a fighter");
+            else
+                check(levelTilt(m.flipTilt) && length(m.swing.move) > .5f,
+                      "with FLIPS IN COMBAT off, the stick turned a fighter or did not steer");
+        }
+    });
     test("physical arm gestures generate airborne rotation without a button or tether", [] {
         GameTrackingRig rig;
         RealisticFlipSettings settings;
@@ -12840,438 +22763,761 @@ int main() {
             }
         check(sanitized(v) == v, "a realistic flip row's step is out of its range");
     });
-    test("flip: a tap of A in the air is one front flip about the head, and comes out level", [] {
+    test("basic flips: A alone never starts a single flip or steals a ground jump", [] {
         GameTrackingRig rig;
         rig.flips(true);
-        auto f = trackedFrame();
-        const auto start = flipFrame(rig, f, false);
-        const Vec3 head = matrixRow(start.head, 3), hand = start.hands[1].position;
-        auto m = flipFrame(rig, f, true);
-        check(levelTilt(m.swing.tilt), "A pressed alone turned the player");
-        m = flipFrame(rig, f, false);
-        check(!levelTilt(m.swing.tilt), "a tap did not start a flip");
-        bool down = false, upsideDown = false;
-        int frames = 1;
-        for (; frames < 300 && !levelTilt(m.swing.tilt); ++frames) {
-            m = flipFrame(rig, f, false);
-            // The eyes stay where they are; the hands turn about the head.
-            check(length(matrixRow(m.head, 3) - head) < 1e-4f, "the head moved in the flip");
-            near(length(m.hands[1].position - head), length(hand - head), 1e-4f);
-            const Vec3 ahead = matrixRow(m.head, 2), up = matrixRow(m.head, 1) * -1.f;
-            if (frames < 25)
-                down = down || ahead.y < -.5f;
-            upsideDown = upsideDown || up.y < -.95f;
+        auto frame = trackedFrame();
+        auto out = flipFrame(rig, frame, false, false);
+        out = flipFrame(rig, frame, true, false);
+        check((out.nativeKeys & (1u << 4)) != 0, "A no longer jumps from the ground");
+        check(!out.basicFlipControls, "basic flips claimed ground controls");
+        for (int i = 0; i < 180; ++i) {
+            out = flipFrame(rig, frame, i < 40 || (i >= 80 && i < 82));
+            check(levelTilt(out.flipTilt), "holding or tapping A started a flip");
         }
-        check(down, "a front flip did not look down first");
-        check(upsideDown, "the flip never turned the player upside down");
-        check(frames >= 95 && frames <= 115, ("one flip took " + std::to_string(frames) + " frames").c_str());
-        for (int i = 0; i < 16; ++i)
-            near(m.head[i], start.head[i], 1e-5f);
-        check(levelTilt(flipFrame(rig, f, false).swing.tilt), "the flip did not stay level");
     });
-    test("flip: A pressed on the ground is a jump, held into the air no flip; held in the air the stick turns", [] {
+    test("basic flips: right-stick directions rotate about the head without snap or smooth yaw", [] {
+        for (float smooth : {0.f, 1.5f}) {
+            for (Vec3 direction : {Vec3{0, 1, 0}, Vec3{0, -1, 0}, Vec3{1, 0, 0}, Vec3{-1, 0, 0}}) {
+                GameTrackingRig rig;
+                rig.flips(true);
+                rig.smoothTurn(smooth);
+                auto frame = trackedFrame();
+                const auto start = flipFrame(rig, frame, false);
+                frame.hands[1].stickX = direction.x;
+                frame.hands[1].stickY = direction.y;
+                GameMotionFrame out;
+                for (int i = 0; i < 25; ++i)
+                    out = flipFrame(rig, frame, false);
+                check(out.basicFlipControls && !levelTilt(out.flipTilt),
+                      "right stick did not own basic flips");
+                near(length(out.headPose.position - start.headPose.position), 0, .0001f);
+                near(out.swing.trackingYaw, start.swing.trackingYaw, .0001f);
+                near(length(out.grips[0].position - out.headPose.position),
+                     length(start.grips[0].position - start.headPose.position), .0001f);
+                const Vec3 look = out.headPose.orientation.rotate({0, 0, -1});
+                const Vec3 up = out.headPose.orientation.rotate({0, 1, 0});
+                if (direction.y != 0)
+                    check(look.y * direction.y < -.5f, "pitch went against the right stick");
+                else
+                    check(up.x * direction.x > .5f && std::abs(look.y) < .001f,
+                          "side stick did not roll without also yawing");
+            }
+        }
+    });
+    test("basic flips: release freezes the exact tilt and leaves left-stick travel available", [] {
         GameTrackingRig rig;
         rig.flips(true);
-        auto f = trackedFrame();
-        f.hands[0].stickY = 1;
-        flipFrame(rig, f, false, false);
-        auto m = flipFrame(rig, f, true, false);
+        auto frame = trackedFrame();
+        flipFrame(rig, frame, false);
+        frame.hands[0].stickY = 1;
+        frame.hands[1].stickY = 1;
+        GameMotionFrame out;
         for (int i = 0; i < 30; ++i) {
-            check(levelTilt(m.swing.tilt), "a jump from the ground flipped");
-            m = flipFrame(rig, f, true, true);
+            out = flipFrame(rig, frame, false);
+            check(out.swing.move.z < -.9f && out.walkForward > .9f,
+                  "right-stick rotation consumed left-stick movement");
         }
-        check(length(m.swing.move) > .5f, "a jump held into the air took the stick");
-        flipFrame(rig, f, false, true);
-        for (int i = 0; i < 6; ++i)
-            m = flipFrame(rig, f, true, true);
-        check(!levelTilt(m.swing.tilt), "A held in the air with the stick did not turn the player");
+        const auto before = out;
+        frame.hands[1].stickY = 0;
+        for (int i = 0; i < 900; ++i) {
+            out = flipFrame(rig, frame, false);
+            near(length(out.flipTilt.rotate({0, 0, -1}) - before.flipTilt.rotate({0, 0, -1})), 0, .000001f);
+            near(length(out.flipTilt.rotate({0, 1, 0}) - before.flipTilt.rotate({0, 1, 0})), 0, .000001f);
+            near(length(out.headPose.position - before.headPose.position), 0, .0001f);
+        }
+        frame.head.position.x += .05f;
+        out = flipFrame(rig, frame, false);
+        near(length(out.headPose.position - before.headPose.position), .05f, .0001f);
+        near(length(out.flipTilt.rotate({0, 1, 0}) - before.flipTilt.rotate({0, 1, 0})), 0, .000001f);
     });
-    test("flip: held, the stick turns as fast as it is tilted and at rest holds the angle; let go, level", [] {
-        constexpr float turn = 6.2831853f, full = turn / FlipMotion::holdTurnSeconds;
-        FlipMotion::Sample s;
-        s.airborne = true;
-        s.seconds = 1.f / 90;
-        const auto run = [&](FlipMotion& flip, int frames) {
-            for (int i = 0; i < frames; ++i)
-                flip.update(s);
-        };
-        const auto toLevel = [&](FlipMotion& flip) {
-            int frames = 0;
-            for (; frames < 1000 && !flip.level(); ++frames)
-                flip.update(s);
-            check(flip.level() && levelTilt(flip.tilt()), "the player did not come out level");
-            return frames;
-        };
-        // A held alone turns nothing, and let go after a tap's time it is no flip.
-        FlipMotion still;
-        s.jump = true;
-        run(still, 60);
-        check(levelTilt(still.tilt()) && still.turned() == 0, "A held alone turned the player");
-        s.jump = false;
-        run(still, 1);
-        check(still.level() && levelTilt(still.tilt()), "a long press alone flipped");
-        // The stick full ahead: a whole turn in holdTurnSeconds, once up to speed;
-        // tilted half way past the dead zone, half as fast.
-        FlipMotion held;
-        s.jump = true;
-        s.stickY = 1;
-        run(held, 45);
-        float before = held.turned();
-        run(held, 45);
-        near(held.turned() - before, full * .5f, .02f);
-        s.stickY = FlipMotion::stickDeadZone + (FlipMotion::stickFull - FlipMotion::stickDeadZone) / 2;
-        run(held, 30);
-        before = held.turned();
-        run(held, 45);
-        near(held.turned() - before, full * .25f, .02f);
-        // At rest the stick keeps the player where they are.
-        s.stickY = 0;
-        run(held, 30);
-        const Quat kept = held.tilt();
-        run(held, 30);
-        const Quat now = held.tilt();
-        near(std::abs(kept.x * now.x + kept.y * now.y + kept.z * now.z + kept.w * now.w), 1, 1e-5f);
-        // Let go: back level the short way.
-        before = held.turned();
-        s.jump = false;
-        toLevel(held);
-        check(held.turned() - before <= turn / 2 + .01f, "letting go went the long way round");
-        // A tap with the stick back: a whole backflip, the turn the stick began carried on.
-        FlipMotion back;
-        s.stickY = -1;
-        s.jump = true;
-        run(back, 10);
-        check(back.tilt().x > 0, "the stick back did not turn a backflip");
-        s.jump = false;
-        toLevel(back);
-        near(back.turned(), turn, .01f);
-        // Tapped again during a flip, the flip carries on to level: one whole turn.
-        FlipMotion again;
-        s.stickY = 0;
-        s.jump = true;
-        run(again, 1);
-        s.jump = false;
-        run(again, 30);
-        check(!again.level(), "the tap's flip did not start");
-        s.jump = true;
-        run(again, 2);
-        s.jump = false;
-        toLevel(again);
-        near(again.turned(), turn, .01f);
+    test("basic flips: left stick alone keeps moving without changing the held orientation", [] {
+        GameTrackingRig rig;
+        rig.flips(true);
+        auto frame = trackedFrame();
+        flipFrame(rig, frame, false);
+        for (Vec3 stick : {Vec3{1, 0, 0}, Vec3{0, 1, 0}, Vec3{-1, 0, 0}, Vec3{0, -1, 0}}) {
+            frame.hands[0].stickX = stick.x;
+            frame.hands[0].stickY = stick.y;
+            for (int i = 0; i < 45; ++i) {
+                const auto out = flipFrame(rig, frame, false);
+                check(levelTilt(out.flipTilt) && length(out.swing.move) > .9f,
+                      "left stick still controls basic flips");
+            }
+        }
     });
-    test("flip: held, the left stick picks the way and moves the player no more; let go, it moves them again", [] {
-        // Ahead a front flip, back a backflip, right a cartwheel to the right; at rest nothing.
-        const struct {
-            float x, y;
-        } sticks[] = {{0, 0}, {0, 1}, {0, -1}, {1, 0}};
-        for (const auto& stick : sticks) {
+    test("basic flips: upside-down and multi-turn orientations hold without drift then reset upright", [] {
+        for (int frames : {75, 100, 180, 315}) {
+            for (bool roll : {false, true}) {
+                FlipMotion flip;
+                FlipMotion::Sample sample;
+                sample.airborne = true;
+                sample.seconds = 1.f / 90;
+                flip.update(sample);
+                (roll ? sample.stickX : sample.stickY) = 1;
+                for (int i = 0; i < frames; ++i)
+                    flip.update(sample);
+                const Quat held = flip.tilt();
+                const float turned = flip.turned();
+                sample.stickX = sample.stickY = 0;
+                for (int i = 0; i < 900; ++i) {
+                    flip.update(sample);
+                    near(flip.turned(), turned, .000001f);
+                    near(length(flip.tilt().rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
+                    near(length(flip.tilt().rotate({0, 0, -1}) - held.rotate({0, 0, -1})), 0, .000001f);
+                }
+                const float shortest = 2 * std::acos(std::min(1.f, std::abs(held.w)));
+                sample.jump = true;
+                for (int i = 0; i < 120; ++i)
+                    flip.update(sample);
+                check(flip.level() && levelTilt(flip.tilt()),
+                      "inverted/multi-turn view did not return upright");
+                near(flip.turned() - turned, shortest, .001f);
+            }
+        }
+    });
+    test("basic flips: A resets the held tilt by the short path and requires a fresh stick", [] {
+        for (Vec3 direction : {Vec3{0, 1, 0}, Vec3{1, 0, 0}, Vec3{.7f, -.7f, 0}}) {
             GameTrackingRig rig;
             rig.flips(true);
-            auto f = trackedFrame();
-            f.hands[0].stickX = stick.x;
-            f.hands[0].stickY = stick.y;
-            const bool still = stick.x == 0 && stick.y == 0;
-            const auto before = flipFrame(rig, f, false);
-            check(still || length(before.swing.move) > .5f, "the stick did not walk");
-            auto m = flipFrame(rig, f, true);
-            for (int i = 0; i < 30; ++i) {
-                check(length(m.swing.move) == 0 && m.walkForward == 0 && m.walkRight == 0,
-                      "the stick moved the player while A was held in the air");
-                m = flipFrame(rig, f, true);
+            auto frame = trackedFrame();
+            flipFrame(rig, frame, false);
+            frame.hands[1].stickX = direction.x;
+            frame.hands[1].stickY = direction.y;
+            GameMotionFrame out;
+            for (int i = 0; i < 35; ++i)
+                out = flipFrame(rig, frame, false);
+            const float before = 2 * std::acos(std::min(1.f, std::abs(out.flipTilt.w)));
+            check(before > .5f, "no held tilt before reset");
+            float previous = before;
+            for (int i = 0; i < 100; ++i) {
+                out = flipFrame(rig, frame, i < 60);
+                const float angle = 2 * std::acos(std::min(1.f, std::abs(out.flipTilt.w)));
+                check(angle <= previous + .0001f, "A reset took a new full flip or restarted the held stick");
+                previous = angle;
             }
-            const Vec3 ahead = matrixRow(m.head, 2), up = matrixRow(m.head, 1) * -1.f;
-            if (still)
-                check(levelTilt(m.swing.tilt), "A held with the stick at rest turned the player");
-            else if (stick.x > 0)
-                check(up.x > .5f && std::abs(ahead.y) < .05f, "the stick to the right did not cartwheel right");
-            else if (stick.y < 0)
-                check(ahead.y > .5f, "the stick back did not backflip");
-            else
-                check(ahead.y < -.5f, "the stick ahead did not front flip");
-            // Let go of A: the stick moves the player again while they turn back level.
-            m = flipFrame(rig, f, false);
-            check(still || !levelTilt(m.swing.tilt), "the player snapped level as A was let go");
-            check(still || length(m.swing.move) > .5f, "the stick stayed the flip's");
-            int frames = 0;
-            for (; frames < 60 && !levelTilt(m.swing.tilt); ++frames)
-                m = flipFrame(rig, f, false);
-            check(levelTilt(m.swing.tilt) && frames <= 30, "letting go did not bring the player back level");
+            check(levelTilt(out.flipTilt), "A did not finish returning upright");
+            frame.hands[1].stickX = frame.hands[1].stickY = 0;
+            flipFrame(rig, frame, false);
+            frame.hands[1].stickY = 1;
+            for (int i = 0; i < 15; ++i)
+                out = flipFrame(rig, frame, false);
+            check(!levelTilt(out.flipTilt), "a fresh stick could not rotate after reset");
         }
     });
-    test("flip: in the air the left stick alone turns the player once let go there; held from a jump it walks", [] {
+    test("basic flips: a right stick held from the ground must rest in the air before rotating", [] {
         GameTrackingRig rig;
         rig.flips(true);
-        auto f = trackedFrame();
-        // A running jump: the stick held from the ground into the air moves the player.
-        f.hands[0].stickY = 1;
-        flipFrame(rig, f, false, false);
-        auto m = flipFrame(rig, f, false, false);
-        for (int i = 0; i < 30; ++i) {
-            m = flipFrame(rig, f, false);
-            check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "a stick held into the air flipped");
-        }
-        // Let go in the air, then pushed: ahead a front flip, back a backflip, the player moved no more.
-        const float ways[] = {1, -1};
-        for (const float way : ways) {
-            f.hands[0].stickY = 0;
-            flipFrame(rig, f, false);
-            f.hands[0].stickY = way;
-            for (int i = 0; i < 30; ++i) {
-                m = flipFrame(rig, f, false);
-                check(length(m.swing.move) == 0 && m.walkForward == 0 && m.walkRight == 0,
-                      "the stick moved the player while it flipped them");
-            }
-            const Vec3 ahead = matrixRow(m.head, 2);
-            check(way > 0 ? ahead.y < -.5f : ahead.y > .5f,
-                  way > 0 ? "the stick ahead did not front flip" : "the stick back did not backflip");
-            // Let go: back level the short way, no snap.
-            f.hands[0].stickY = 0;
-            m = flipFrame(rig, f, false);
-            check(!levelTilt(m.swing.tilt), "the player snapped level as the stick was let go");
-            int frames = 0;
-            for (; frames < 60 && !levelTilt(m.swing.tilt); ++frames)
-                m = flipFrame(rig, f, false);
-            check(levelTilt(m.swing.tilt) && frames <= 30, "letting go of the stick did not bring the player level");
-        }
-        // Landing mid-flip levels the player; from the ground the stick walks again, into the air too.
-        f.hands[0].stickY = 1;
+        auto frame = trackedFrame();
+        frame.hands[1].stickY = 1;
+        flipFrame(rig, frame, false, false);
         for (int i = 0; i < 30; ++i)
-            m = flipFrame(rig, f, false);
-        check(!levelTilt(m.swing.tilt), "no flip before the landing");
-        int frames = 0;
-        for (; frames < 60 && !levelTilt(m.swing.tilt); ++frames)
-            m = flipFrame(rig, f, false, false);
-        check(levelTilt(m.swing.tilt) && frames <= 40, "landing did not level the player quickly");
-        for (int i = 0; i < 20; ++i) {
-            m = flipFrame(rig, f, false, i >= 10);
-            check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "the stick held from the landing flipped");
-        }
-        // On a wall (in the air as the game has it there) the stick crawls: no flip.
-        const auto wallFrame = [&] {
-            ++f.predictedDisplayTime;
-            return rig.update(f, {}, {0, 0, -1}, true, {1, 0, 0}, true);
-        };
-        f.hands[0].stickY = 0;
+            check(levelTilt(flipFrame(rig, frame, i < 15).flipTilt), "a carried ground stick began a flip");
+        frame.hands[1].stickY = 0;
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = 1;
+        GameMotionFrame out;
         for (int i = 0; i < 20; ++i)
-            wallFrame();
-        f.hands[0].stickY = 1;
+            out = flipFrame(rig, frame, false);
+        check(!levelTilt(out.flipTilt), "neutral then push did not start a flip");
+    });
+    test("basic flips: losing right-hand tracking freezes tilt until neutral is seen again", [] {
+        GameTrackingRig rig;
+        rig.flips(true);
+        auto frame = trackedFrame();
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 25; ++i)
+            out = flipFrame(rig, frame, false);
+        const Quat held = out.flipTilt;
+        frame.hands[1].valid = false;
         for (int i = 0; i < 30; ++i) {
-            m = wallFrame();
-            check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "the stick flipped the player on a wall");
+            out = flipFrame(rig, frame, false);
+            near(length(out.flipTilt.rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
         }
-        // Flips off: the stick let go and pushed in the air walks, level.
-        GameTrackingRig off;
-        f.hands[0].stickY = 0;
-        flipFrame(off, f, false);
-        f.hands[0].stickY = 1;
-        for (int i = 0; i < 20; ++i) {
-            m = flipFrame(off, f, false);
-            check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "flips off, the stick in the air flipped");
+        frame.hands[1].valid = true;
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, frame, false);
+            near(length(out.flipTilt.rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
         }
+        frame.hands[1].stickY = 0;
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = -1;
+        for (int i = 0; i < 15; ++i)
+            out = flipFrame(rig, frame, false);
+        check(length(out.flipTilt.rotate({0, 1, 0}) - held.rotate({0, 1, 0})) > .1f,
+              "recovered controller could not rotate after a fresh neutral");
     });
-    test("flip: the stick alone turns as fast as it is tilted; A held keeps the angle; a flick is no whole flip", [] {
-        constexpr float turn = 6.2831853f, full = turn / FlipMotion::holdTurnSeconds;
-        FlipMotion::Sample s;
-        s.airborne = true;
-        s.seconds = 1.f / 90;
-        const auto run = [&](FlipMotion& flip, int frames) {
-            for (int i = 0; i < frames; ++i)
-                flip.update(s);
-        };
-        const auto toLevel = [&](FlipMotion& flip) {
-            int frames = 0;
-            for (; frames < 1000 && !flip.level(); ++frames)
-                flip.update(s);
-            check(flip.level() && levelTilt(flip.tilt()), "the player did not come out level");
-        };
-        FlipMotion stick;
-        run(stick, 1);
-        s.stickY = 1;
-        run(stick, 45);
-        check(stick.steering(), "the stick alone did not steer the flip");
-        float before = stick.turned();
-        run(stick, 45);
-        near(stick.turned() - before, full * .5f, .02f);
-        // A pressed while it turns, then the stick at rest: the angle stays while A is held.
-        s.jump = true;
-        run(stick, 5);
-        s.stickY = 0;
-        run(stick, 30);
-        const Quat kept = stick.tilt();
-        run(stick, 30);
-        const Quat now = stick.tilt();
-        near(std::abs(kept.x * now.x + kept.y * now.y + kept.z * now.z + kept.w * now.w), 1, 1e-5f);
-        // Let go of A: back level the short way.
-        before = stick.turned();
-        s.jump = false;
-        toLevel(stick);
-        check(stick.turned() - before <= turn / 2 + .01f, "letting go went the long way round");
-        // A flick of the stick: back level the way it came, no whole turn.
-        FlipMotion flick;
-        run(flick, 1);
-        s.stickY = 1;
-        run(flick, 6);
-        s.stickY = 0;
-        toLevel(flick);
-        check(flick.turned() < turn / 4, "a flick of the stick flipped the player round");
-        // A tap of A while the stick turns the player is no whole flip either.
-        FlipMotion tapped;
-        run(tapped, 1);
-        s.stickY = 1;
-        run(tapped, 20);
-        s.jump = true;
-        run(tapped, 3);
-        s.jump = false;
-        run(tapped, 10);
-        s.stickY = 0;
-        toLevel(tapped);
-        check(tapped.turned() < turn / 2, "a tap during the stick's turn flipped the player round");
-    });
-    test("flip speed: the stick's turn, a tap's flip and the way back all go as fast as FLIP SPEED says", [] {
-        constexpr float turn = 6.2831853f, degree = turn / 360;
-        FlipMotion::Sample s;
-        s.airborne = true;
-        s.seconds = 1.f / 90;
-        const auto run = [&](FlipMotion& flip, int frames) {
-            for (int i = 0; i < frames; ++i)
-                flip.update(s);
-        };
-        const auto toLevel = [&](FlipMotion& flip) {
-            int frames = 0;
-            for (; frames < 1000 && !flip.level(); ++frames)
-                flip.update(s);
-            check(flip.level() && levelTilt(flip.tilt()), "the player did not come out level");
-            return frames;
-        };
-        // The stick at full tilt: 180 degrees a second, once up to speed.
-        FlipMotion slow;
-        slow.speed(180 * degree);
-        run(slow, 1);
-        s.stickY = 1;
-        run(slow, 45);
-        float before = slow.turned();
-        run(slow, 45);
-        near(slow.turned() - before, turn / 4, .02f);
-        // Let go: back level as much slower as the flip, against the first flips' 240 degrees a second.
-        FlipMotion first;
-        s.stickY = 0;
-        run(first, 1);
-        s.stickY = 1;
-        run(first, 69);
-        check(std::abs(first.turned() - slow.turned()) < .05f, "the two flips did not turn alike before letting go");
-        s.stickY = 0;
-        const float ratio = static_cast<float>(toLevel(slow)) / static_cast<float>(toLevel(first));
-        check(ratio > 1.25f && ratio < 1.42f, ("the way back took " + std::to_string(ratio) + " times as long").c_str());
-        // A tap's whole flip: a third longer at 180 than at 240.
-        const auto tapFrames = [&](FlipMotion& flip) {
-            s.jump = true;
-            run(flip, 1);
-            s.jump = false;
-            return toLevel(flip);
-        };
-        FlipMotion tapSlow, tapFirst;
-        tapSlow.speed(180 * degree);
-        const float tapRatio = static_cast<float>(tapFrames(tapSlow)) / static_cast<float>(tapFrames(tapFirst));
-        check(tapRatio > 1.25f && tapRatio < 1.42f, ("a tap took " + std::to_string(tapRatio) + " times as long").c_str());
-        near(tapSlow.turned(), turn, .01f);
-        // A reset keeps the speed; past either end it is a quarter or four times the first flips'.
-        slow.reset();
-        s.stickY = 0;
-        run(slow, 1);
-        s.stickY = 1;
-        run(slow, 45);
-        before = slow.turned();
-        run(slow, 45);
-        near(slow.turned() - before, turn / 4, .02f);
-        FlipMotion fastest, odd;
-        fastest.speed(1e6f);
-        odd.speed(std::numeric_limits<float>::quiet_NaN());
-        s.stickY = 0;
-        run(fastest, 1);
-        run(odd, 1);
-        s.stickY = 1;
-        run(fastest, 45);
-        run(odd, 45);
-        before = fastest.turned();
-        const float oddBefore = odd.turned();
-        run(fastest, 9);
-        run(odd, 9);
-        near(fastest.turned() - before, 4 * turn / FlipMotion::holdTurnSeconds * .1f, .02f);
-        near(odd.turned() - oddBefore, turn / FlipMotion::holdTurnSeconds * .1f, .01f);
-        // The rig passes it on and keeps it through a reset: half the first flips' 240 turns half as far.
-        const auto tiltAngle = [](Quat q) { return 2 * std::acos(std::min(1.f, std::abs(q.w))); };
-        float angles[2]{};
-        for (int k = 0; k < 2; ++k) {
+    test("basic flips: landing levels the view without turning a held roll into a snap", [] {
+        for (float smooth : {0.f, 1.5f}) {
             GameTrackingRig rig;
             rig.flips(true);
-            if (k)
-                rig.flipSpeed(120 * degree);
-            rig.reset();
-            auto f = trackedFrame();
-            flipFrame(rig, f, false);
-            f.hands[0].stickY = 1;
-            GameMotionFrame m;
-            for (int i = 0; i < 40; ++i)
-                m = flipFrame(rig, f, false);
-            angles[k] = tiltAngle(m.swing.tilt);
+            rig.smoothTurn(smooth);
+            auto frame = trackedFrame();
+            flipFrame(rig, frame, false);
+            frame.hands[1].stickX = 1;
+            GameMotionFrame out;
+            for (int i = 0; i < 35; ++i)
+                out = flipFrame(rig, frame, false);
+            const float yaw = out.swing.trackingYaw;
+            for (int i = 0; i < 90; ++i) {
+                out = flipFrame(rig, frame, false, false);
+                check(!out.basicFlipControls, "ground still reserved flip controls");
+                near(out.swing.trackingYaw, yaw, .0001f);
+            }
+            check(levelTilt(out.flipTilt), "landing retained the airborne angle");
+            frame.hands[1].stickX = 0;
+            flipFrame(rig, frame, false, false);
+            frame.hands[1].stickX = 1;
+            for (int i = 0; i < 10; ++i)
+                out = flipFrame(rig, frame, false, false);
+            check(std::abs(out.swing.trackingYaw - yaw) > .1f, "normal ground turning did not resume");
         }
-        check(angles[0] > .5f && std::abs(angles[1] / angles[0] - .5f) < .03f,
-              "the rig's flip speed did not halve the turn");
     });
-    test("flip: landing brings it back level quickly; a menu at once; a held A turns no more", [] {
+    test("basic flips: a wall or vent ends free-air rotation and uses the climbing controls", [] {
+        for (bool vent : {false, true}) {
+            GameTrackingRig rig;
+            rig.flips(true);
+            rig.handClimb(true);
+            auto frame = trackedFrame();
+            flipFrame(rig, frame, false);
+            frame.hands[1].stickY = 1;
+            for (int i = 0; i < 30; ++i)
+                flipFrame(rig, frame, false);
+            const SurfaceHold wall{{0, 0, 1}, {}, 0, vent, vent};
+            GameMotionFrame out;
+            for (int i = 0; i < 120; ++i) {
+                ++frame.predictedDisplayTime;
+                out = rig.update(frame, {}, {0, 0, -1}, true, {0, 0, 1}, true, wall);
+                check(!out.basicFlipControls, "attached surface still owned basic flip controls");
+            }
+            check(levelTilt(out.flipTilt) && out.ventCrawl == vent,
+                  "surface did not restore its normal view");
+        }
+    });
+    test("basic flips: menu reset and disabling clear tilt while reset preserves the selected speed", [] {
+        constexpr float degree = 3.14159265f / 180;
         GameTrackingRig rig;
         rig.flips(true);
-        auto f = trackedFrame();
-        f.hands[0].stickY = 1;
-        flipFrame(rig, f, false);
-        auto m = flipFrame(rig, f, true);
-        for (int i = 0; i < 75; ++i)
-            m = flipFrame(rig, f, true);
-        check(matrixRow(m.head, 1).y > .5f, "the held flip was not upside down");
-        int frames = 0;
-        for (; frames < 60 && !levelTilt(m.swing.tilt); ++frames)
-            m = flipFrame(rig, f, true, false);
-        check(levelTilt(m.swing.tilt) && frames <= 40, "landing did not level the player quickly");
-        for (int i = 0; i < 20; ++i)
-            check(levelTilt(flipFrame(rig, f, true, true).swing.tilt), "A held from the landing turned again");
-        // Mid-flip a menu opens: level when play comes back, A still held.
-        flipFrame(rig, f, false);
-        m = flipFrame(rig, f, true);
-        for (int i = 0; i < 20; ++i)
-            m = flipFrame(rig, f, true);
-        check(!levelTilt(m.swing.tilt), "no flip before the menu");
-        ++f.predictedDisplayTime;
-        check(!rig.update(f, {}, {0, 0, -1}, false, {0, 1, 0}, true).active, "the menu kept play going");
-        for (int i = 0; i < 5; ++i)
-            check(levelTilt(flipFrame(rig, f, true).swing.tilt), "the player came back from a menu tilted");
-    });
-    test("flip: off unless FLIPS is on, A in the air does nothing; switched off mid-flip, level at once", [] {
-        GameTrackingRig rig;
-        auto f = trackedFrame();
-        f.hands[0].stickY = 1;
-        flipFrame(rig, f, false);
-        // Off (the default): A held, then let go, in the air turns nothing; the stick still walks.
-        for (int i = 0; i < 40; ++i) {
-            const auto m = flipFrame(rig, f, i < 30);
-            check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "flips off, A in the air flipped");
-        }
-        // On, A held with the stick turns the player; switched off, they are level at once.
-        rig.flips(true);
-        auto m = flipFrame(rig, f, true);
-        for (int i = 0; i < 20; ++i)
-            m = flipFrame(rig, f, true);
-        check(!levelTilt(m.swing.tilt), "flips on, A held with the stick did not turn");
+        rig.flipSpeed(120 * degree);
+        auto frame = trackedFrame();
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 30; ++i)
+            out = flipFrame(rig, frame, false);
+        check(!levelTilt(out.flipTilt), "no flip before disabling");
         rig.flips(false);
-        m = flipFrame(rig, f, true);
-        check(levelTilt(m.swing.tilt) && length(m.swing.move) > .5f, "switched off mid-flip, the player stayed tilted");
-        // A reset (the flat screen, another player) keeps the switch.
+        out = flipFrame(rig, frame, false);
+        check(levelTilt(out.flipTilt) && !out.basicFlipControls,
+              "disabled flips retained tilt or stick ownership");
         rig.flips(true);
         rig.reset();
+        frame.hands[1].stickY = 0;
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = 1;
+        for (int i = 0; i < 25; ++i)
+            out = flipFrame(rig, frame, false);
+        check(!levelTilt(out.flipTilt), "reset switched off basic flips");
+        ++frame.predictedDisplayTime;
+        rig.update(frame, {}, {0, 0, -1}, false, {0, 1, 0}, true);
+        out = flipFrame(rig, frame, false);
+        check(levelTilt(out.flipTilt), "a menu did not clear the flip");
+    });
+    test("basic flip speed scales rotation and reset while releasing has no residual spin", [] {
+        constexpr float pi = 3.14159265f, degree = pi / 180;
+        const auto measure = [](float speed) {
+            FlipMotion flip;
+            flip.speed(speed);
+            FlipMotion::Sample sample;
+            sample.airborne = true;
+            sample.seconds = 1.f / 90;
+            flip.update(sample);
+            sample.stickY = 1;
+            for (int i = 0; i < 45; ++i)
+                flip.update(sample);
+            const float before = flip.turned();
+            for (int i = 0; i < 45; ++i)
+                flip.update(sample);
+            const float travel = flip.turned() - before;
+            sample.stickY = 0;
+            const Quat held = flip.tilt();
+            for (int i = 0; i < 180; ++i) {
+                flip.update(sample);
+                near(length(flip.tilt().rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
+            }
+            sample.jump = true;
+            int frames = 0;
+            do { flip.update(sample); ++frames; } while (!flip.level() && frames < 300);
+            check(flip.level(), "scaled A reset never completed");
+            return travel;
+        };
+        near(measure(pi), pi * .5f, .02f);
+        near(measure(pi / 2), pi * .25f, .02f);
+        FlipMotion flip;
+        flip.speed(120 * degree);
+        flip.reset();
+        near(flip.steeringRate(), 120 * degree, .0001f);
+    });
+    test("realistic flips keep left-stick steering and ignore the new basic right-stick mode", [] {
+        GameTrackingRig rig;
+        rig.flips(true);
+        rig.snapTurn(0);
+        RealisticFlipSettings settings;
+        settings.enabled = true;
+        rig.automaticFlips(settings);
+        rig.flight({{0, 0, -15}, {}, true, false});
+        auto frame = trackedFrame();
+        flipFrame(rig, frame, false, false);
+        flipFrame(rig, frame, false);
+        frame.hands[1].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, frame, false);
+            check(levelTilt(out.flipTilt) && !out.basicFlipControls,
+                  "right stick acquired basic flips while realistic flips were enabled");
+        }
+        frame.hands[1].stickY = 0;
+        frame.hands[0].stickY = 1;
+        for (int i = 0; i < 30; ++i)
+            out = flipFrame(rig, frame, false);
+        check(!levelTilt(out.flipTilt) && length(out.swing.move) == 0,
+              "realistic left-stick steering changed");
+    });
+    test("right-stick flip ownership cancels heal and aimed zip without a release action", [] {
+        game_pad::StickPush stick;
+        game_pad::ZipPress zip;
+        for (int i = 0; i < 45; ++i) {
+            const auto push = stick.update(1.f / 90, true, 0, 1);
+            zip.update(1.f / 90, push == game_pad::StickPush::Way::up, true, true);
+        }
+        check(zip.aims() > 0, "no pending aimed zip to cancel");
+        const auto releases = zip.releases();
+        // This is the same ownership handoff used by the native game adapter.
+        stick.cancel();
+        zip.cancel();
+        for (int i = 0; i < 60; ++i) {
+            check(stick.update(1.f / 90, true, 0, 1) == game_pad::StickPush::Way::none,
+                  "a held flip stick became a zip after landing");
+            const auto keys = zip.update(1.f / 90, false, true, true);
+            check(!keys.zip && !keys.aim, "canceling flip ownership released an aimed zip");
+        }
+        check(zip.releases() == releases, "cancellation counted a release gesture");
+        stick.update(1.f / 90, true, 0, 0);
+        game_pad::StickPush::Way push{};
+        for (int i = 0; i < 30; ++i)
+            push = stick.update(1.f / 90, true, 0, -1);
+        check(push == game_pad::StickPush::Way::down, "normal heal did not resume after a fresh ground push");
+    });
+    test("flip zip: fresh upward commands own the stick until neutral without consuming other flips", [] {
+        game_pad::FlipZipPriority priority;
+        check(!priority.update(true, true, 0, 1), "held menu stick acquired a zip");
+        priority.update(true, true, 0, 0);
+        check(!priority.update(true, true, 1, 0), "roll was consumed as a zip");
+        priority.update(true, true, 0, 0);
+        check(priority.update(true, true, 0, 1) && priority.began(), "fresh zip was not given priority");
+        check(priority.update(true, true, 1, .1f), "dragging a zip began a flip before neutral");
+        check(priority.update(true, false, 0, 0), "tracking loss turned a zip into a flip");
+        check(!priority.update(true, true, 0, 0), "zip ownership did not end at neutral");
+        check(!priority.update(false, true, 0, 1), "inactive mode kept zip ownership");
+    });
+    test("flip zip: aim and release complete while basic flip rotation holds", [] {
+        game_pad::FlipZipPriority priority; game_pad::StickPush stick; game_pad::ZipPress zip;
+        priority.update(true, true, 0, 0); stick.cancel();
+        GameTrackingRig rig; rig.flips(true);
+        auto f = trackedFrame(); f.seconds = 1.f / 90;
         flipFrame(rig, f, false);
-        m = flipFrame(rig, f, true);
-        for (int i = 0; i < 6; ++i)
-            m = flipFrame(rig, f, true);
-        check(!levelTilt(m.swing.tilt), "a reset switched the flips off");
+        f.hands[1].stickX = 1;
+        GameMotionFrame motion;
+        for (int i = 0; i < 40; ++i) motion = flipFrame(rig, f, false);
+        f.hands[1].stickX = 0;
+        motion = flipFrame(rig, f, false);
+        const Quat held = motion.flipTilt;
+        unsigned presses = 0;
+        for (int i = 0; i < 180; ++i) {
+            const bool up = i < 100;
+            const bool owned = priority.update(true, true, 0, up ? 1.f : 0.f);
+            if (priority.began()) stick.update(0, true, 0, 0);
+            const bool allowed = owned || zip.active();
+            const auto push = stick.update(1.f / 90, allowed, 0, up ? 1.f : 0.f);
+            const auto keys = zip.update(1.f / 90, push == game_pad::StickPush::Way::up, allowed, i > 40);
+            presses += keys.zip;
+            f.hands[1].stickY = allowed ? 0.f : up ? 1.f : 0.f;
+            motion = flipFrame(rig, f, false);
+            const auto q = motion.flipTilt;
+            near(std::abs(q.x * held.x + q.y * held.y + q.z * held.z + q.w * held.w), 1, .0001f);
+        }
+        check(presses > 0 && zip.aims() == 1 && zip.releases() == 1 && !zip.active(),
+              "zip aim/release was canceled by basic-flip ownership");
+    });
+    test("controlled flips: only a fresh airborne A press enables the left-stick mode", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame();
+        auto out = flipFrame(rig, f, false, false);
+        out = flipFrame(rig, f, true, false);
+        check((out.nativeKeys & (1u << 4)) && out.swing.jump,
+              "ground A stopped jumping");
+        f.hands[0].stickY = 1;
+        for (int i = 0; i < 40; ++i) {
+            out = flipFrame(rig, f, true);
+            check(!out.controlledFlipControls && levelTilt(out.flipTilt),
+                  "a jump held from the ground enabled flips");
+            check(length(out.swing.move) > .9f, "ordinary air steering was consumed");
+        }
+        flipFrame(rig, f, false);
+        out = flipFrame(rig, f, true);
+        check(out.controlledFlipControls && levelTilt(out.flipTilt), "A did not enable flip mode");
+        check(!out.swing.jump && !(out.nativeKeys & (1u << 4)), "toggle A leaked to native jump");
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, f, true);
+            check(out.controlledFlipControls && levelTilt(out.flipTilt), "held A toggled or auto-flipped");
+        }
+        f.hands[0].stickY = 0;
+        flipFrame(rig, f, false);
+        f.hands[0].stickY = 1;
+        for (int i = 0; i < 25; ++i) out = flipFrame(rig, f, false);
+        check(!levelTilt(out.flipTilt), "fresh left-stick input did not rotate");
+    });
+    test("controlled flips: left-stick directions rotate about the head and consume travel", [] {
+        for (Vec3 direction : {Vec3{0, 1, 0}, Vec3{0, -1, 0}, Vec3{1, 0, 0}, Vec3{-1, 0, 0}}) {
+            GameTrackingRig rig; rig.controlledFlips(true);
+            auto f = trackedFrame();
+            flipFrame(rig, f, false);
+            const auto start = flipFrame(rig, f, true);
+            flipFrame(rig, f, false);
+            f.hands[0].stickX = direction.x;
+            f.hands[0].stickY = direction.y;
+            GameMotionFrame out;
+            for (int i = 0; i < 25; ++i) {
+                out = flipFrame(rig, f, false);
+                check(out.controlledFlipControls && length(out.swing.move) < .0001f &&
+                      std::hypot(out.walkRight, out.walkForward) < .0001f &&
+                      !(out.nativeKeys & 15u), "flip stick also moved the player");
+            }
+            near(length(out.headPose.position - start.headPose.position), 0, .0001f);
+            near(out.swing.trackingYaw, start.swing.trackingYaw, .0001f);
+            near(length(out.grips[0].position - out.headPose.position),
+                 length(start.grips[0].position - start.headPose.position), .0001f);
+            const Vec3 look = out.headPose.orientation.rotate({0, 0, -1});
+            const Vec3 up = out.headPose.orientation.rotate({0, 1, 0});
+            if (direction.y != 0)
+                check(look.y * direction.y < -.5f, "pitch went against the left stick");
+            else
+                check(up.x * direction.x > .5f && std::abs(look.y) < .001f,
+                      "side stick did not roll without yawing");
+        }
+    });
+    test("controlled flips: releasing the left stick holds the exact angle without leaving mode", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame();
+        flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+        f.hands[0].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 30; ++i) out = flipFrame(rig, f, false);
+        const auto held = out;
+        f.hands[0].stickY = 0;
+        for (int i = 0; i < 900; ++i) {
+            out = flipFrame(rig, f, false);
+            check(out.controlledFlipControls, "neutral exited the mode");
+            near(length(out.flipTilt.rotate({0, 0, -1}) - held.flipTilt.rotate({0, 0, -1})), 0, .000001f);
+            near(length(out.flipTilt.rotate({0, 1, 0}) - held.flipTilt.rotate({0, 1, 0})), 0, .000001f);
+            near(length(out.headPose.position - held.headPose.position), 0, .0001f);
+        }
+        f.head.position.x += .05f;
+        out = flipFrame(rig, f, false);
+        near(length(out.headPose.position - held.headPose.position), .05f, .0001f);
+    });
+    test("controlled flips: A again exits immediately and returns upright by the shortest path", [] {
+        for (Vec3 direction : {Vec3{0, 1, 0}, Vec3{1, 0, 0}, Vec3{.7f, -.7f, 0}}) {
+            GameTrackingRig rig; rig.controlledFlips(true);
+            auto f = trackedFrame();
+            flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+            f.hands[0].stickX = direction.x; f.hands[0].stickY = direction.y;
+            GameMotionFrame out;
+            for (int i = 0; i < 35; ++i) out = flipFrame(rig, f, false);
+            float previous = 2 * std::acos(std::min(1.f, std::abs(out.flipTilt.w)));
+            check(previous > .5f, "no tilt before exit");
+            for (int i = 0; i < 120; ++i) {
+                out = flipFrame(rig, f, i < 70);
+                check(!out.controlledFlipControls && length(out.swing.move) > .9f,
+                      "exit did not restore ordinary left-stick steering");
+                check(!out.swing.jump && !(out.nativeKeys & (1u << 4)), "exit A jumped");
+                const float angle = 2 * std::acos(std::min(1.f, std::abs(out.flipTilt.w)));
+                check(angle <= previous + .0001f, "upright reset restarted a flip");
+                previous = angle;
+            }
+            check(levelTilt(out.flipTilt), "exit never reached upright");
+            f.hands[0].stickX = f.hands[0].stickY = 0;
+            flipFrame(rig, f, false);
+            f.hands[0].stickY = 1;
+            for (int i = 0; i < 30; ++i) {
+                out = flipFrame(rig, f, false);
+                check(levelTilt(out.flipTilt) && !out.controlledFlipControls,
+                      "neutral and push re-enabled flips without A");
+            }
+        }
+    });
+    test("controlled flips: repeated A taps toggle once per press and never start a single flip", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame();
+        flipFrame(rig, f, false);
+        for (int tap = 0; tap < 6; ++tap) {
+            for (int i = 0; i < 20; ++i) {
+                const auto out = flipFrame(rig, f, true);
+                check(out.controlledFlipControls == (tap % 2 == 0), "held A toggled repeatedly");
+                check(levelTilt(out.flipTilt), "A alone started a flip");
+            }
+            flipFrame(rig, f, false);
+        }
+    });
+    test("controlled flips: unselected mode leaves every left-stick direction as air movement", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame(); flipFrame(rig, f, false);
+        for (Vec3 stick : {Vec3{1, 0, 0}, Vec3{0, 1, 0}, Vec3{-1, 0, 0}, Vec3{0, -1, 0}}) {
+            f.hands[0].stickX = stick.x; f.hands[0].stickY = stick.y;
+            for (int i = 0; i < 45; ++i) {
+                const auto out = flipFrame(rig, f, false);
+                check(!out.controlledFlipControls && levelTilt(out.flipTilt) && length(out.swing.move) > .9f,
+                      "flips started without an A toggle");
+            }
+        }
+    });
+    test("controlled flips: losing left-hand tracking freezes tilt until a new neutral", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame();
+        flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+        f.hands[0].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 25; ++i) out = flipFrame(rig, f, false);
+        const Quat held = out.flipTilt;
+        for (bool valid : {false, true}) {
+            f.hands[0].valid = valid;
+            for (int i = 0; i < 30; ++i) {
+                out = flipFrame(rig, f, false);
+                check(out.controlledFlipControls, "tracking loss changed the toggle state");
+                near(length(out.flipTilt.rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
+            }
+        }
+        f.hands[0].stickY = 0; flipFrame(rig, f, false);
+        f.hands[0].stickY = -1;
+        for (int i = 0; i < 15; ++i) out = flipFrame(rig, f, false);
+        check(length(out.flipTilt.rotate({0, 1, 0}) - held.rotate({0, 1, 0})) > .1f,
+              "recovered hand could not resume rotation");
+    });
+    test("controlled flips: landing exits and a later takeoff needs a new A press", [] {
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame();
+        flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+        f.hands[0].stickX = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 35; ++i) out = flipFrame(rig, f, false);
+        check(!levelTilt(out.flipTilt), "no flip before landing");
+        for (int i = 0; i < 120; ++i) {
+            out = flipFrame(rig, f, false, false);
+            check(!out.controlledFlipControls && length(out.swing.move) > .9f,
+                  "landing retained flip input ownership");
+        }
+        check(levelTilt(out.flipTilt), "landing did not level the view");
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, f, false);
+            check(!out.controlledFlipControls && levelTilt(out.flipTilt), "next takeoff re-enabled flips");
+        }
+        f.hands[0].stickX = 0; flipFrame(rig, f, false);
+        out = flipFrame(rig, f, true);
+        check(out.controlledFlipControls, "new airborne A could not enable flips");
+    });
+    test("controlled flips: right-stick snap smooth turn and pitch shortcuts remain available", [] {
+        for (float smooth : {0.f, 1.5f}) {
+            GameTrackingRig rig; rig.controlledFlips(true); rig.smoothTurn(smooth);
+            auto f = trackedFrame();
+            flipFrame(rig, f, false); flipFrame(rig, f, true);
+            const auto start = flipFrame(rig, f, false);
+            f.hands[1].stickX = 1;
+            GameMotionFrame out;
+            for (int i = 0; i < 10; ++i) out = flipFrame(rig, f, false);
+            check(out.controlledFlipControls && levelTilt(out.flipTilt) &&
+                  std::abs(out.swing.trackingYaw - start.swing.trackingYaw) > .1f,
+                  "flip mode consumed ordinary right-stick turning");
+            f.hands[1].stickX = 0; f.hands[1].stickY = 1;
+            for (int i = 0; i < 30; ++i) {
+                out = flipFrame(rig, f, false);
+                check(levelTilt(out.flipTilt), "right-stick zip input caused a flip");
+            }
+        }
+    });
+    test("controlled flips: wall and vent contact exit while A still jumps off a wall", [] {
+        for (bool vent : {false, true}) {
+            GameTrackingRig rig; rig.controlledFlips(true); rig.handClimb(true);
+            auto f = trackedFrame();
+            flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+            f.hands[0].stickY = 1;
+            for (int i = 0; i < 30; ++i) flipFrame(rig, f, false);
+            f.hands[0].stickY = 0;
+            const SurfaceHold wall{{0, 0, 1}, {}, 0, vent, vent};
+            GameMotionFrame out;
+            for (int i = 0; i < 120; ++i) {
+                ++f.predictedDisplayTime;
+                out = rig.update(f, {}, {0, 0, -1}, true, {0, 0, 1}, true, wall);
+                check(!out.controlledFlipControls, "surface retained basic flip mode");
+            }
+            check(levelTilt(out.flipTilt) && out.ventCrawl == vent, "surface failed to restore view");
+            f.jump = true; ++f.predictedDisplayTime;
+            out = rig.update(f, {}, {0, 0, -1}, true, {0, 0, 1}, true, wall);
+            check(out.swing.jump && (out.nativeKeys & (1u << 4)), "surface A was consumed by flips");
+        }
+    });
+    test("controlled flips: disable recenter and menus clear mode without changing the selected speed", [] {
+        GameTrackingRig rig; rig.controlledFlips(true); rig.flipSpeed(2.f);
+        auto f = trackedFrame();
+        for (int reset = 0; reset < 3; ++reset) {
+            f.hands[0].stickY = 0;
+            flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+            f.hands[0].stickY = 1;
+            GameMotionFrame out;
+            for (int i = 0; i < 30; ++i) out = flipFrame(rig, f, false);
+            check(!levelTilt(out.flipTilt), "no flip before reset");
+            if (reset == 0) rig.controlledFlips(false);
+            else if (reset == 1) rig.reset();
+            else {
+                ++f.predictedDisplayTime;
+                rig.update(f, {}, {0, 0, -1}, false, {0, 1, 0}, true);
+            }
+            out = flipFrame(rig, f, false);
+            check(levelTilt(out.flipTilt) && !out.controlledFlipControls, "reset retained flip mode");
+            rig.controlledFlips(true);
+            out = flipFrame(rig, f, false);
+            check(levelTilt(out.flipTilt) && !out.controlledFlipControls,
+                  "enabling setting auto-entered mode");
+        }
+        FlipMotion flip; flip.speed(2.f); flip.reset();
+        near(flip.steeringRate(), 2.f, .0001f);
+    });
+    test("controlled flips: A held through menus or a setting change needs a fresh gameplay press", [] {
+        GameTrackingRig rig;
+        auto f = trackedFrame();
+        flipFrame(rig, f, false);
+        flipFrame(rig, f, true);
+        rig.controlledFlips(true);
+        auto out = flipFrame(rig, f, true);
+        check(!out.controlledFlipControls, "enabling FLIPS treated an already held A as a new press");
+        flipFrame(rig, f, false);
+        out = flipFrame(rig, f, true);
+        check(out.controlledFlipControls, "fresh gameplay A did not enable the mode");
+        f.jump = false; ++f.predictedDisplayTime;
+        rig.update(f, {}, {0, 0, -1}, false, {0, 1, 0}, true);
+        f.jump = true; ++f.predictedDisplayTime;
+        rig.update(f, {}, {0, 0, -1}, false, {0, 1, 0}, true);
+        for (int i = 0; i < 20; ++i) {
+            out = flipFrame(rig, f, true);
+            check(!out.controlledFlipControls && levelTilt(out.flipTilt),
+                  "menu A enabled flips after resume");
+        }
+        flipFrame(rig, f, false);
+        out = flipFrame(rig, f, true);
+        check(out.controlledFlipControls, "releasing menu A prevented the next fresh toggle");
+    });
+    test("controlled flips: inverted and multiple turns hold then exit upright by the short path", [] {
+        for (int frames : {75, 100, 180, 315}) {
+            for (bool roll : {false, true}) {
+                FlipMotion flip; FlipMotion::Sample sample; sample.controlled = true;
+                sample.airborne = true; sample.seconds = 1.f / 90;
+                sample.jump = true; flip.update(sample); sample.jump = false; flip.update(sample);
+                (roll ? sample.stickX : sample.stickY) = 1;
+                for (int i = 0; i < frames; ++i) flip.update(sample);
+                const Quat held = flip.tilt(); const float turned = flip.turned();
+                sample.stickX = sample.stickY = 0;
+                for (int i = 0; i < 900; ++i) {
+                    flip.update(sample); near(flip.turned(), turned, .000001f);
+                    near(length(flip.tilt().rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
+                }
+                const float shortest = 2 * std::acos(std::min(1.f, std::abs(held.w)));
+                sample.jump = true;
+                for (int i = 0; i < 120; ++i) flip.update(sample);
+                check(!flip.active() && flip.level() && levelTilt(flip.tilt()), "A did not exit upright");
+                near(flip.turned() - turned, shortest, .001f);
+            }
+        }
+    });
+    test("controlled flip speed scales rotation and exit while release has no residual spin", [] {
+        constexpr float pi = 3.14159265f;
+        const auto measure = [](float speed) {
+            FlipMotion flip; flip.speed(speed);
+            FlipMotion::Sample sample; sample.controlled = true;
+            sample.airborne = true; sample.seconds = 1.f / 90;
+            sample.jump = true; flip.update(sample); sample.jump = false; flip.update(sample);
+            sample.stickY = 1;
+            for (int i = 0; i < 45; ++i) flip.update(sample);
+            const float before = flip.turned();
+            for (int i = 0; i < 45; ++i) flip.update(sample);
+            const float travel = flip.turned() - before;
+            sample.stickY = 0;
+            const Quat held = flip.tilt();
+            for (int i = 0; i < 180; ++i) {
+                flip.update(sample);
+                near(length(flip.tilt().rotate({0, 1, 0}) - held.rotate({0, 1, 0})), 0, .000001f);
+            }
+            sample.jump = true;
+            int frames = 0;
+            do { flip.update(sample); ++frames; } while (!flip.level() && frames < 300);
+            check(flip.level() && !flip.active(), "scaled exit did not finish");
+            return travel;
+        };
+        near(measure(pi), pi * .5f, .02f);
+        near(measure(pi / 2), pi * .25f, .02f);
+    });
+    test("controlled flips: zip aim release and healing preserve the held angle", [] {
+        game_pad::StickPush stick; game_pad::ZipPress zip;
+        GameTrackingRig rig; rig.controlledFlips(true);
+        auto f = trackedFrame(); f.seconds = 1.f / 90;
+        flipFrame(rig, f, false); flipFrame(rig, f, true); flipFrame(rig, f, false);
+        f.hands[0].stickY = 1;
+        GameMotionFrame motion;
+        for (int i = 0; i < 40; ++i) motion = flipFrame(rig, f, false);
+        f.hands[0].stickY = 0; motion = flipFrame(rig, f, false);
+        const Quat held = motion.flipTilt;
+        unsigned presses = 0;
+        for (int i = 0; i < 180; ++i) {
+            f.hands[1].stickY = i < 100 ? 1.f : 0.f;
+            const auto push = stick.update(f.seconds, true, 0, f.hands[1].stickY);
+            const auto keys = zip.update(f.seconds, push == game_pad::StickPush::Way::up, true, i > 40);
+            presses += keys.zip;
+            motion = flipFrame(rig, f, false);
+            check(motion.controlledFlipControls, "zip command exited left-stick flip mode");
+            const auto q = motion.flipTilt;
+            near(std::abs(q.x * held.x + q.y * held.y + q.z * held.z + q.w * held.w), 1, .0001f);
+        }
+        check(presses > 0 && zip.aims() == 1 && zip.releases() == 1 && !zip.active(),
+              "flip mode prevented zip aim/release");
+        game_pad::StickPush::Way push{};
+        for (int i = 0; i < 30; ++i) push = stick.update(f.seconds, true, 0, -1);
+        check(push == game_pad::StickPush::Way::down, "flip mode prevented normal heal input");
+    });
+    test("controlled flips overrides basic flips while realistic flips keeps priority", [] {
+        GameTrackingRig rig; rig.flips(true); rig.controlledFlips(true);
+        auto f = trackedFrame();
+        flipFrame(rig, f, false);
+        f.hands[1].stickY = 1;
+        GameMotionFrame out;
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, f, false);
+            check(levelTilt(out.flipTilt) && !out.basicFlipControls && !out.controlledFlipControls,
+                  "basic right-stick flips ignored controlled mode priority");
+        }
+        out = flipFrame(rig, f, true);
+        check(out.controlledFlipControls && !out.basicFlipControls, "A did not enter controlled mode");
+        flipFrame(rig, f, false);
+        RealisticFlipSettings realistic; realistic.enabled = true;
+        rig.automaticFlips(realistic); rig.flight({{}, {}, true, false});
+        f.hands[1].stickY = 0;
+        for (int i = 0; i < 10; ++i) out = flipFrame(rig, f, false);
+        f.hands[0].stickY = 1;
+        for (int i = 0; i < 30; ++i) {
+            out = flipFrame(rig, f, false);
+            check(!out.controlledFlipControls && !out.basicFlipControls,
+                  "controlled mode took over realistic controls");
+        }
+        check(!levelTilt(out.flipTilt), "realistic manual steering was changed");
     });
     test("rig: a flip's tilt turns the tracking space about its pivot; level it is the yawed rig, exactly", [] {
         const Rig level{{10, 20, 30}, .5f};
@@ -13356,7 +23602,32 @@ int main() {
         game_swing::Command c;
         c.focused = 1;
         c.serial = 1;
-        check(c.version == 5 && c.bytes == 240 && game_swing::valid(c), "a level version 5 command was rejected");
+        check(c.version == 6 && c.bytes == 272 && game_swing::valid(c), "a level version 6 command was rejected");
+        check(length(game_swing::input(c).gaze) == 0 && !game_swing::input(c).gazeShots,
+              "a command without a gaze aimed with the eyes");
+        // EYE AIM (version 6): where the eyes look, and whether web balls go there.
+        c.gazeOrigin = {1, 1.7f, 2};
+        c.gaze = normalized(Vec3{.2f, -.1f, -1});
+        c.eyeAim = 1;
+        check(game_swing::valid(c), "a gaze was rejected");
+        const auto gazed = game_swing::input(c);
+        check(gazed.gazeShots && length(gazed.gaze - c.gaze) < 1e-6f && length(gazed.gazeOrigin - c.gazeOrigin) < 1e-6f,
+              "the gaze was lost");
+        auto badGaze = c;
+        badGaze.gaze = {0, 0, -2};
+        check(!game_swing::valid(badGaze), "a gaze of length 2 was accepted");
+        badGaze = c;
+        badGaze.gazeOrigin.x = std::numeric_limits<float>::quiet_NaN();
+        check(!game_swing::valid(badGaze), "a gaze from nowhere was accepted");
+        badGaze = c;
+        badGaze.eyeAim = 2;
+        check(!game_swing::valid(badGaze), "an unknown eye aim bit was accepted");
+        c.version = 5;
+        c.bytes = game_swing::commandBytesV5;
+        check(game_swing::valid(c) && length(game_swing::input(c).gaze) == 0 && !game_swing::input(c).gazeShots,
+              "a version 5 command was rejected, or aimed with eyes it has no room for");
+        c.gaze = c.gazeOrigin = {};
+        c.eyeAim = 0;
         c.wallRotate = 1;
         check(game_swing::valid(c) && game_swing::input(c).wallRotate, "the wall roll's flag was lost");
         c.wallRotate = 2;
@@ -13911,7 +24182,7 @@ int main() {
                 for (unsigned i = 0; i < maxMotors; ++i)
                     check(f.motors[d][i] >= 0 && f.motors[d][i] <= 1, "a motor past full strength");
         }
-        // Low health: a beat within every period of it, on the front, left of the middle.
+        // Low health: a beat within every period of it, high on the front, left of the middle.
         Mixer heart;
         State low;
         low.live = true;
@@ -13920,10 +24191,11 @@ int main() {
         bool beat = false, elsewhere = false;
         for (double t = 0; t < .6; t += .01) {
             const Frame f = heart.render(t);
-            beat = beat || f.at(Device::vest, vestMotor(false, 1, 1)) > .2f;
-            elsewhere = elsewhere || f.at(Device::vest, vestMotor(false, 1, 3)) > 0 || f.any(Device::head);
+            beat = beat || f.at(Device::vest, vestMotor(false, 0, 1)) > .2f;
+            elsewhere = elsewhere || f.at(Device::vest, vestMotor(false, 0, 3)) > 0 ||
+                        f.at(Device::vest, vestMotor(false, 2, 1)) > 0 || f.any(Device::head);
         }
-        check(beat && !elsewhere, "no heartbeat at 10% health, or one on the right of the chest");
+        check(beat && !elsewhere, "no heartbeat at 10% health, or one on the right of the chest or below it");
         low.health = .9f;
         heart.set(low);
         bool calm = true;
@@ -13967,6 +24239,73 @@ int main() {
         health.reset();
         check(health.fraction() == 1 && health.update(50) == 0 && health.fraction() == 1,
               "a new hero measured by the last");
+    });
+    test("body haptics: jumps land on the waist, blows on the upper torso, grabs pull the shoulder", [] {
+        // bHaptics' haptics team's notes of October 22.
+        using body_haptics::Device, body_haptics::Event, body_haptics::Frame, body_haptics::Kind,
+            body_haptics::Mixer, body_haptics::State, body_haptics::vestMotor, body_haptics::deviceCount,
+            body_haptics::maxMotors;
+        // The most each motor reached over a second of a pattern, or of a state.
+        const auto peak = [](const Event* e, State s) {
+            Mixer m;
+            s.live = true;
+            m.set(s);
+            if (e)
+                m.post(*e, 0);
+            Frame most;
+            for (double t = 0; t < 1; t += .01) {
+                const Frame f = m.render(t);
+                for (unsigned d = 0; d < deviceCount; ++d)
+                    for (unsigned i = 0; i < maxMotors; ++i)
+                        most.motors[d][i] = std::max(most.motors[d][i], f.motors[d][i]);
+            }
+            return most;
+        };
+        const auto of = [&](const Event& e) { return peak(&e, {}); };
+        const auto row = [](const Frame& f, unsigned r) {
+            float total = 0;
+            for (unsigned side = 0; side < 4; ++side)
+                total += f.at(Device::vest, vestMotor(false, r, side)) + f.at(Device::vest, vestMotor(true, r, side));
+            return total;
+        };
+        const auto most = [](const Frame& f, Device d) {
+            return *std::max_element(f.motors[static_cast<unsigned>(d)].begin(),
+                                     f.motors[static_cast<unsigned>(d)].end());
+        };
+        // A jump's landing (it comes down at about 0.34): the waist's row alone.
+        const Frame jump = of({Kind::landing, -1, .34f});
+        check(row(jump, 3) > 0 && row(jump, 0) + row(jump, 1) + row(jump, 2) == 0 && !jump.any(Device::leftArm) &&
+                  !jump.any(Device::rightArm) && !jump.any(Device::head),
+              "a jump's landing past the waist's row");
+        const Frame roof = of({Kind::landing, -1, 1});
+        check(row(roof, 0) > 0 && roof.any(Device::leftArm) && roof.any(Device::head),
+              "a fall from a roof landed on the waist alone");
+        // A charged leap 30% gentler: the charge's start, and its building at full.
+        near(most(of({Kind::leapCharge}), Device::vest), .105f, .002f);
+        State charging;
+        charging.charge = 1;
+        const Frame built = peak(nullptr, charging);
+        check(most(built, Device::vest) > .15f && most(built, Device::vest) <= .183f &&
+                  most(built, Device::leftArm) <= .113f,
+              "a charged leap building past 70% of its old strength");
+        // The player's attacks on the shoulders' two rows only.
+        for (const auto kind : {Kind::heavyBlow, Kind::finisher, Kind::strikeRush, Kind::knockout, Kind::counter}) {
+            const Frame f = of({kind, 1, 1});
+            check(row(f, 0) > 0 && row(f, 2) + row(f, 3) == 0, "an attack below the upper torso");
+        }
+        // A dodge 20% lighter; a perfect one as it was.
+        near(most(of({Kind::dodge, -1, 1, -1}), Device::vest), .16f, .002f);
+        near(most(of({Kind::perfectDodge, -1, 1, -1}), Device::vest), .35f, .002f);
+        // A grab pulling in the left hand: the left sleeve, and faintly the left shoulder.
+        State pulling;
+        pulling.grabTension = {1, 0};
+        const Frame pulled = peak(nullptr, pulling);
+        const float shoulder = pulled.at(Device::vest, vestMotor(false, 0, 0));
+        check(shoulder > .05f && shoulder < .5f * most(pulled, Device::leftArm) &&
+                  pulled.at(Device::vest, vestMotor(true, 0, 0)) > 0 &&
+                  pulled.at(Device::vest, vestMotor(false, 0, 3)) == 0 && row(pulled, 1) == 0 &&
+                  !pulled.any(Device::rightArm),
+              "a grab's pull not faintly in its own shoulder");
     });
 #ifdef _WIN32
     test("the target scan knows a game class by what it derives from", [] {

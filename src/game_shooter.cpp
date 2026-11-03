@@ -3,6 +3,8 @@
 // thread, and what they do where they land (game_shooter.hpp).
 #include "spidy/game_shooter.hpp"
 #include "spidy/gadget_wheel.hpp"
+#include "spidy/game_focus.hpp"
+#include "spidy/game_sound.hpp"
 #include "spidy/game_warp.hpp"
 #include "spidy/game_targets.hpp"
 #include "spidy/native_bodies.hpp"
@@ -452,6 +454,7 @@ bool fire(uintptr_t weapon, uint8_t* event) {
 // Below, with the player's gadgets.
 template <class R, class... A> bool callGame(uintptr_t rva, R& out, A... args);
 uintptr_t equippedGadget();
+uintptr_t gameWebShooter();
 // One shot through the gadget, as its R1 fires one. False when there is no
 // gadget or no player to fire it, or the game refused it.
 struct Fired {
@@ -500,16 +503,6 @@ bool fireGadget(uintptr_t weapon, const Pending& p, Vec3 origin, Vec3 forward, F
     return true;
 }
 bool fireNow(const Pending& p, Fired& out) {
-    const auto gadget = equippedGadget();
-    const auto weapon = gadget ? gadget : gadgets.current();
-    if (!gadget && !liveGadget(weapon)) {
-        gadgets.lost();
-        return false;
-    }
-    // The fire reads the weapon's setup (+0x48) and SpawnShot the actor at
-    // +0x5b0 without asking whether there is one.
-    if (!pointer(weapon + 0x48) || !actorOf(value<uint32_t>(weapon + 0x5b0)))
-        return false;
     // The hand where it is now, as far from the player as it was in the sample.
     Vec3 origin = p.shot.origin, feet{};
     if (p.record && liveRecord(p.record) && positionOf(p.record, feet) && length(feet - p.feet) < 20)
@@ -517,8 +510,33 @@ bool fireNow(const Pending& p, Fired& out) {
     const Vec3 forward = normalized(p.shot.aimPoint - origin);
     if (!finite(origin) || !finite(p.shot.aimPoint) || length(forward) < .5f)
         return false;
-    if (gadget)
+    if (const auto gadget = equippedGadget())
         return fireGadget(gadget, p, origin, forward, out);
+    // The game's own Web Shooter, where it is the gadget the game has equipped
+    // (what its RB fires: every player's, unless a wheel chose another). Its
+    // shot is the game's web, which seals a leak, webs up a vent, a turret or a
+    // thug as the game made them to be webbed. The ball below carries nothing
+    // (game_shooter.hpp): in hantop's session at the research stations on
+    // October 22 (Under Pressure, Chemical Leak, Ventilate the Problem) about
+    // 190 of 723 balls struck the same three actors in two bursts, and not one
+    // sealed anything. With no charge left the hand fires the ball, so a pull
+    // is never left unanswered.
+    if (const auto own = gameWebShooter()) {
+        if (fireGadget(own, p, origin, forward, out))
+            return true;
+        const bool empty = out.empty;
+        out = {};
+        out.empty = empty;
+    }
+    const auto weapon = gadgets.current();
+    if (!liveGadget(weapon)) {
+        gadgets.lost();
+        return false;
+    }
+    // The fire reads the weapon's setup (+0x48) and SpawnShot the actor at
+    // +0x5b0 without asking whether there is one.
+    if (!pointer(weapon + 0x48) || !actorOf(value<uint32_t>(weapon + 0x5b0)))
+        return false;
     alignas(16) uint8_t event[0x80]{};
     uint32_t id{};
     if (!fill(weapon, event) || !newId(id))
@@ -689,18 +707,30 @@ void listGadgets() {
         std::copy(found, found + 8, d.gadgets);
     });
 }
-// The gadget the game has equipped, for the hand to fire: its weapon; 0 for
-// the web shooter (its own way, below) or with the wheel's fire off.
-uintptr_t equippedGadget() {
-    if (!gadgetFire.load(std::memory_order_relaxed) || !gadgetsReady.load(std::memory_order_relaxed) ||
-        !listedManager || !listedEquipped || pointer(listedManager) != base + weaponManagerTable)
+// The weapon the game has equipped (what its RB fires) if it is the gadget
+// of gadgetTables[k], with that gadget's own event fill; 0 otherwise.
+uintptr_t equippedAs(size_t k) {
+    if (!gadgetsReady.load(std::memory_order_relaxed) || !listedManager || !listedEquipped ||
+        pointer(listedManager) != base + weaponManagerTable)
         return 0;
     const auto weapon = weaponById(listedManager, listedEquipped);
     const auto table = weapon ? pointer(weapon) : 0;
+    return table == base + gadgetTables[k] && pointer(table + 0x100) == base + gadgetFills[k] ? weapon : 0;
+}
+// The gadget the game has equipped, for the hand to fire: its weapon; 0 for
+// the web shooter (its own way, below) or with the wheel's fire off.
+uintptr_t equippedGadget() {
+    if (!gadgetFire.load(std::memory_order_relaxed))
+        return 0;
     for (size_t k = 1; k < std::size(gadgetTables); ++k)
-        if (k != unlisted && table == base + gadgetTables[k] && pointer(table + 0x100) == base + gadgetFills[k])
+        if (const auto weapon = k != unlisted ? equippedAs(k) : 0)
             return weapon;
     return 0;
+}
+// The game's own Web Shooter (WeaponImpactWeb, gadgetTables' last) while the
+// game has it equipped, whatever the wheel's fire: the web balls' first way.
+uintptr_t gameWebShooter() {
+    return equippedAs(unlisted); // MilesVR: the Impact Web, before Miles's three
 }
 // One of Spidy's own shots, still flying: its entry, taken off the list.
 bool ours(uintptr_t shot, Flying& out) {
@@ -832,9 +862,11 @@ void fireQueued() {
         Fired fired;
         const bool ok = now - p.queuedMs < leaseMs && fireNow(p, fired);
         publish([&](Data& d) {
+            // A gadget without a charge: its pull dropped, or for the game's
+            // Web Shooter answered with the ball.
+            d.emptyPulls += fired.empty;
             if (!ok) {
                 ++d.dropped;
-                d.emptyPulls += fired.empty;
                 return;
             }
             ++d.fired;
@@ -852,9 +884,12 @@ void fireQueued() {
 }
 uint64_t frame(void* self, float seconds, uint64_t a, uint64_t b) {
     const auto result = originalFrame(self, seconds, a, b);
-    // The hero's own transitions Spidy asked for (game_warp): this is the
+    // The hero's own transitions Spidy asked for (game_warp), the Focus its
+    // blows earned (game_focus) and their sounds (game_sound): this is the
     // main thread, after the hero's update.
     game_warp::frame();
+    game_focus::frame();
+    game_sound::frame();
     if (!enabled.load(std::memory_order_relaxed))
         return result;
     ++active;
@@ -1021,14 +1056,18 @@ uint32_t game_shooter::start(uintptr_t gameBase) {
         watch.start(base, 1u << static_cast<unsigned>(game_targets::Kind::bot) |
                               1u << static_cast<unsigned>(game_targets::Kind::throwable) |
                               1u << static_cast<unsigned>(game_targets::Kind::device));
-        // The muzzle and the collisions first: a frame may fire as soon as
-        // it is hooked.
-        for (auto* hook : {hooks[1], hooks[2], hooks[0]})
-            if (const auto s = MH_EnableHook(hook); s != MH_OK && !result)
+        // All three at once, so a frame that fires finds the muzzle and the
+        // collisions hooked; under one freeze of the game's threads
+        // (stereo_probe.cpp says why).
+        for (auto* hook : hooks)
+            if (const auto s = MH_QueueEnableHook(hook); s != MH_OK && !result)
                 result = 9770 + s;
+        if (const auto s = result ? MH_OK : MH_ApplyQueued(); s != MH_OK)
+            result = 9770 + s;
         if (result) {
             for (auto* hook : hooks)
-                MH_DisableHook(hook);
+                MH_QueueDisableHook(hook);
+            MH_ApplyQueued();
             watch.stop();
             gadgets.stop();
             break;
@@ -1115,18 +1154,21 @@ void game_shooter::update(float seconds, const Input& in, uint32_t busy, uint64_
             else if (game_targets::standing(b) && (b.traits & game_targets::webbable) && b.record != record)
                 targets.push_back({b.record, at, deviceRadius});
         }
+        // EYE AIM: the eyes pick what a ball goes to, from the hand that pulled.
+        const ShooterGaze eyes{in.gazeOrigin, in.gaze};
+        const ShooterGaze* gaze = in.gazeShots && length(in.gaze) > .5f ? &eyes : nullptr;
         for (int i = 0; i < 2; ++i) {
             if (!((pulls >> i) & 1))
                 continue;
             const auto& aim = in.hands[static_cast<size_t>(i)].aim;
-            auto shot = shooter.aim(i, aim, targets, world);
+            auto shot = shooter.aim(i, aim, targets, world, gaze);
             if (shot.target) {
                 // One the game has let go of meanwhile is no target.
                 bool live{};
                 for (const auto& b : bots)
                     live |= b.record == shot.target && game_targets::live(base, b);
                 if (!live)
-                    shot = shooter.aim(i, aim, {}, world);
+                    shot = shooter.aim(i, aim, {}, world, gaze);
             }
             ++requested;
             if (!enqueue({shot, record, feet, GetTickCount64()}))

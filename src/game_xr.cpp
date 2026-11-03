@@ -1,15 +1,19 @@
 // Bounded first-person OpenXR integration using the game's two native views.
 #include "spidy/native_appearance.hpp"
 #include "spidy/native_body.hpp"
+#include "spidy/wall_crawl_body.hpp"
+#include "spidy/wall_run_body.hpp"
 // The input bridge remains a separately verified, separately stoppable module.
 #include "spidy/bhaptics_output.hpp"
 #include "spidy/body_calibration.hpp"
 #include "spidy/body_haptics.hpp"
+#include "spidy/crawl_hands.hpp"
 #include "spidy/crawl_stick.hpp"
 #include "spidy/eye_resolution.hpp"
 #include "spidy/monitor_rate.hpp"
 #include "spidy/eye_snapshot.hpp"
 #include "spidy/game_bridge_protocol.hpp"
+#include "spidy/game_dodge.hpp"
 #include "spidy/game_grab.hpp"
 #include "spidy/game_menu.hpp"
 #include "spidy/game_offers.hpp"
@@ -22,6 +26,7 @@
 #include "spidy/phone.hpp"
 #include "spidy/phone_music.hpp"
 #include "spidy/game_shooter.hpp"
+#include "spidy/game_sound.hpp"
 #include "spidy/game_steam.hpp"
 #include "spidy/game_swing.hpp"
 #include "spidy/game_time.hpp"
@@ -38,7 +43,9 @@
 #include "spidy/offer_pointing.hpp"
 #include "spidy/presentation_gate.hpp"
 #include "spidy/recording_fov.hpp"
+#include "spidy/seated.hpp"
 #include "spidy/slow_motion.hpp"
+#include "spidy/throw_aim.hpp"
 #include "spidy/vr_settings.hpp"
 #include "spidy/web_pull.hpp"
 #include "spidy/xr_layers.hpp"
@@ -145,7 +152,7 @@ enum GateReason : uint32_t {
     gateTracking = 16,    // the headset's pose or timing was not usable
 };
 struct XrData {
-    uint32_t magic = 0x53585244, version = 48, bytes = sizeof(XrData), status{};
+    uint32_t magic = 0x53585244, version = 49, bytes = sizeof(XrData), status{};
     int64_t sequence{};
     uint64_t frames{}, tracked{}, submitted{}, dropped{}, leftHands{}, rightHands{}, serial{}, generation{};
     uint32_t nativeKeys{}, error{};
@@ -399,12 +406,33 @@ struct XrData {
     // Version 47: Camouflage pressed (the left trigger pulled at the left temple).
     // Version 48: the game's RT tapped as a web began a swing (game_pad::SwingTap).
     uint32_t camos{}, swingTaps{};
+    // Version 49 (SpidyVR 0.7.0's 40, 41 and 43; its 42, the phone's pocket draw, left out with the phone):
+    // suit powers asked for with both hands at the chest
+    // (game_pad::SuitPowerPress), dodges made by moving (MoveDodge), dives
+    // (WebStrike::dive) and the blows whose sound the headset played itself,
+    // the game's own not being there (game_sound.hpp).
+    uint32_t suitPowers{}, moveDodges{}, dives{}, ownSounds{};
+    // Version 41: seated play (seated.hpp): SEATED on (1) and a seated eye
+    // height measured (2); HEIGHT, centimetres (0 AUTO); the seated eye height
+    // last measured and how far the tracking space is raised now, millimetres;
+    // and how many seated eye heights were measured.
+    uint32_t seated{}, heightCm{}, seatedEyeMm{}, seatedLiftMm{}, seatedMeasures{}, reserved41{};
+    // Version 43: EYE AIM. eyeGaze: the headset's eye tracking + 1 (0 not
+    // known yet; 1 the runtime offers none, 2 it does but not for this
+    // headset, 3 an eye tracker: XrRuntime::EyeTracking) and the EYE AIM row
+    // in bits 8-9 (1 web balls, 2 zips). Then frames of play with EYE AIM on
+    // and of those the frames the eyes were tracked; web balls the eyes aimed;
+    // zips the eyes aimed that went out with the game's camera on their point,
+    // and those that went at EyeZip::waitSeconds without.
+    uint32_t eyeGaze{}, eyeAimFrames{}, gazeFrames{}, eyeShots{}, eyeZips{}, eyeZipsLate{};
 };
-static_assert(sizeof(XrData) == 1352);
+static_assert(sizeof(XrData) == 1416);
 // Where tools/run_game_vr.py reads them (until 0.1.36 it read Spider-Sense's
 // at 1304, a word late, and the venom jump's and camouflage after them).
 static_assert(offsetof(XrData, venomMegaHits) == 1292 && offsetof(XrData, senseShown) == 1300 &&
-              offsetof(XrData, venomJumps) == 1324 && offsetof(XrData, camos) == 1340);
+              offsetof(XrData, venomJumps) == 1324 && offsetof(XrData, camos) == 1340 &&
+              offsetof(XrData, suitPowers) == 1348 && offsetof(XrData, seated) == 1364 &&
+              offsetof(XrData, eyeGaze) == 1388);
 // The game's own prompt and QTE calls, for one play session to say what their
 // arguments hold (game_prompts.hpp). The eight names matched the game on
 // October 13 - 107 of 630 calls into Flash in a 224 s session - but no prompt
@@ -583,15 +611,26 @@ BridgeCall startRays{}, submitRays{}, stopRays{};
 // The world rays' results, read where they are written: the bridge exports the
 // struct itself, and the session is in the same process as it.
 const native_rays::Data* rayResults{};
+// The game's own blow sounds (game_sound.hpp), read in place; null from an
+// older ray module, whose blows sound as the headset makes them.
+const game_sound::Data* soundResults{};
+// The game's own dodges for a player a web carries (game_dodge.hpp), read in
+// place; null from an older ray module, which has none.
+const game_dodge::Data* dodgeResults{};
+// The tab's BLOW SOUNDS to the ray module (SpidySoundMode; optional).
+DWORD(WINAPI* soundMode)(void*){};
 BridgeCall startSwing{}, submitSwing{}, sampleSwing{}, stopSwing{}, retargetSwing{}, sampleGrab{}, sampleAim{};
 // Each web's edges (game_swing::Bends): optional, without it a web round an
 // edge is drawn to that edge.
-BridgeCall sampleBends{};
+BridgeCall sampleBends{}, sampleWebFlight{};
 BridgeCall sampleClimb{};
-BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{}, venomCall{};
+BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{}, venomCall{}, sampleSlingshot{};
 // Spider-Sense (game_sense, in the same module as the punches): optional, an
 // older module draws no warnings.
 BridgeCall sampleSense{};
+// The game's throw aimed by the free hand (game_throw, same module): optional,
+// an older module throws the camera's way.
+BridgeCall aimGameThrow{};
 BridgeCall startShooter{}, sampleShooter{}, stopShooter{}, wheelShooter{};
 // The game's own crawl under the player (game_warp, in the same module):
 // optional, for the session report.
@@ -770,7 +809,7 @@ RealisticFlipSettings realisticFlips(const vr_settings::Values& v) {
     return {v.realisticFlips,         v.automaticReleaseFlip,  v.automaticStrength,
             v.automaticSpeed,         v.automaticMinimumSpeed, v.automaticResponse,
             v.automaticHandStrength,  v.automaticFalloff,      v.automaticHandThreshold,
-            v.automaticAirBrake};
+            v.automaticAirBrake,      v.automaticCombat};
 }
 DWORD WINAPI run(void*) {
     bool nativeStarted = false, gpuStarted = false, raysStarted = false, swingStarted = false, websStarted = false,
@@ -854,7 +893,7 @@ DWORD WINAPI run(void*) {
         // A pressed in the air is not the game's web zip.
         AirJumpFilter airJump;
         // Where B, X and Y went down: on the game screen they are the game's
-        // own, in VR B dodges, Y interacts and X opens the game menu
+        // own, in VR B dodges, Y interacts and X opens the gadget wheel
         // (game_pad::PressOrigins).
         game_pad::PressOrigins origins;
         // Y held walks the player up to what they look at: the game takes
@@ -865,10 +904,10 @@ DWORD WINAPI run(void*) {
         // takes its Y for what that camera has in view.
         game_pad::CameraLook cameraLook;
         // The game's LB + RB (its web pull): both web buttons on a thing no
-        // web holds on, then a yank (WebPull); or the right thumbstick's
-        // click. aimed: what each hand's web button would do, markers or not.
+        // web holds on, then a yank (WebPull); or X where the game shows the
+        // two (NamedPress; the right thumbstick's click until October 24).
+        // aimed: what each hand's web button would do, markers or not.
         WebPull webPull;
-        game_pad::PullPress pullPress;
         game_swing::AimData aimed{};
         uint64_t pullsBefore{};
         // Miles's venom punch (venom_punch.hpp): the meter as this frame read
@@ -895,13 +934,16 @@ DWORD WINAPI run(void*) {
         venom_punch::VenomButtons venomButtons;
         // The Mega Venom Blast: both grips together with three full bars.
         venom_punch::BothGrips bothGrips;
-        // MilesVR 0.1.80 (the user: "change throwing objects to both grips and disable web swinging webs when
-        // you throw an object and keep zip to point with right stick up"): on his feet at a world marker
-        // offering its interaction (a throwable's LB + RB), both grips squeezed together are the game's
-        // LB + RB held - its "(Hold) Throw" - until both are let go, and meanwhile neither hand shoots a web
-        // (a grip alone there waits a moment for the other first, as the Mega blast's does).
-        venom_punch::BothGrips throwGrips;
-        bool gripThrow{};
+        // MilesVR 0.1.80, from SM2VR 0.0.73 (the user, November 3: "port over the throwing objects with right
+        // thumbstick click"): on his feet at a world marker offering its interaction (a throwable's LB + RB),
+        // the right thumbstick clicked in (the press, not the stick pushed down, which stays the heal) is the
+        // game's LB + RB held - its "(Hold) Throw". A click can be one frame, so the chord lasts at least
+        // stickThrowLeast seconds and stickThrowQuiet after the click comes up, and for as long as it stays
+        // down; meanwhile neither hand shoots a web. It replaces the both-grips throw of 0.1.80's dev builds.
+        bool stickThrow{}, stickThrowClickWas{};
+        float stickThrowSeconds{}, stickThrowQuietSeconds{};
+        uint32_t stickThrows{}, stickThrowMisses{};
+        static constexpr float stickThrowLeast = .85f, stickThrowQuiet = .15f;
         uint32_t venomMegaRequests{};
         bool venomMegaFullBefore{};
         // The venom hand's thumbstick click that emptied the meter, held: that press is nothing else's.
@@ -931,6 +973,14 @@ DWORD WINAPI run(void*) {
         // pushed up its LT + RT (the zip to a point, a vent).
         game_pad::StickPush stickPush;
         game_pad::ZipPress zipPress;
+        game_pad::FlipZipPriority flipZipPriority;
+        // EYE AIM: the zip waits for the game's camera to come onto what the
+        // eyes look at (EyeZip); frames of play with EYE AIM on and, of those,
+        // with the eyes tracked; web balls the eyes aimed; and whether the
+        // player was told the headset gives no gaze.
+        game_pad::EyeZip eyeZip;
+        uint32_t eyeAimFrames{}, gazeFrames{}, eyeShots{};
+        bool toldNoGaze{};
         bool interacting{}, dodging{}, healing{}, zipping{};
         // The player asked the game for a move of its own while the swing carried him
         // in the air (game_swing::AirYield), for the next swing command.
@@ -945,11 +995,11 @@ DWORD WINAPI run(void*) {
         game_pad::NamedPress namedPress;
         game_pad::State namedPad{};
         bool namedFists{}, fistsBlows{};
-        uint32_t namedPressesBefore{};
+        uint32_t namedPressesBefore{}, slamsBefore{};
         // The gadget wheel (X held; gadget_wheel.hpp): the player's gadgets
-        // as the shooter last listed them, whether the free hand's trigger
-        // fires the equipped one (off: the web shooter's ball, as before the
-        // wheel), and a tap of X let go of, the game menu, held this long.
+        // as the shooter last listed them, and whether the free hand's trigger
+        // fires the equipped one (off: web balls, the game's own Web Shooter's
+        // while it is the one equipped: game_shooter.hpp).
         GadgetWheel gadgetWheel;
         game_shooter::Data listed{};
         bool gadgetFire{};
@@ -959,6 +1009,7 @@ DWORD WINAPI run(void*) {
         const auto wheelPlaces = [&](GadgetWheelView& view) {
             view.places[0] = Gadget::webShooter;
             view.equipped = 0;
+            view.bare = true;
             for (uint32_t g = 0; g < std::min(listed.gadgetCount, 8u); ++g) {
                 const auto& o = listed.gadgets[g];
                 if (!o.kind || o.place >= gadgetPlaces)
@@ -966,6 +1017,7 @@ DWORD WINAPI run(void*) {
                 view.places[o.place] = static_cast<Gadget>(o.kind);
                 view.ammo[o.place] = o.ammo;
                 view.most[o.place] = o.most;
+                view.bare = view.bare && o.place == 0;
                 if (gadgetFire && o.weapon == listed.equipped)
                     view.equipped = o.place;
             }
@@ -981,6 +1033,10 @@ DWORD WINAPI run(void*) {
         PhoneMusic phoneMusic;
         PhoneView phoneShown;
         bool phoneBlows{};
+        // The phone's MENU: the game's Back, which opens its menu (the map,
+        // suits and skills), sent this long. A tap of X sent it until October
+        // 23, when the menu went onto the phone.
+        constexpr float menuTapSeconds = .1f;
         float menuTap{};
         // MilesVR 0.1.78: the phone's FNSM APP holds the game's View this long, which on an Xbox controller
         // opens the game's FNSM app (a press opens the map); and the game's FNSM reminders seen so far, each
@@ -1059,6 +1115,10 @@ DWORD WINAPI run(void*) {
         float venomDashOffSeconds{};
         static constexpr float venomDashOffNeeded = 10;
         uint64_t fnsmRemindersSeen{};
+        // The phone's CAMERA: the game's D-pad up, which takes its camera out
+        // (and puts it away again), sent this long.
+        constexpr float cameraTapSeconds = .2f;
+        float cameraTap{};
         // The game played on its screen (VIEW: GAME SCREEN): Back and the
         // D-pad, which the VR controllers lack, besides the Xbox controller's.
         game_pad::ScreenControls screenControls;
@@ -1082,11 +1142,13 @@ DWORD WINAPI run(void*) {
         // The game's own crawl at rest and its wall run (XrData version 33).
         uint32_t gameRunFrames{}, holdGraceFrames{};
         // Version 34: frames of play the rig could not place and why; the
-        // game's crawl on a floor, how long it has gone on, and the head held
-        // at its height there; the body kneeling under a held head.
+        // game's crawl on a floor, and the head held at its height there
+        // (under a duct's roof: FloorCrawlRoof); the body kneeling under a
+        // held head.
         uint32_t trackingGapFrames{}, trackingGapReasons{}, floorCrawlFrames{}, crawlCapFrames{};
         uint32_t kneelFrames{};
-        float floorCrawlSeconds{};
+        FloorCrawlRoof floorRoof;
+        CrawlCameraGate crawlCameraGate;
         game_warp::Data warp{};
         // The game's interactions on Spidy's wall (version 35): what the game
         // gathered near the player, what each hand points at, and the
@@ -1103,11 +1165,15 @@ DWORD WINAPI run(void*) {
         float headroomSeen{}, headroomLeast{};
         uint32_t headDroppedFrames{};
         bool pulling_{};
+        // The game's throw aimed by the free hand: seconds the aim still goes
+        // out after X is let go (the throw may still be reading it).
+        float throwAimTail{};
         bool padLayerWas{};
         // The prompt calls are copied out only when one more has come: the
         // lines are 3 kB and nothing changes between calls.
         uint64_t promptCallsBefore = ~0ull;
         uint32_t promptRefresh{}, vrButtonsPlayed{};
+        float slingshotPulseSeconds{};
         // A held on the ground charges a leap of the swing's own (the game's
         // Charge Jump is a skill a save may lack), and a trigger pulled with
         // its hand at the temple is the game's R3, its scan. leapOut: the
@@ -1120,6 +1186,10 @@ DWORD WINAPI run(void*) {
         game_pad::SwingTap swingTap;
         uint32_t camosBefore{};
         uint32_t chargesBefore{}, leapsBefore{}, scansBefore{};
+        // Both hands at the chest with both triggers pulled: the game's suit
+        // power (L3 + R3).
+        game_pad::SuitPowerPress suitPress;
+        uint32_t suitPowersBefore{};
         float leapOut{};
         // The game's camera follows the head's pitch too: it offers a thing
         // at the player's feet or overhead only with that camera on it.
@@ -1135,6 +1205,15 @@ DWORD WINAPI run(void*) {
         // (game_punch::Venom::dodges); and whether the latest B was one.
         uint32_t venomDodges{}, venomPerfectDodges{};
         bool dodgeCounted{};
+        // A dodge by moving (spider_sense.hpp's MoveDodge): the head out of a
+        // warned attack's way is the game's B, the way it went.
+        MoveDodge moveDodge;
+        // A dive (WebStrike::dive): the legs kick out at the one it flies at,
+        // from its start until a moment after its blow. And the dives and the
+        // blows whose sound the headset played itself, for the report.
+        Vec3 diveAt{};
+        int64_t kickUntil{};
+        uint32_t dives{}, ownSounds{};
         // The VR settings: the launch options, then the MILES VR tab in the
         // game's Settings during play.
         vr_settings::Values values;
@@ -1225,8 +1304,15 @@ DWORD WINAPI run(void*) {
         }
         game_swing::Data swingState;
         game_swing::Bends swingBends;
+        game_swing::WebFlightData webFlight;
+        WebFlightVisual flightVisual[2];
+        bool webArrivedBefore[2]{};
         game_swing::ClimbData climbState;
         game_swing::ClimbPulses climbPulses;
+        unsigned collisionRayPhase{};
+        WallCrawlBody wallCrawlBody;
+        WallRunBody wallRunBody;
+        bool ventCrawlBefore{};
         // What each hand's web holds, when it caught a thug instead of a wall.
         game_grab::Data grabState;
         uint32_t grabPhases[2]{};
@@ -1292,7 +1378,7 @@ DWORD WINAPI run(void*) {
             SenseSight sight{};
         };
         std::array<SenseMark, 6> senseMarks{};
-        uint64_t countersBefore{};
+        uint64_t countersBefore{}, webDodgesBefore = UINT64_MAX;
         uint32_t senseShown{}, senseFrames{}, senseSightFrames{}, senseTingles{};
         uint32_t senseBroken{}, senseDodges{};
         // (They outlive the session: one may still be playing as it ends.)
@@ -1329,6 +1415,11 @@ DWORD WINAPI run(void*) {
         // to a higher head and sinks a centimetre a second, so crouching
         // does not shrink the body.
         float standingEye{};
+        // Seated play (SEATED, seated.hpp): how far the tracking space is
+        // raised from where the player sits, and the seated eye heights
+        // measured by the last frame.
+        seated::Lift seatLift;
+        uint32_t seatMeasuresBefore{};
         // Each hand's fingers (HandPoser): the web-shooting hand as its web
         // button goes down and while the shot is on its way, else a fist,
         // closed by the grip, by a web held or by a hand moving fast relative
@@ -1341,6 +1432,9 @@ DWORD WINAPI run(void*) {
         Vec3 gripsBefore[2]{};
         bool gripsSeen[2]{};
         bool ballShot[2]{}, webTaken[2]{}, fightNear{};
+        // When enemies were last within a strike's reach or a fist's
+        // (performance counter; 0: never): FLIPS IN COMBAT.
+        int64_t fightAt{};
         // Stretches and frames of play the game held the player on a wall
         // or a ceiling (the head stood off it).
         uint32_t surfaceEntries{};
@@ -1500,6 +1594,9 @@ DWORD WINAPI run(void*) {
         // and both while the game names its X, whose press a thrown fist is
         // then (NamedPress) - a blow of Spidy's on top would hit as well.
         auto sendSwingSettings = [&] {
+            // BLOW SOUNDS: the game's own impacts only on GAME.
+            if (soundMode)
+                soundMode(reinterpret_cast<void*>(static_cast<uintptr_t>(values.blowSounds)));
             if (!swingStarted || !swingSettings)
                 return;
             game_swing::Settings s;
@@ -1510,6 +1607,18 @@ DWORD WINAPI run(void*) {
             s.walls = !(config.options & 16384);
             s.arcade = values.arcadeWebs;
             s.handClimb = values.handClimb;
+            s.webSlingshot = values.webSlingshot;
+            s.betterClimbing = values.betterClimbing;
+            s.combatVisuals = values.combatVisuals;
+            s.smartAnchor = values.smartAnchor;
+            s.elasticWeb = static_cast<uint32_t>(values.elasticWeb);
+            s.softRelease = static_cast<uint32_t>(values.softRelease);
+            s.swingAssist = values.swingAssist;
+            s.slingshotSpeed = static_cast<float>(values.slingshotSpeed);
+            s.twoHandZip = values.twoHandZip;
+            s.ropeSteering = values.ropeSteering;
+            s.webRange = static_cast<float>(values.webRange);
+            s.webSpeed = static_cast<uint32_t>(values.webSpeed);
             sentSwingSettings = s;
             swingSettingsSent = true;
             // A hand-over owns the walls while it lasts; the player's own
@@ -1526,6 +1635,8 @@ DWORD WINAPI run(void*) {
         };
         auto applySettings = [&] {
             runtime.hapticStrength(static_cast<float>(values.haptics) / 100);
+            // The eyes are read only while something aims with them.
+            runtime.wantGaze(values.eyeAim != 0);
             // The bHaptics library loads, on the haptics' own thread, the first
             // time BODY HAPTICS is on; at 0 the devices go quiet.
             if (values.bodyHaptics > 0 && !haptics.started()) {
@@ -1540,11 +1651,18 @@ DWORD WINAPI run(void*) {
             rig.snapTurn(static_cast<float>(values.snapTurn) * 3.14159265f / 180);
             rig.smoothTurn(static_cast<float>(values.smoothTurn) * 3.14159265f / 180);
             rig.flips(values.flips);
+            rig.controlledFlips(values.controlledFlips);
             rig.flipSpeed(static_cast<float>(values.flipSpeed) * 3.14159265f / 180);
             rig.triggerWebs(values.triggerWebs);
             rig.standOnWalls(values.standOnWalls);
             rig.handClimb(values.handClimb);
-            rig.wallDistance(static_cast<float>(values.wallDistance) / 100.f);
+            rig.wallRunCameraTilt(values.wallRunCameraTilt);
+            rig.wallRunCameraDistance(vr_settings::fixedRunCameraDistance * .01f);
+            rig.momentumWallRun(vr_settings::fixedMomentumCameraDistance * .01f,
+                vr_settings::fixedMomentumCameraTilt * .0174532925f,
+                std::tan(vr_settings::fixedMomentumBodyTilt * .0174532925f),
+                vr_settings::fixedMomentumForwardLean * .0174532925f);
+            rig.wallDistance(static_cast<float>(vr_settings::fixedWallDistance) / 100.f);
             rig.automaticFlips(realisticFlips(values));
             native_hud::setSize(values.hud);
             // VENOM HAND moves the venom to the other hand, uncharged (the tab is open, so the game is paused).
@@ -1567,6 +1685,7 @@ DWORD WINAPI run(void*) {
             }
             near_clip::set(values.nearClipMm);
             recording_fov::set(values.recordingFov);
+            recording_fov::smoothing(values.recordingSmoothing);
             sendSwingSettings();
             if (swingStarted && startPunch && samplePunch) {
                 if (values.punch && !punchStarted) {
@@ -1673,11 +1792,14 @@ DWORD WINAPI run(void*) {
                 padRetryMs = GetTickCount64() + 1000;
             }
             // VR play has eye images; the game played on its screen has the
-            // screen's, which these do not count.
+            // screen's, which these do not count. The last pair shown again
+            // counts too: around a menu closing the game can make no new pair
+            // for a few seconds while the headset shows the last one, which
+            // ended VR (pull request #36). Only nothing shown at all does.
             const bool eyesWanted = motion.active && !flatScreen;
-            if (eyesWanted && firstImageDeadline && !lastNewImageMs && GetTickCount64() >= firstImageDeadline)
+            if (eyesWanted && firstImageDeadline && !lastPresentedMs && GetTickCount64() >= firstImageDeadline)
                 throw std::runtime_error("No native eye images reached OpenXR within 3 seconds");
-            if (eyesWanted && lastNewImageMs && GetTickCount64() - lastNewImageMs >= 3000)
+            if (eyesWanted && lastPresentedMs && GetTickCount64() - lastPresentedMs >= 3000)
                 throw std::runtime_error("Native eye presentation stalled for 3 seconds");
             const bool active = runtime.frameStereo(
                 [&](const XrFrame& trackedFrame) {
@@ -1729,6 +1851,11 @@ DWORD WINAPI run(void*) {
                                                        : "FNSM app - the game's own opens (its M key)");
                             game_prompts::note(fnsmHold > 0 ? "phone: FNSM APP -> the game's View held 1 s"
                                                             : "phone: FNSM APP -> the game's M key");
+                        case PhoneAction::camera:
+                            cameraTap = cameraTapSeconds;
+                            break;
+                        case PhoneAction::menu:
+                            menuTap = menuTapSeconds;
                             break;
                         case PhoneAction::none:
                         case PhoneAction::close:
@@ -1761,6 +1888,11 @@ DWORD WINAPI run(void*) {
                         if (use.action == PhoneAction::close) {
                             runtime.haptic(1, .15f);
                             message(3, 0, "Phone away - each control is the game's again once let go of");
+                        } else if (use.action == PhoneAction::camera) {
+                            message(3, 0, "The game's camera - left trigger aims, right trigger takes the photo, "
+                                          "right stick up puts it away");
+                        } else if (use.action == PhoneAction::menu) {
+                            message(3, 0, "The game's menu (map, suits, skills) - B closes it");
                         }
                         // The game asks for its FNSM app: in VR that is the phone's.
                         if (const uint64_t reminders = game_prompts::fnsmReminders(); reminders != fnsmRemindersSeen) {
@@ -1780,6 +1912,10 @@ DWORD WINAPI run(void*) {
                     check(sampleBridge(&game), "Gameplay sample");
                     LARGE_INTEGER now{};
                     QueryPerformanceCounter(&now);
+                    // A fight goes on 3 s past the last enemy in reach, so
+                    // the realistic flips that FLIPS IN COMBAT keeps out of
+                    // it do not come back between blows.
+                    const bool fightLately = fightAt && now.QuadPart - fightAt < frequency.QuadPart * 3;
                     Mat4 body{}, camera{};
                     std::memcpy(body.data(), game.player, 64);
                     std::memcpy(camera.data(), game.before, 64);
@@ -1864,6 +2000,24 @@ DWORD WINAPI run(void*) {
                     XrFrame controller = frame;
                     // The T-pose calibration has A as it has the other buttons.
                     controller.jump = frame.jump && !jumpFromScreen && !calibrationInput;
+                    // Seated play: how far everything the game's world takes from
+                    // the tracking space is raised - the rig's head, eyes and hands,
+                    // the body's height, a T-pose calibration - measured from where
+                    // the player sits in VR play, again after a recenter.
+                    const float seatStanding = seated::standingEye(values.heightCm, calibratedEye, seated::defaultEye);
+                    const float seatRaise =
+                        seatLift.update(frame.seconds, values.seated,
+                                        viewing && gameplay && !flatScreen && validTrackedPose(frame.head),
+                                        frame.head.position.y, frame.recentered, seatStanding);
+                    if (seatLift.measures() != seatMeasuresBefore) {
+                        seatMeasuresBefore = seatLift.measures();
+                        char line[128];
+                        sprintf_s(line, "Seated: your eyes are %.2f m up; raised %.2f m to %.2f m (HEIGHT %s)",
+                                  seatLift.seatedEye(),
+                                  std::clamp(seatStanding - seatLift.seatedEye(), 0.f, seated::Lift::maxLift),
+                                  seatStanding, values.heightCm ? "set" : "AUTO");
+                        message(3, 0, line);
+                    }
                     // Each hand's grip pose, and whether the headset has it; and
                     // whether the hand gestures play VR: gameplay in the headset,
                     // the controllers no calibration's.
@@ -1897,17 +2051,43 @@ DWORD WINAPI run(void*) {
                             message(3, 0, "Camouflage");
                         }
                     }
+                    // Both hands at the chest with both triggers pulled is the
+                    // game's suit power (its L3 + R3, which VR play had no way
+                    // to), and those triggers shoot nothing meanwhile.
+                    {
+                        const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                        suitPress.update(frame.seconds, gesturesPlay, frame.head, grips, gripsTracked, triggers);
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (suitPress.hands() & (1u << i))
+                                controller.hands[i].trigger = 0;
+                        if (suitPress.powers() != suitPowersBefore) {
+                            suitPowersBefore = suitPress.powers();
+                            runtime.haptic(0, .9f, .12f);
+                            runtime.haptic(1, .9f, .12f);
+                            feel(body_haptics::Kind::leap);
+                            game_prompts::note("both hands at the chest, both triggers -> the game's L3 + R3 (its suit "
+                                               "power)");
+                        }
+                    }
                     // A grip squeezed at a back pocket draws the phone, and shoots
-                    // no web until it is let go. Not with the phone out, nor in the
-                    // pad layer, where the grips are the game's bumpers (October
-                    // 19: a draw sent the game LB or RB until the phone came out).
+                    // no web until it is let go. Not with the phone out. In the pad
+                    // layer too, where the grips are the game's bumpers: that grip
+                    // is no bumper (October 19: a draw sent the game LB or RB until
+                    // the phone came out), and the phone drawn ends the layer
+                    // (PadLayer::leave), so the phone is always the way back to
+                    // play's controls.
                     int phoneDrawnWith = -1;
                     {
                         const float squeezes[2]{frame.hands[0].squeeze, frame.hands[1].squeeze};
-                        const bool drawPlay = gesturesPlay && !phone.open() && !padLayer.latched();
+                        const bool drawPlay = gesturesPlay && !phone.open();
                         if (pocketDraw.update(frame.seconds, drawPlay, frame.head, grips, gripsTracked,
                                               squeezes))
                             phoneDrawnWith = pocketDraw.drewWith();
+                        if (phoneDrawnWith >= 0 && padLayer.latched()) {
+                            padLayer.leave();
+                            // "Phone out" says it; "Pad layer off" would hide it.
+                            padLayerWas = false;
+                        }
                         for (unsigned i = 0; i < 2; ++i) {
                             if (pocketDraw.hands() & (1u << i))
                                 controller.hands[i].squeeze = 0;
@@ -1931,7 +2111,7 @@ DWORD WINAPI run(void*) {
                         named.buttons = frame.buttons;
                         // The temple's scan has a trigger, the pocket's draw a grip.
                         const uint32_t gestures =
-                            values.triggerWebs ? pocketDraw.hands() : templePress.hands();
+                            values.triggerWebs ? pocketDraw.hands() : templePress.hands() | suitPress.hands();
                         for (unsigned i = 0; i < 2; ++i) {
                             const auto& hand = frame.hands[i];
                             named.balls[i] = values.triggerWebs ? hand.squeeze : hand.trigger;
@@ -1944,6 +2124,7 @@ DWORD WINAPI run(void*) {
                         named.stickX = frame.hands[1].stickX;
                         named.stickY = frame.hands[1].stickY;
                         named.airborne = game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart);
+                        named.slams = fightLately && (!values.realisticFlips || !values.automaticCombat);
                         const bool namedPlay =
                             gesturesPlay && !padLayer.latched() && !phone.open() && !gadgetWheel.open();
                         namedPad = namedPress.update(frame.seconds, namedPlay, named, asked);
@@ -1959,6 +2140,9 @@ DWORD WINAPI run(void*) {
                         }
                         if (claimed & (game_pad::NamedPress::stickLeft | game_pad::NamedPress::stickRight))
                             controller.hands[1].stickX = 0;
+                        if (values.flips && !values.controlledFlips && !values.realisticFlips &&
+                            (claimed & game_pad::NamedPress::stickUp))
+                            controller.hands[1].stickY = 0;
                         // While the game names its X a thrown fist is that X, and
                         // the swing lands no blow of its own (sendSwingSettings).
                         namedFists = namedPlay && (asked.buttons & game_pad::x) != 0;
@@ -2024,12 +2208,22 @@ DWORD WINAPI run(void*) {
                         hold.crawl = true;
                         ++floorCrawlFrames;
                     }
+                    hold.vent = hold.crawl &&
+                        (climbState.status && climbState.crawl == 1 && climbState.sampleTimeNs &&
+                         frame.predictedDisplayTime > 0 &&
+                         static_cast<uint64_t>(frame.predictedDisplayTime) >= climbState.sampleTimeNs &&
+                         static_cast<uint64_t>(frame.predictedDisplayTime) - climbState.sampleTimeNs <=
+                             100'000'000);
+                    // The game's crawl on a floor keeps the head under the
+                    // roof (below) whether or not the vent view takes it.
+                    const bool gameFloorCrawl = hold.crawl && hold.normal.y > .99f;
+                    // The gate keeps transient floor crawls out of the vent
+                    // view: with vents off for now (ventHandCrawl) there is none.
+                    const bool ventView = ventHandCrawl && gameplay && values.handClimb;
+                    hold = crawlCameraGate.update(frame.seconds, ventView,
+                        (origins.play() & buttonB) != 0, swingFresh && swingState.grounded, hold);
                     const bool crawlsFloor = hold.crawl && hold.normal.y > .99f;
-                    floorCrawlSeconds =
-                        crawlsFloor ? floorCrawlSeconds + (std::isfinite(frame.seconds)
-                                                               ? std::clamp(frame.seconds, 0.f, .1f)
-                                                               : 0.f)
-                                    : 0.f;
+                    const float crawlCap = floorRoof.update(gameFloorCrawl, frame.seconds, headroomSeen);
                     // Between the swing's wall and the game's crawl (game_warp:
                     // the game turning the hero onto the wall at rest, or off it
                     // as he walks on) the swing reports neither for a moment.
@@ -2048,9 +2242,10 @@ DWORD WINAPI run(void*) {
                         holdGapSeconds = held ? 0.f : holdGapSeconds + seconds;
                         if (held) {
                             lastHold = hold;
-                        } else if (motion.standing && length(n) > .5f && holdGapSeconds < holdGrace &&
+                        } else if ((motion.standing || motion.ventCrawl) && length(n) > .5f &&
+                                   holdGapSeconds < holdGrace &&
                                    std::abs(dot(feet - lastHold.anchor, n)) < 1.5f &&
-                                   length(v - n * dot(v, n)) < holdGraceSpeed) {
+                                   length(v - n * dot(v, n)) < (motion.ventCrawl ? 3.f : holdGraceSpeed)) {
                             // On the plane it stood on, with the feet: kept
                             // where it was while the game took a player over
                             // a shaft's lip at 1.3 m/s, the view stayed on
@@ -2067,13 +2262,15 @@ DWORD WINAPI run(void*) {
                     }
                     // A or the left stick in the air flips the player (FlipMotion),
                     // in the air as the latest swing sample has it.
-                    // In the game's crawl on a floor the head goes no higher
+                    // In the game's crawl in a duct the head goes no higher
                     // than a crouch, whatever a ray finds over it: part of the
                     // first mission's duct has a roof no ray hits, and the
                     // head stood out through it at the player's own height.
+                    // A duct is the crawl under a duct's roof (FloorCrawlRoof):
+                    // the game crawls a hero ducking under a beam the same way.
                     float over = headroomSeen;
-                    if (floorCrawlSeconds >= crawlSettleSeconds) {
-                        over = over > 0 ? std::min(over, crawlRoom) : crawlRoom;
+                    if (crawlCap > 0) {
+                        over = over > 0 ? std::min(over, crawlCap) : crawlCap;
                         ++crawlCapFrames;
                     }
                     rig.headroom(over);
@@ -2097,6 +2294,18 @@ DWORD WINAPI run(void*) {
                             headCollisionOrigin(feet, bodyUp, hold, values.handClimb && swingState.owned));
                         if (holds)
                             rig.surfaceFound({hold.anchor, held}, true);
+                        if (rayResults) {
+                            // The bridge publishes on another thread. Hand
+                            // contacts consume each complete, fresh batch once.
+                            const auto sequence = rayResults->sequence;
+                            if (!(sequence & 1)) {
+                                MemoryBarrier();
+                                const native_rays::Data sample = *rayResults;
+                                MemoryBarrier();
+                                if (rayResults->sequence == sequence)
+                                    rig.handFeedback(sample, now.QuadPart, frequency.QuadPart);
+                            }
+                        }
                         if (rayResults)
                             for (unsigned i = 0; i < native_rays::capacity && i < rayResults->count; ++i) {
                                 const auto& hit = rayResults->hits[i];
@@ -2112,6 +2321,7 @@ DWORD WINAPI run(void*) {
                     // toward where it holds, by its tension.
                     RealisticFlight flight;
                     if (values.realisticFlips) {
+                        flight.fighting = fightLately;
                         const int64_t fresh = now.QuadPart - frequency.QuadPart / 10;
                         flight.valid = swingState.qpc && static_cast<int64_t>(swingState.qpc) > fresh &&
                                        !swingState.error &&
@@ -2119,8 +2329,12 @@ DWORD WINAPI run(void*) {
                         flight.velocity = swingState.velocity;
                         float ropes{};
                         unsigned attached{};
+                        float coupling{};
                         if (flight.valid && swingState.owned)
-                            for (const auto& web : swingState.webs) {
+                            for (unsigned i = 0; i < 2; ++i) {
+                                const auto& web = swingState.webs[i];
+                                if (webFlight.phases[i] == 1)
+                                    continue;
                                 const Vec3 toward = web.anchor - feet;
                                 if (!web.attached || !finite(web.anchor) || !std::isfinite(web.tension) ||
                                     length(toward) < .1f)
@@ -2128,16 +2342,53 @@ DWORD WINAPI run(void*) {
                                 flight.attached = true;
                                 ropes += length(toward);
                                 ++attached;
-                                flight.pull += normalized(toward) * std::clamp(web.tension, .1f, 100.f);
+                                const float gain = webFlight.phases[i] == 0 ? 1.f : webFlight.coupling[i];
+                                flight.pull +=
+                                    normalized(toward) * std::clamp(web.tension, .1f, 100.f) * gain;
+                                coupling = std::max(coupling, gain);
                             }
-                        if (attached)
+                        if (attached) {
+                            flight.coupling = coupling;
                             flight.ropeLength = ropes / static_cast<float>(attached);
+                        }
                     }
                     rig.flight(flight);
-                    motion = rig.update(controller, feet, {camera[8], camera[9], camera[10]}, gameplay,
+                    rig.wallHands(climbState.status ? climbState.hands : 0u);
+                    rig.outwardCrawl(values.body && !flatScreen ? native_body::crawlOutwardWeight() : 0.f);
+                    const bool runPalm = game_swing::outdoorClimbGrip(climbState,
+                        frame.predictedDisplayTime > 0 ? frame.predictedDisplayTime : 0);
+                    rig.wallRunBody(values.body && values.handClimb && !flatScreen && swingFresh,
+                        runPalm ? climbState.hands : 0, swingState.velocity);
+                    const bool flipZipPlay = gesturesPlay && !padLayer.latched() && !phone.open() &&
+                        !gadgetWheel.open() && values.flips && !values.controlledFlips &&
+                        !values.realisticFlips &&
+                        game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart) &&
+                        length(hold.normal) < .5f;
+                    const auto& zipHand = controller.hands[1];
+                    const bool zipPriority = flipZipPriority.update(flipZipPlay, zipHand.valid,
+                        zipHand.stickX, zipHand.stickY);
+                    if (zipPriority || (flipZipPlay && zipPress.active())) {
+                        controller.hands[1].stickX = controller.hands[1].stickY = 0;
+                    }
+                    motion = rig.update(seated::raised(controller, seatRaise), feet, {camera[8], camera[9], camera[10]}, gameplay,
                                         swingState.owned ? Vec3{0, 1, 0} : heroUp,
                                         game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart), hold,
                                         {camera[4], camera[5], camera[6]});
+                    if (values.eyeAim && motion.active && !flatScreen) {
+                        ++eyeAimFrames;
+                        gazeFrames += motion.gazeValid ? 1u : 0u;
+                        // An eye tracker that gave no gaze in three seconds of
+                        // play: over Quest Link and Virtual Desktop the eyes reach
+                        // PC games only where the player switched that on.
+                        if (!toldNoGaze && !gazeFrames && eyeAimFrames >= 270 &&
+                            runtime.eyeTracking() == XrRuntime::EyeTracking::tracker) {
+                            toldNoGaze = true;
+                            message(3, 0,
+                                    "EYE AIM: the headset has an eye tracker but sends no gaze. Quest Pro: turn on "
+                                    "eye tracking for PC apps (Quest Link: Settings > Beta; Virtual Desktop: its "
+                                    "eye tracking forwarding). Until then hands and head aim as before.");
+                        }
+                    }
                     if (motion.headDrop > .02f)
                         ++headDroppedFrames;
                     if (motion.active && motion.onSurface) {
@@ -2306,8 +2557,10 @@ DWORD WINAPI run(void*) {
                         presented = false;
                     } else if (vrPlay && !wasGameplay) {
                         // Gameplay counts its own images: the screen before it
-                        // may have had none for a while (loading).
-                        lastNewImageMs = 0;
+                        // may have had none for a while (loading). The screen's
+                        // own frames counted as shown, so a play that never
+                        // shows a pair still says so after 3 seconds.
+                        lastPresentedMs = lastNewImageMs = 0;
                         presented = false;
                         firstImageDeadline = nativeStarted ? GetTickCount64() + 3000 : 0;
                     }
@@ -2383,10 +2636,13 @@ DWORD WINAPI run(void*) {
                         message(3, 0, "Body calibration skipped - Settings > MILES VR > CALIBRATE BODY does it later");
                     } else if (calibration.phase() != CalibrationPhase::idle && immersive) {
                         body_calibration::Sample sample;
-                        sample.headTracked = validTrackedPose(frame.head);
-                        sample.head = frame.head;
+                        // Seated, the player as the game's world has them: raised
+                        // (seated.hpp), so the eyes measure as standing ones.
+                        const XrFrame placed = seated::raised(frame, seatRaise);
+                        sample.headTracked = validTrackedPose(placed.head);
+                        sample.head = placed.head;
                         for (unsigned i = 0; i < 2; ++i) {
-                            const auto& hand = frame.hands[i];
+                            const auto& hand = placed.hands[i];
                             sample.handTracked[i] = hand.valid && validTrackedPose(hand.grip);
                             sample.grips[i] = hand.grip;
                             sample.triggers[i] = hand.trigger;
@@ -2411,8 +2667,10 @@ DWORD WINAPI run(void*) {
                             runtime.haptic(1, .7f);
                             feel(body_haptics::Kind::calibrated);
                             char text[160];
-                            sprintf_s(text, "Body calibrated: eye height %.2f m, arm length %.2f m (left %.2f, right %.2f)",
-                                      calibratedEye, calibratedArm, lastCalibration.reach[0], lastCalibration.reach[1]);
+                            sprintf_s(text, "Body calibrated: height %.2f m (eyes %.2f m), arm length %.2f m (left %.2f, "
+                                      "right %.2f)",
+                                      body_calibration::height(calibratedEye), calibratedEye, calibratedArm,
+                                      lastCalibration.reach[0], lastCalibration.reach[1]);
                             message(3, 0, text);
                         } else if (before == CalibrationPhase::waiting &&
                                    calibration.phase() == CalibrationPhase::holding) {
@@ -2479,18 +2737,36 @@ DWORD WINAPI run(void*) {
                         for (unsigned i = 0; i < 2; ++i)
                             if (both.hold[i])
                                 (values.triggerWebs ? motion.swing.hands[i].trigger : motion.swing.hands[i].grip) = 0;
-                        // The throw on both grips (throwGrips), when no Mega blast is ready for them.
+                        // The throw on the right stick's click (stickThrow), when no Mega blast is ready.
                         const bool offered = immersive && !calibrationInput && !padLayer.latched() && !ready &&
                                              swingState.grounded && swingState.wall == 0 &&
                                              game_prompts::interactOffered();
-                        const auto toss =
-                            throwGrips.update(frame.seconds, offered, frame.hands[0].squeeze, frame.hands[1].squeeze);
-                        if (toss.fire)
-                            game_prompts::note("both grips at a marker -> the game's LB + RB (throw), webs off");
-                        gripThrow = toss.hold[0] && toss.hold[1];
-                        for (unsigned i = 0; i < 2; ++i)
-                            if (toss.hold[i])
-                                motion.swing.hands[i].trigger = motion.swing.hands[i].grip = 0;
+                        const bool clickHeld = frame.hands[1].stickClick;
+                        const float clickDt =
+                            std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
+                        if (!immersive || calibrationInput) {
+                            stickThrow = false;
+                        } else if (!stickThrow) {
+                            if (clickHeld && !stickThrowClickWas && offered) {
+                                stickThrow = true;
+                                stickThrowSeconds = stickThrowQuietSeconds = 0;
+                                ++stickThrows;
+                                game_prompts::note("right stick clicked at a marker -> the game's LB + RB (throw)");
+                                message(3, 0, "Throw - hold the right stick clicked in");
+                            } else if (clickHeld && !stickThrowClickWas && swingState.grounded) {
+                                ++stickThrowMisses;
+                            }
+                        } else {
+                            stickThrowSeconds += clickDt;
+                            stickThrowQuietSeconds = clickHeld ? 0.f : stickThrowQuietSeconds + clickDt;
+                            if (!clickHeld && stickThrowQuietSeconds >= stickThrowQuiet &&
+                                stickThrowSeconds >= stickThrowLeast)
+                                stickThrow = false;
+                        }
+                        stickThrowClickWas = clickHeld;
+                        if (stickThrow)
+                            for (auto& hand : motion.swing.hands)
+                                hand.trigger = hand.grip = 0;
                     }
                     // Miles's venom punch: with the meter full the venom hand's
                     // controller (the launcher's Venom punch hand) shoots no web nor
@@ -2516,7 +2792,8 @@ DWORD WINAPI run(void*) {
                         // charge is gone and its webs are back (the user, October 19:
                         // "whenever i need to swing with right grip and venom is charged
                         // i can press right thumbstick and it instantly depletes").
-                        const bool stick = frame.hands[venomSide].stickClick;
+                        // Not the right stick's click that throws (stickThrow).
+                        const bool stick = frame.hands[venomSide].stickClick && !(venomSide == 1 && stickThrow);
                         if (stick && !venomStickBefore && venom_punch::full(venomMeter.value) && immersive &&
                             !calibrationInput && !padLayer.latched()) {
                             venomStickTaken = true;
@@ -2646,9 +2923,9 @@ DWORD WINAPI run(void*) {
                             venomButtons.reset();
                         }
                     }
-                    // A thumbstick's click, but not the venom hand's that let the venom go.
+                    // A thumbstick's click, but not the venom hand's that let the venom go, nor the right one throwing.
                     const auto stickClick = [&](unsigned i) {
-                        return frame.hands[i].stickClick && !(venomStickTaken && i == venomSide);
+                        return frame.hands[i].stickClick && !(venomStickTaken && i == venomSide) && !(stickThrow && i == 1);
                     };
                     // Slow motion: the left thumbstick's click, in VR play outside the calibration.
                     const bool slowAllowed = immersive && calibration.phase() == CalibrationPhase::idle;
@@ -2680,12 +2957,7 @@ DWORD WINAPI run(void*) {
                             const Vec3 ahead = turn.rotate({0, 0, -1}), aside = turn.rotate({1, 0, 0}),
                                        overhead = turn.rotate({0, 1, 0});
                             const auto head = rig.clearanceRays(ahead, aside, overhead);
-                            for (unsigned i = 0; i < head.size() && aim.count < native_rays::capacity; ++i)
-                                if (head[i].distance >= .01f && finite(head[i].origin) &&
-                                    std::abs(length(head[i].direction) - 1) < .001f)
-                                    aim.rays[aim.count++] = {head[i].origin,
-                                                             std::min(head[i].distance, 150.f),
-                                                             head[i].direction, 2u + i};
+                            const auto hands = rig.handCollisionRays(motion.headPose.position);
                             // And the room over his feet, along the surface he
                             // stands on: how far the head can go before it is
                             // through the roof of a vent or a duct. From the
@@ -2705,9 +2977,8 @@ DWORD WINAPI run(void*) {
                             const Vec3 up = motion.standing && finite(hold.normal) && length(hold.normal) > .5f
                                                 ? normalized(hold.normal)
                                                 : Vec3{0, 1, 0};
-                            if (finite(up) && length(up) > .5f && aim.count < native_rays::capacity)
-                                aim.rays[aim.count++] = {feet + up * .1f, headroomReach, up, 7u};
-                            aim.leaseMs = 100;
+                            const native_rays::Ray roof{feet + up * .1f, headroomReach, up, 7u};
+                            appendTrackingRays(aim, head, hands, roof, collisionRayPhase++);
                         }
                         check(submitRays(&aim), "Controller world rays");
                         // What the roof's ray found, from the batch the bridge
@@ -2768,8 +3039,19 @@ DWORD WINAPI run(void*) {
                         if (const Vec3 look = motion.headPose.orientation.rotate({0, 0, -1});
                             input.focused && finite(look) && length(look) > .5f)
                             input.look = normalized(look);
+                        // EYE AIM: where the eyes look, for the web balls they aim
+                        // and for what the aim previews say they meet (the zip's
+                        // camera is turned onto that).
+                        if (const Vec3 gaze = motion.gazePose.orientation.rotate({0, 0, -1});
+                            values.eyeAim && input.focused && motion.gazeValid && finite(gaze) &&
+                            length(gaze) > .5f) {
+                            input.gazeOrigin = motion.gazePose.position;
+                            input.gaze = normalized(gaze);
+                            input.eyeAim = (values.eyeAim & vr_settings::eyeAimShots) ? 1u : 0u;
+                        }
+                        const Input climbInput = wallClimbInput(motion);
                         for (unsigned i = 0; i < 2; ++i) {
-                            const auto& hand = motion.swing.hands[i];
+                            const auto& hand = climbInput.hands[i];
                             input.hands[i] = {hand.aim, hand.gripRelativeToHead, hand.tracked, hand.trigger,
                                               hand.grip};
                             input.wallPositions[i] = motion.grips[i].position;
@@ -2777,8 +3059,22 @@ DWORD WINAPI run(void*) {
                         }
                         check(submitSwing(&input), "Tracked swing input");
                         check(sampleSwing(&swingState), "Native swing feedback");
+                        game_swing::SlingshotData slingshot;
+                        slingshotPulseSeconds += frame.seconds;
+                        if (values.webSlingshot && input.focused && sampleSlingshot &&
+                            !sampleSlingshot(&slingshot) && slingshot.magic == 0x53534c47 &&
+                            slingshot.version == 1 && slingshot.bytes == sizeof(slingshot) &&
+                            slingshot.charge > 0 && slingshot.charge <= 1) {
+                            if (slingshotPulseSeconds >= .06f) {
+                                for (unsigned i = 0; i < 2; ++i)
+                                    runtime.haptic(i, .15f + .65f * slingshot.charge, .045f);
+                                slingshotPulseSeconds = 0;
+                            }
+                        } else {
+                            slingshotPulseSeconds = .06f;
+                        }
                         if (!sampleClimb || sampleClimb(&climbState) || climbState.magic != 0x53434c44 ||
-                            climbState.version != 1 || climbState.bytes != sizeof(climbState))
+                            climbState.version != 2 || climbState.bytes != sizeof(climbState))
                             climbState = {};
                         const unsigned wallPulses =
                             climbPulses.update(climbState, input.focused && values.handClimb);
@@ -2787,6 +3083,13 @@ DWORD WINAPI run(void*) {
                                 runtime.haptic(i, .45f, .045f);
                                 feel(body_haptics::Kind::wallGrip, static_cast<int>(i));
                             }
+                        if (!sampleWebFlight || sampleWebFlight(&webFlight)) {
+                            webFlight = {};
+                            for (unsigned i = 0; i < 2; ++i) {
+                                webFlight.phases[i] = swingState.webs[i].attached ? 3 : 0;
+                                webFlight.coupling[i] = 1;
+                            }
+                        }
                         if (!sampleBends || sampleBends(&swingBends))
                             swingBends = {};
                         // Nothing here changes who holds the player on a wall
@@ -2826,6 +3129,10 @@ DWORD WINAPI run(void*) {
                             }
                             onStrandBefore[i] = on;
                         }
+                        for (unsigned i = 0; i < 2; ++i)
+                            flightVisual[i].update(frame.seconds, webFlight.phases[i], webFlight.durations[i],
+                                                   webFlight.progress[i], webFlight.tips[i],
+                                                   swingState.webs[i].anchor);
                         bool trails[2]{};
                         Vec3 trailEnds[2]{};
                         // The hands whose webs a zip pulled: one zip on the body, in the arm of
@@ -2869,8 +3176,19 @@ DWORD WINAPI run(void*) {
                             // A web taken hold of, not shot: the hand closes on it,
                             // a softer pulse than a shot's.
                             const bool taken = attached && !grabbing && (swingState.webs[i].attached & 4);
+                            // A web that flew (WEB SPEED) pulses as it arrives, not as it is shot.
+                            const bool arrived = attached && !grabbing && webFlight.phases[i] >= 2;
+                            if (arrived && !webArrivedBefore[i] && attachedBefore[i] && !taken) {
+                                runtime.haptic(i, .8f);
+                                pulseUntil[i] = displayAt + 60'000'000;
+                                feel(body_haptics::Kind::webAttach, static_cast<int>(i));
+                            }
+                            webArrivedBefore[i] = arrived;
                             if (attached != attachedBefore[i] && !grabbing && !wasGrabbing) {
-                                runtime.haptic(i, !attached ? .2f : taken ? .4f : .65f);
+                                runtime.haptic(i, !attached                  ? .2f
+                                                  : taken                    ? .4f
+                                                  : webFlight.phases[i] == 1 ? .15f
+                                                                             : .65f);
                                 feel(!attached ? body_haptics::Kind::webRelease
                                      : taken   ? body_haptics::Kind::webTaken
                                                : body_haptics::Kind::webAttach,
@@ -2950,12 +3268,30 @@ DWORD WINAPI run(void*) {
                             blowsBefore = std::min(blowsBefore, strikes.blows);
                             strikesBefore = std::min(strikesBefore, strikes.opened);
                             knockoutsBefore = std::min(knockoutsBefore, strikes.knockouts);
+                            const bool diving =
+                                strikes.phase == static_cast<uint32_t>(WebStrike::Phase::Flying) &&
+                                strikes.hand == static_cast<uint32_t>(WebStrike::diveHand);
                             if (strikes.opened > strikesBefore && input.focused) {
-                                // Off to him: a tick in both hands, and the rush.
-                                runtime.haptic(0, .35f, .05f);
-                                runtime.haptic(1, .35f, .05f);
+                                // Off to him: a tick in both hands, and the rush. A
+                                // dive's is harder, and the last of its way slows.
+                                runtime.haptic(0, diving ? .7f : .35f, diving ? .08f : .05f);
+                                runtime.haptic(1, diving ? .7f : .35f, diving ? .08f : .05f);
                                 feel(body_haptics::Kind::strikeRush);
-                                play(ImpactSound::Rush);
+                                // BLOW SOUNDS: OFF silences the rush as well.
+                                if (values.blowSounds != 2)
+                                    play(ImpactSound::Rush);
+                                if (diving) {
+                                    moments.start(Moment::dive);
+                                    ++dives;
+                                }
+                            }
+                            // The dive's legs kick out at the one it flies at (his
+                            // chest, where the lock's mark is), and a moment after.
+                            if (diving) {
+                                diveAt = strikes.cueTarget == strikes.target && finite(strikes.cuePoint)
+                                             ? strikes.cuePoint
+                                             : strikes.destination;
+                                kickUntil = frame.predictedDisplayTime + 250'000'000;
                             }
                             if (strikes.blows > blowsBefore && input.focused) {
                                 const auto kind = static_cast<BlowKind>(strikes.lastKind);
@@ -2992,10 +3328,19 @@ DWORD WINAPI run(void*) {
                                                   static_cast<int>(std::min(strikes.lastCount, 999u)), 0, called};
                                     burst.since = frame.predictedDisplayTime;
                                 }
-                                play(finisher ? ImpactSound::Finisher
-                                     : heavy ? ImpactSound::Heavy
-                                     : strength >= .35f ? ImpactSound::Firm
-                                                        : ImpactSound::Light);
+                                // BLOW SOUNDS: the game's own impact plays on him
+                                // while it can (game_sound.hpp), then none of the
+                                // headset's; SPIDY, the headset's; OFF, none.
+                                const bool gameSounds =
+                                    values.blowSounds == 0 && soundResults &&
+                                    *static_cast<const volatile uint32_t*>(&soundResults->live) == 1;
+                                if (values.blowSounds != 2 && !gameSounds) {
+                                    play(finisher ? ImpactSound::Finisher
+                                         : heavy ? ImpactSound::Heavy
+                                         : strength >= .35f ? ImpactSound::Firm
+                                                            : ImpactSound::Light);
+                                    ++ownSounds;
+                                }
                             }
                             // A knockout of the player's: time eases for an instant, both
                             // hands feel it, and it is lettered where he stood. This one is
@@ -3128,6 +3473,30 @@ DWORD WINAPI run(void*) {
                             }
                             countersBefore = counters;
                         }
+                        // A dodge on a web the game took and that answered a warning
+                        // (game_dodge): the whoosh across the body as a dodge's, from
+                        // the side the web carries the player away from, and a breath
+                        // in both hands. It is a dodge while a warning stands.
+                        if (dodgeResults) {
+                            const auto* answers = static_cast<const volatile uint64_t*>(dodgeResults->answers);
+                            const uint64_t answered = answers[1] + answers[2] + answers[3];
+                            // Those of an earlier session in this game are not this one's.
+                            if (webDodgesBefore == UINT64_MAX)
+                                webDodgesBefore = answered;
+                            if (answered > webDodgesBefore && input.focused) {
+                                const volatile float* way = &dodgeResults->lastWay.x;
+                                const float right =
+                                    way[0] * motion.walkRightAxis.x + way[2] * motion.walkRightAxis.z;
+                                feel(body_haptics::Kind::dodge, -1, 1, right > 0 ? -1.f : 1.f);
+                                const int64_t until = frame.predictedDisplayTime + 60'000'000;
+                                for (unsigned h = 0; h < 2; ++h) {
+                                    runtime.haptic(h, .3f, .05f);
+                                    pulseUntil[h] = std::max(pulseUntil[h], until);
+                                }
+                                ++senseDodges;
+                            }
+                            webDodgesBefore = answered;
+                        }
                         // A warning gone (its blow landed, or the game took it off) is
                         // gone at once; a broken mark plays out its poses first.
                         for (auto& m : senseMarks) {
@@ -3174,6 +3543,7 @@ DWORD WINAPI run(void*) {
                                             game_prompts::note("a web ball at no target -> the game's RB too "
                                                                "(its web shooter, for what it webs)");
                                     }
+                                    eyeShots += input.eyeAim != 0;
                                 }
                                 shotsBefore[i] = shots.hands[i].shots;
                             }
@@ -3183,6 +3553,8 @@ DWORD WINAPI run(void*) {
                         calmSeconds = fighting && (strikes.enemies != 0 || strikes.cueTarget != 0)
                                           ? 0.f
                                           : calmSeconds + static_cast<float>(frame.seconds);
+                        if (input.focused && ((fighting && strikes.enemies != 0) || punch.bots != 0))
+                            fightAt = now.QuadPart;
                         if (websStarted && motion.active && !flatScreen) {
                             // The game draws these webs from the tracked web shooters.
                             native_webs::Request webs;
@@ -3203,6 +3575,18 @@ DWORD WINAPI run(void*) {
                                 hand.attachedAt = rope.key;
                                 hand.anchor = trail ? trailEnds[from] : swingState.webs[from].anchor;
                                 hand.wrist = webShooter(motion.grips[from], from).position;
+                                if (hand.attached == 1 && flightVisual[from].flying())
+                                    hand.anchor = flightVisual[from].tip();
+                                if (hand.attached == 1 && flightVisual[from].flying() &&
+                                    native_webs::drawsHeld()) {
+                                    bent[i].count = native_webs::maxRopeBends;
+                                    const float progress = flightVisual[from].progress();
+                                    const float age = flightVisual[from].age();
+                                    for (uint32_t k = 0; k < bent[i].count; ++k)
+                                        bent[i].points[k] = flyingWebPoint(
+                                            hand.wrist, hand.anchor, float(k + 1) / float(bent[i].count + 1),
+                                            age, progress, flightVisual[from].direction());
+                                }
                                 // A web round edges: to where it sticks, round each of them. The
                                 // swing's anchor is the nearest edge, and drawn to it the web's end
                                 // jumped to each new one. Where Spidy cannot lay the rope's points
@@ -3335,6 +3719,26 @@ DWORD WINAPI run(void*) {
                         if (playing) {
                             walk.right = mounting ? 0 : motion.walkRight;
                             walk.forward = mounting ? 0 : motion.walkForward;
+                            // Hand pulls become ordinary native crawl input. The
+                            // game keeps vent collision and its supported state.
+                            const bool handCrawl = motion.ventCrawl && values.handClimb && motion.active &&
+                                !flatScreen && !calibrationInput && !layerOn && !mounting &&
+                                std::hypot(motion.walkRight, motion.walkForward) <= .2f;
+                            const Vec3 pull =
+                                game_swing::crawlPull(climbState, handCrawl, frame.predictedDisplayTime);
+                            if (handCrawl && climbState.crawl && climbState.hands) {
+                                const Vec3 stick =
+                                    game_swing::crawlStick(pull, motion.walkForwardAxis,
+                                                          motion.walkRightAxis);
+                                walk.right = stick.x;
+                                walk.forward = stick.z;
+                            }
+                            if (motion.ventCrawl != ventCrawlBefore) {
+                                ventCrawlBefore = motion.ventCrawl;
+                                message(1, 0, ventCrawlBefore ?
+                                                  "Vent hand crawling active (native crawl, close view)" :
+                                                  "Vent hand crawling ended");
+                            }
                             // On the game's own crawl, with the view turned
                             // onto the wall, what the game makes of that stick
                             // is the one thing no session has measured.
@@ -3430,6 +3834,27 @@ DWORD WINAPI run(void*) {
                         // What the game names now, for a pull (below). Not in the pad
                         // layer: there the player presses the game's own buttons.
                         const auto asked = layerOn ? prompt_buttons::Demand{} : game_prompts::demand();
+                        // The game's throw of a prop where the hand X is not on
+                        // points (throw_aim.hpp, game_throw): while X sends the
+                        // game's LB + RB, at the enemy that hand's aim marker is
+                        // on, or the way from the player to what it points at.
+                        // The user, October 24: "really hard or not possible to
+                        // aim where the throw will go".
+                        {
+                            const bool pair = (asked.buttons & game_pad::bumpers) == game_pad::bumpers;
+                            const bool holding = playing && pair && (named & game_pad::NamedPress::controlX);
+                            const float dt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
+                            throwAimTail = holding ? 1.f : std::max(0.f, throwAimTail - dt);
+                            if (aimGameThrow && throwAimTail > 0) {
+                                const unsigned xHand =
+                                    runtime.controllers()[1] == ControllerKind::frame ? 1u : 0u;
+                                const unsigned hand = 1 - xHand;
+                                auto request = throw_aim::fromHand(
+                                    aimed.hands[hand], motion.swing.hands[hand].aim.orientation.rotate({0, 0, -1}),
+                                    swingState.position);
+                                aimGameThrow(&request);
+                            }
+                        }
                         // The game takes its own interact away the moment the
                         // player leaves the surface, and the swing's wall is
                         // the player off it: hand him back for the press. Only
@@ -3455,12 +3880,31 @@ DWORD WINAPI run(void*) {
                         (void)toldHandoverRefused;
                         // Not on a wall the player stands on: the game's camera
                         // there is not the follow camera's level turn.
-                        walk.look = cameraLook.update(motion.headPose.orientation.rotate({0, 0, -1}),
-                                                      {camera[8], camera[9], camera[10]},
-                                                      steering && !motion.onSurface);
-                        walk.lookUp = cameraPitch.update(motion.headPose.orientation.rotate({0, 0, -1}),
-                                                         {camera[8], camera[9], camera[10]},
-                                                         steering && !motion.onSurface);
+                        const bool cameraSteered = steering && !motion.onSurface;
+                        // EYE AIM's zips (game_pad::EyeZip): from the stick going up
+                        // for a zip to the zip's end, the camera is brought closely
+                        // onto what the eyes look at, from where it stands - the point
+                        // the game zips to. Not while basic flips have the stick.
+                        const auto& zipStick = frame.hands[1];
+                        const bool zipWanted =
+                            zipPress.active() || (zipStick.stickY >= game_pad::StickPush::pushed &&
+                                                  std::abs(zipStick.stickX) <= game_pad::StickPush::aside);
+                        const Vec3 gazeLook = motion.gazePose.orientation.rotate({0, 0, -1});
+                        const bool eyesZip = (values.eyeAim & vr_settings::eyeAimZips) && motion.gazeValid &&
+                                             finite(gazeLook) && length(gazeLook) > .5f && zipWanted &&
+                                             (!motion.basicFlipControls || zipPriority || zipPress.active());
+                        const auto& seen = aimed.gaze;
+                        const Vec3 cameraLookTo =
+                            eyesZip ? game_pad::cameraLookAt(
+                                          {camera[12], camera[13], camera[14]}, seen.point,
+                                          seen.kind == static_cast<uint32_t>(game_swing::AimKind::anchor) ||
+                                              seen.kind == static_cast<uint32_t>(game_swing::AimKind::air),
+                                          normalized(gazeLook))
+                                    : motion.headPose.orientation.rotate({0, 0, -1});
+                        walk.look = cameraLook.update(cameraLookTo, {camera[8], camera[9], camera[10]}, cameraSteered,
+                                                      eyesZip);
+                        walk.lookUp = cameraPitch.update(cameraLookTo, {camera[8], camera[9], camera[10]},
+                                                         cameraSteered, eyesZip);
                         if (stepIn > 0 && std::hypot(walk.right, walk.forward) < .1f) {
                             Vec3 look = motion.headPose.orientation.rotate({0, 0, -1});
                             Vec3 ahead{camera[8], 0, camera[10]};
@@ -3479,13 +3923,15 @@ DWORD WINAPI run(void*) {
                             walk.right = walk.forward = 0;
                         // The game's LB + RB, its web pull where it shows the two
                         // (a door, a grate): both web buttons on the thing, which
-                        // no web holds on, and a yank; or the right stick's click.
+                        // no web holds on, and a yank. X sends them too, where
+                        // the game names them (NamedPress, above).
                         std::array<WebPullHand, 2> pulling{};
                         bool free = swingStarted && swingState.grounded && !calibrationInput;
                         for (unsigned i = 0; i < 2; ++i) {
                             const auto& hand = motion.swing.hands[i];
                             const auto& aim = aimed.hands[i];
-                            free = free && !swingState.webs[i].attached && !grabPhases[i];
+                            free = free && !swingState.webs[i].attached && !grabPhases[i] &&
+                                   !(motion.ventCrawl && climbState.status && (climbState.hands & (1u << i)));
                             pulling[i] = {hand.tracked && hand.grip > .5f,
                                           aim.kind == static_cast<uint32_t>(game_swing::AimKind::blocked), aim.point,
                                           hand.aim.position, hand.gripRelativeToHead};
@@ -3647,12 +4093,9 @@ DWORD WINAPI run(void*) {
                                 venomSpentBefore = exchange.spent;
                             }
                         }
-                        // A click the game names (its R3) is not a pull (NamedPress).
-                        const bool pullClick = stickClick(1) && calmSeconds >= venom_punch::fightCalmSeconds &&
-                                               !(named & game_pad::NamedPress::rightClick);
-                        const bool pulled =
-                            pullPress.update(frame.seconds, reaching, pullClick, stickClick(0)) ||
-                            (yanked && playing);
+                        // The right stick's click is the throw's (stickThrow) and no pull: Spidy 0.7 dropped its
+                        // stick-click pull (PullPress), and SM2VR keeps the click for the throw alone.
+                        const bool pulled = yanked && playing;
                         // A yank at a thing the game is prompting both triggers for
                         // sends those (its LT + RT for a vent as readily as its
                         // LB + RB for a door): the gesture is the player's first way
@@ -3668,7 +4111,7 @@ DWORD WINAPI run(void*) {
                             game_prompts::note(onWall ? "the player's pull -> the game's LB + RB, on a wall"
                                                       : "the player's pull -> the game's LB + RB");
                         pulling_ = walk.pull;
-                        // The right stick pushed down heals, in the air as on
+                        // Outside airborne basic flips, the right stick down heals,
                         // the ground; pushed up it is the game's LT + RT, while
                         // a web carries the player too (inFlight). Left and
                         // right turn.
@@ -3677,22 +4120,33 @@ DWORD WINAPI run(void*) {
                         // down by the hip) took the stick to rest and spent a heal under the thumb.
                         const auto& turning = frame.hands[1];
                         // Not a push the game names a D-pad way for (NamedPress).
+                        const bool flipZip = motion.basicFlipControls && (zipPriority || zipPress.active());
+                        if (flipZipPriority.began()) stickPush.update(0, true, 0, 0);
                         const bool sticking =
                             steering && !calibrationInput && !layerOn &&
+                            (!motion.basicFlipControls || flipZip) &&
                             !(named & (game_pad::NamedPress::stickUp | game_pad::NamedPress::stickLeft |
                                        game_pad::NamedPress::stickRight));
-                        const auto push =
+                        const auto push = motion.basicFlipControls && !flipZip ?
+                            game_pad::StickPush::Way::none :
                             stickPush.update(frame.seconds, sticking, turning.stickX, turning.stickY);
-                        walk.heal = push == game_pad::StickPush::Way::down;
+                        if (motion.basicFlipControls && !flipZip) {
+                            stickPush.cancel();
+                            zipPress.cancel();
+                        }
+                        walk.heal = !motion.basicFlipControls && push == game_pad::StickPush::Way::down;
                         // Held on into the game's aim mode (its own time slowed), LT stays down alone,
                         // and letting go zips to the point its aim holds (ZipPress).
-                        // The throw: both grips at a marker (throwGrips, 0.1.80; the stick up threw from
-                        // 0.1.78). Begun, it holds until both grips are let go: the game turns the marker off
-                        // and lifts the object as its web catches it, and a let-go there drops the throw.
-                        const bool throwHeld = gripThrow && steering && !calibrationInput;
+                        // The throw: the right stick clicked at a marker (stickThrow, 0.1.80, from SM2VR;
+                        // the stick up threw in 0.1.78, both grips in 0.1.80's dev builds). Begun, it holds
+                        // while the click does: the game lifts the object as its web catches it.
+                        const bool throwHeld = stickThrow && steering && !calibrationInput;
                         walk.pull = walk.pull || throwHeld;
-                        // The stick up is the zip, always.
-                        const bool zipUp = (reaching || inFlight) && push == game_pad::StickPush::Way::up;
+                        // The stick up is the zip, always; with EYE AIM's zips, not before the game's
+                        // camera is on the eyes' point (EyeZip; a moment at most).
+                        const bool zipUp = eyeZip.update(
+                            frame.seconds, (reaching || inFlight) && push == game_pad::StickPush::Way::up,
+                            eyesZip && cameraSteered, cameraLook.error(), cameraPitch.error());
                         const auto gameTime = game_time::telemetry();
                         const bool slow = gameTime.installed && gameTime.own < game_pad::ZipPress::slowBelow;
                         const auto zipKeys = zipPress.update(frame.seconds, zipUp, sticking, slow);
@@ -3738,13 +4192,35 @@ DWORD WINAPI run(void*) {
                             const bool onCrawl = swingState.status &&
                                                  swingState.wall == static_cast<uint32_t>(game_swing::Surface::game);
                             const bool webbed = swingState.webs[0].attached || swingState.webs[1].attached;
-                            walk.parkour = onCrawl && (walk.jump || webbed);
+                            walk.parkour = onCrawl && (walk.jump || (!motion.ventCrawl && webbed));
                             // The game's RT tapped as a web takes him into a swing: its swing prompt.
                             walk.swing = swingTap.update(frame.seconds, steering && !calibrationInput,
                                                          inFlight && webbed && !onCrawl);
                         }
                         walk.scan = templePress.held() && steering;
                         walk.camo = camoPress.held() && steering;
+                        walk.suit = suitPress.held() && steering;
+                        walk.menu = menuTap > 0;
+                        // Out of a warned attack's way by moving: a quick step or
+                        // lean across the attacker's line, a step back or a duck is
+                        // the game's B, the way the head went (a duck: the game's
+                        // own way). Where B may go out, as B itself.
+                        {
+                            std::array<DodgeThreat, 6> warned{};
+                            size_t count{};
+                            for (const auto& m : senseMarks)
+                                if (m.attacker && m.live && !m.brokenAt && count < warned.size())
+                                    warned[count++] = {m.attacker, m.head, m.answer};
+                            const Quat roomToWorld = motion.headPose.orientation * frame.head.orientation.conjugate();
+                            const bool dodgePlay = playing && !calibrationInput && validTrackedPose(frame.head);
+                            if (moveDodge.update(frame.seconds, dodgePlay, motion.headPose.position, frame.head.position,
+                                                 roomToWorld, {warned.data(), count})) {
+                                const Vec3 way = moveDodge.way();
+                                walk.dodge = true;
+                                walk.right = dot(way, motion.walkRightAxis);
+                                walk.forward = dot(way, motion.walkForwardAxis);
+                            }
+                        }
                         // A perfect dodge: the game slows its own time within a
                         // moment of a B that went down with it at full speed.
                         if (walk.dodge && !dodging) {
@@ -3776,15 +4252,26 @@ DWORD WINAPI run(void*) {
                             }
                         }
                         auto buttons = origins.filtered(frame, mapping);
-                        // An X the game names is its X: no wheel, no menu (NamedPress).
+                        // On the pad layer a grip pressed at a back pocket is the
+                        // phone's draw, not the game's bumper.
+                        if (mapping == game_pad::Mapping::pad)
+                            for (unsigned i = 0; i < 2; ++i)
+                                if (pocketDraw.hands() & (1u << i))
+                                    buttons.hands[i].squeeze = 0;
+                        // An X the game names is its X: no wheel (NamedPress).
                         if (named & game_pad::NamedPress::controlX)
                             buttons.buttons &= ~static_cast<uint32_t>(buttonX);
                         // The gadget wheel: X held opens it in front of the hand
                         // X is on (the left on Touch and Index, the right on the
-                        // Steam Frame); X tapped is the game menu as it is let go.
-                        // Chosen, a gadget is equipped in the game and the free
-                        // hand's trigger fires it; the web shooter at the top
-                        // has it fire web balls again.
+                        // Steam Frame); X tapped does nothing (the game menu until
+                        // October 23: the phone's MENU now). Chosen, a gadget is
+                        // equipped in the game and the free hand's trigger fires
+                        // it; the web shooter at the top has it fire web balls
+                        // again. A game that offers no gadget yet (a new game's
+                        // first missions: the user's second profile, 2% in, on
+                        // October 24) still opens it, the web shooter alone and
+                        // NO GADGETS YET in the middle: until then X held did
+                        // nothing at all, and that read as a broken wheel.
                         {
                             const unsigned hand = runtime.controllers()[1] == ControllerKind::frame ? 1u : 0u;
                             const uint32_t owned = std::min(listed.gadgetCount, 8u);
@@ -3792,7 +4279,7 @@ DWORD WINAPI run(void*) {
                             for (uint32_t g = 0; g < owned; ++g)
                                 if (listed.gadgets[g].place < gadgetPlaces)
                                     places |= static_cast<uint8_t>(1u << listed.gadgets[g].place);
-                            const bool offered = wheelShooter && shooterStarted && !listed.gadgetError && owned &&
+                            const bool offered = wheelShooter && shooterStarted && !listed.gadgetError &&
                                                  mapping == game_pad::Mapping::gameplay;
                             const bool x = (buttons.buttons & buttonX) != 0;
                             if (offered)
@@ -3800,8 +4287,6 @@ DWORD WINAPI run(void*) {
                             const auto chosen =
                                 gadgetWheel.update(frame.seconds, x, offered && steering && !calibrationInput,
                                                    frame.hands[hand].grip.position, frame.head.position, places);
-                            if (chosen.tap)
-                                menuTap = .1f;
                             if (chosen.opened) {
                                 runtime.haptic(hand, .3f);
                                 feel(body_haptics::Kind::gadget, static_cast<int>(hand), .3f);
@@ -3881,16 +4366,25 @@ DWORD WINAPI run(void*) {
                         }
                         if (namedPress.presses() != namedPressesBefore) {
                             namedPressesBefore = namedPress.presses();
+                            const bool slam = namedPress.slams() != slamsBefore;
+                            slamsBefore = namedPress.slams();
                             char line[96];
                             sprintf_s(line, "the player's press of a button the game names -> 0x%04x%s%s%s",
                                       namedPad.buttons, namedPad.leftTrigger ? " LT" : "",
                                       namedPad.rightTrigger ? " RT" : "",
-                                      named & game_pad::NamedPress::fist ? ", a thrown fist" : "");
+                                      slam ? ", both fists slammed down"
+                                      : named & game_pad::NamedPress::fist ? ", a thrown fist"
+                                                                           : "");
                             game_prompts::note(line);
                         }
-                        if (menuTap > 0) {
-                            pad.buttons |= game_pad::back;
+                        if (menuTap > 0)
                             menuTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        // The phone's CAMERA, as its own D-pad up would: the
+                        // game's camera out (its overlay up, the triggers then
+                        // its aim and shutter: prompt_buttons::cameraDemand).
+                        if (cameraTap > 0) {
+                            pad.buttons |= game_pad::dpadUp;
+                            cameraTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
                         }
                         // A plain blow on a boss: the game's own attack (X), so he reacts to it.
                         if (bossStrikeTap > 0) {
@@ -4224,6 +4718,39 @@ DWORD WINAPI run(void*) {
                         d.senseTingles = senseTingles;
                         d.senseBroken = senseBroken;
                         d.senseDodges = senseDodges;
+                        d.suitPowers = suitPress.powers();
+                        d.moveDodges = moveDodge.dodges();
+                        d.dives = dives;
+                        d.ownSounds = ownSounds;
+                        d.seated = (values.seated ? 1u : 0u) | (seatLift.measures() ? 2u : 0u);
+                        d.heightCm = static_cast<uint32_t>(values.heightCm);
+                        d.seatedEyeMm = static_cast<uint32_t>(std::lround(seatLift.seatedEye() * 1000));
+                        d.seatedLiftMm = static_cast<uint32_t>(std::lround(seatLift.lift() * 1000));
+                        d.seatedMeasures = seatLift.measures();
+                        {
+                            const auto& p = pocketDraw.stats();
+                            d.pocketPresses = p.presses;
+                            d.pocketBegun = p.begun;
+                            d.pocketDraws = p.draws;
+                            d.pocketSlow = p.tooSlow;
+                            d.pocketLetGo = p.letGo;
+                            for (unsigned m = 0; m < PocketDraw::misses; ++m)
+                                d.pocketMissed[m] = p.missed[m];
+                            d.pocketLastMiss = p.lastMiss < PocketDraw::misses ? p.lastMiss + 1 : 0;
+                            const float hand[3]{p.lastHand.x, p.lastHand.y, p.lastHand.z};
+                            for (unsigned a = 0; a < 3; ++a)
+                                d.pocketLastHand[a] =
+                                    static_cast<int32_t>(std::lround(std::clamp(hand[a], -9.f, 9.f) * 1000));
+                            d.pocketLastLostMs = static_cast<uint32_t>(std::lround(p.lastLost * 1000));
+                            d.pocketLastLook = static_cast<int32_t>(std::lround(p.lastLook * 1800 / 3.14159265f));
+                        }
+                        d.eyeGaze = (static_cast<uint32_t>(runtime.eyeTracking()) + 1) |
+                                    static_cast<uint32_t>(values.eyeAim) << 8;
+                        d.eyeAimFrames = eyeAimFrames;
+                        d.gazeFrames = gazeFrames;
+                        d.eyeShots = eyeShots;
+                        d.eyeZips = eyeZip.settled();
+                        d.eyeZipsLate = eyeZip.late();
                         for (unsigned i = 0; i < 3; ++i) {
                             d.cameraForward[i] = camera[8 + i];
                             d.cameraUp[i] = camera[4 + i];
@@ -4433,7 +4960,7 @@ DWORD WINAPI run(void*) {
                         stereoScene = !code;
                         return true;
                     }
-                    if (const float h = frame.head.position.y; std::isfinite(h) && h > .8f && h < 2.4f)
+                    if (const float h = frame.head.position.y + seatRaise; std::isfinite(h) && h > .8f && h < 2.4f)
                         standingEye = standingEye <= 0 ? h
                                       : h > standingEye
                                           ? standingEye + (h - standingEye) * std::min(1.f, frame.seconds * 4)
@@ -4454,7 +4981,7 @@ DWORD WINAPI run(void*) {
                         pose.flags = (flatScreen || !values.body ? 0u : native_body::bodyOn) | native_body::hideHead |
                                      native_body::handTurn |
                                      (swingState.owned && !motion.standing ? native_body::airborne : 0u) |
-                                     (calibratedEye > 0 ? native_body::calibrated : 0u) |
+                                     (calibratedEye > 0 || values.heightCm ? native_body::calibrated : 0u) |
                                      (motion.standing || crawlsFloor ? native_body::standing : 0u) |
                                      (kneels ? native_body::kneel : 0u) |
                                      // The game's crouches on the ground are not the body's, but a
@@ -4465,6 +4992,61 @@ DWORD WINAPI run(void*) {
                                           : 0u);
                         pose.standUp = motion.standUp;
                         pose.floor = motion.floor;
+                        // A dive: the legs kick out at him (body::Targets::kick).
+                        if (kickUntil > frame.predictedDisplayTime && finite(diveAt)) {
+                            pose.flags |= native_body::kick;
+                            pose.kick = diveAt - motion.anchor;
+                        }
+                        const bool wallGrip = game_swing::outdoorClimbGrip(
+                            climbState, frame.predictedDisplayTime > 0 ? frame.predictedDisplayTime : 0);
+                        const bool runningPose = wallRunBody.update(motion, hold, swingState.velocity,
+                            swingFresh && values.handClimb && values.body && !flatScreen &&
+                            !(pose.flags & native_body::kick), swingState.grounded != 0, wallGrip ? climbState.hands : 0, frame.seconds,
+                            vr_settings::fixedMomentumStepPace * .01f);
+                        if (motion.ventCrawl && values.handClimb && values.body && !flatScreen) {
+                            pose.flags |= native_body::ventHands |
+                                          native_body::crawlTouchFlags(motion.wallTouches);
+                            const auto sampleTime = frame.predictedDisplayTime > 0 ?
+                                static_cast<uint64_t>(frame.predictedDisplayTime) : 0;
+                            const bool fresh = climbState.status && climbState.crawl == 1 && sampleTime &&
+                                climbState.sampleTimeNs && sampleTime >= climbState.sampleTimeNs &&
+                                sampleTime - climbState.sampleTimeNs <= 100'000'000;
+                            pose.flags |= native_body::crawlHandFlags(fresh ? climbState.hands : 0);
+                            pose.crawlNormal = hold.normal;
+                            pose.floor = hold.anchor - motion.anchor;
+                        }
+                        if (wallCrawlBody.update(motion, hold,
+                            values.handClimb && values.body && !flatScreen && !runningPose,
+                            frame.seconds, wallGrip ? climbState.hands : 0)) {
+                            pose.flags |= native_body::crawl | native_body::crawlPlanted |
+                                          native_body::crawlHandSync;
+                            pose.flags |= native_body::crawlHandFlags(wallGrip ? climbState.hands : 0);
+                            pose.flags |= native_body::crawlTouchFlags(motion.wallTouches) |
+                                          native_body::crawlTurnAway;
+                            pose.floor = wallCrawlBody.floor();
+                            pose.crawlNormal = wallCrawlBody.normal();
+                            pose.crawlAhead = wallCrawlBody.ahead();
+                            pose.crawlStep = wallCrawlBody.step();
+                            pose.crawlPhase = wallCrawlBody.phase();
+                            pose.crawlMotion = wallCrawlBody.motion();
+                            pose.crawlOrigin = motion.anchor;
+                            pose.crawlStrokes[0] = wallCrawlBody.handSteps()[0];
+                            pose.crawlStrokes[1] = wallCrawlBody.handSteps()[1];
+                            pose.crawlDistance = static_cast<float>(vr_settings::fixedWallDistance) / 100.f;
+                        }
+                        if (runningPose) {
+                            pose.flags &= ~(native_body::standing | native_body::kneel);
+                            pose.flags |= native_body::wallRun | native_body::airborne;
+                            pose.floor = wallRunBody.floor();
+                            pose.crawlNormal = wallRunBody.normal();
+                            pose.crawlAhead = wallRunBody.ahead();
+                            pose.crawlPhase = wallRunBody.phase();
+                            pose.crawlMotion = wallRunBody.speed();
+                            pose.crawlDistance = vr_settings::fixedRunTorsoAngle * .0174532925f;
+                            pose.runBank = std::tan(vr_settings::fixedMomentumBodyTilt * .0174532925f);
+                            pose.runLean = vr_settings::fixedMomentumForwardLean * .0174532925f;
+                            pose.runStride = vr_settings::fixedMomentumStepLength * .01f;
+                        }
                         pose.eyes = Vec3{(motion.eyes[0][12] + motion.eyes[1][12]) / 2,
                                          (motion.eyes[0][13] + motion.eyes[1][13]) / 2,
                                          (motion.eyes[0][14] + motion.eyes[1][14]) / 2} -
@@ -4483,7 +5065,8 @@ DWORD WINAPI run(void*) {
                             HandPoseInput doing;
                             doing.tracked = tracked;
                             doing.wallContact = motion.active && !flatScreen && values.handClimb &&
-                                                climbState.status && (climbState.hands & (1u << i));
+                                ((motion.wallTouches & (1u << i)) ||
+                                 (climbState.status && (climbState.hands & (1u << i))));
                             doing.web = motion.swing.hands[i].grip;
                             doing.squeeze = hand.squeeze;
                             doing.speed = speed;
@@ -4497,13 +5080,22 @@ DWORD WINAPI run(void*) {
                                              tracked ? 1u : 0u, fingered.fist};
                             pose.shoot[i] = fingered.shoot;
                         }
-                        pose.height = calibratedEye > 0 ? calibratedEye : standingEye;
+                        // The player's size: HEIGHT when set, else the T-pose
+                        // calibration's, else the headset's running height.
+                        pose.height = values.heightCm ? seated::eyeHeight(values.heightCm)
+                                      : calibratedEye > 0 ? calibratedEye
+                                                          : standingEye;
                         pose.armLength = calibratedArm;
                         pose.trackingYaw = motion.swing.trackingYaw;
                         // A flip's tilt in world axes: the body turns with the player.
                         // Standing on a surface, the body already stands along it:
-                        // only a flip's own turns it further (none on a wall).
-                        if (const Quat tilt = motion.bodyTilt();
+                        // only a flip turns its planted pose further (none on a wall).
+                        // The running body follows the existing wall-standing
+                        // view about its eyes. Momentum runs retain their pose;
+                        // residual surface rotation also follows on stick release.
+                        const Quat bodyTilt = runningPose
+                            ? (motion.viewTilt > .0001f ? motion.swing.tilt : Quat{}) : motion.bodyTilt();
+                        if (const Quat tilt = bodyTilt;
                             tilt.x != 0 || tilt.y != 0 || tilt.z != 0) {
                             const Quat yaw = Quat::yaw(motion.swing.trackingYaw);
                             pose.tilt = yaw * tilt * yaw.conjugate();
@@ -4540,10 +5132,12 @@ DWORD WINAPI run(void*) {
                     saved.trackingEyes = frame.eyes;
                     saved.flatScreen = flatScreen;
                     saved.uiStyle = values.uiStyle == 1 ? UiStyle::tech : UiStyle::comic;
+                    saved.combatVisuals = values.combatVisuals;
                     saved.screenPose = screenPose;
                     saved.screenAspect = SpidyFlatAspect();
-                    saved.slow = moments.view(slowMotion.view());
+                    saved.slow = values.combatVisuals ? moments.view(slowMotion.view()) : slowMotion.view();
                     saved.venomGlow = venomGlow;
+                    saved.padLayer = padLayer.latched();
                     if (gadgetWheel.open()) {
                         // The gadget wheel, from tracking space into this frame's
                         // world, with the gadgets in their places.
@@ -4601,6 +5195,9 @@ DWORD WINAPI run(void*) {
                     }
                     saved.webSlots = {webRopes.slot(0), webRopes.slot(1)};
                     saved.strandUpper = webRopes.upper();
+                    saved.webFlight = webFlight;
+                    for (unsigned i = 0; i < 2; ++i)
+                        saved.flightVisual[i] = flightVisual[i];
                     if (calibration.phase() != body_calibration::Phase::idle) {
                         // The panel stays where it appeared in the room; the tracking
                         // space is where this frame's head puts it in the world.
@@ -4858,7 +5455,19 @@ DWORD WINAPI run(void*) {
                                 line.end = web.anchor;
                                 line.slack = web.tension > 0 ? 0.f
                                                              : std::max(web.length - length(line.end - line.start), 0.f);
-                                line.extended = WebAnimation::extended((shown - timing.attachedAt) * 1e-9f);
+                                if (saved->webFlight.durations[hand] > 0) {
+                                    line.extended = 1;
+                                    if (saved->flightVisual[hand].flying()) {
+                                        line.end = saved->flightVisual[hand].tip();
+                                        line.splat = false;
+                                        line.slack = 0;
+                                        line.flightProgress = saved->flightVisual[hand].progress();
+                                        line.flightAge = saved->flightVisual[hand].age();
+                                        line.flightDirection = saved->flightVisual[hand].direction();
+                                    }
+                                } else
+                                    line.extended =
+                                        WebAnimation::extended((shown - timing.attachedAt) * 1e-9f);
                                 appendWeb(vertices, line, viewer, pixelAngle);
                             } else if (WebAnimation::released((shown - timing.releasedAt) * 1e-9f, shooter,
                                                               timing.anchor, line)) {
@@ -4969,8 +5578,17 @@ DWORD WINAPI run(void*) {
                                 view.age = static_cast<float>(static_cast<double>(shown - burst.since) * 1e-9);
                                 appendVenomBurst(translucent, view, viewer, pixelAngle);
                             }
+                        // The pad layer's sign over the back of the right wrist while
+                        // it is on: until October 25 only a buzz said so.
+                        if (!saved->flatScreen && saved->padLayer && rendered.swing.hands[1].tracked) {
+                            auto wrist = rendered.hands[1];
+                            wrist.position += travel;
+                            appendPadLayerSign(translucent, wrist, viewer, pixelAngle, saved->uiStyle);
+                        }
+                        // Hide combat artwork only; targeting, damage, counters and haptics still update.
+                        const bool combatVisuals = values.combatVisuals && saved->combatVisuals && !saved->flatScreen;
                         // The bursts where the latest blows landed: fixed in the world.
-                        if (!saved->flatScreen)
+                        if (combatVisuals)
                             for (const auto& burst : bursts) {
                                 if (!burst.since)
                                     continue;
@@ -4986,14 +5604,14 @@ DWORD WINAPI run(void*) {
                                                static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 1000.))},
                                               viewer, pixelAngle);
                         // The called blow's arrow, over its thug.
-                        if (!saved->flatScreen && cue.left > 0) {
+                        if (combatVisuals && cue.left > 0) {
                             auto view = cue;
                             view.age = static_cast<float>(static_cast<double>(shown - cueSince) * 1e-9);
                             if (view.age >= 0)
                                 appendCue(translucent, view, viewer, pixelAngle, saved->uiStyle);
                         }
                         // A knockout's lettering, where he stood.
-                        if (!saved->flatScreen)
+                        if (combatVisuals)
                             for (const auto& mark : knockoutMarks) {
                                 if (!mark.since)
                                     continue;
@@ -5003,6 +5621,7 @@ DWORD WINAPI run(void*) {
                             }
                         // Spider-Sense's marks: over each attacker's head, and for one out of
                         // view in the sightline as well, moved with the player as the eyes are.
+                        // Attack warnings remain visible independently of optional combat artwork.
                         if (!saved->flatScreen && validTrackedPose(rendered.headPose)) {
                             Pose eyes = rendered.headPose;
                             eyes.position += travel;
@@ -5051,6 +5670,20 @@ DWORD WINAPI run(void*) {
                             view.frame.centre += travel;
                             appendGadgetWheel(translucent, view, viewer, pixelAngle, saved->uiStyle);
                         }
+                        // From here on the overlay is drawn about the eyes' middle,
+                        // not the world's origin. The city is kilometres across, and
+                        // a vertex there taken through the eye's view-projection in
+                        // single floats was off by a tenth of a millimetre or so,
+                        // each by its own amount and anew every frame: the phone's
+                        // screen, 0.3 mm over its glass, lost to the glass at a
+                        // fifth of its points 1158 m out (the user, October 24:
+                        // "still z-fighting between screen and its body"). About
+                        // the eyes the error is a thousandth of that.
+                        const Vec3 about = viewer;
+                        for (auto& v : vertices)
+                            v.position = v.position - about;
+                        for (auto& v : translucent)
+                            v.position = v.position - about;
                         // The phone where it is now - in the hand, where the hand is
                         // now - through this image's own way into its world, and
                         // moved with the player to this image as the wheel is.
@@ -5076,9 +5709,12 @@ DWORD WINAPI run(void*) {
                             view.open = true;
                             view.age = phone.age();
                             const Quat turn = toWorld.orientation;
-                            view.frame = {compose(toWorld, Pose{f.centre, {}}).position + travel,
+                            view.frame = {compose(toWorld, Pose{f.centre, {}}).position + travel - about,
                                           turn.rotate(f.right), turn.rotate(f.up), turn.rotate(f.out)};
-                            appendPhone(vertices, view);
+                            appendPhone(vertices, view, viewer - about);
+                            appendPhoneScreen(phoneScreen, view);
+                            phonePicture = {phoneScreen, phoneScreenHalfWidth, phoneScreenHalfHeight,
+                                            phoneScreenCorners(view), phoneScreenGlass()};
                         }
                         std::array<D3D12Renderer::ViewTarget, 2> overlayViews;
                         // Slow motion recolours the image under the overlay, about each eye's lens.
@@ -5095,10 +5731,11 @@ DWORD WINAPI run(void*) {
                         for (unsigned eye = 0; eye < 2; ++eye) {
                             const auto& target = targets[eye];
                             const auto& f = rendered.fovs[eye];
+                            // The eye about the eyes' middle, as the overlay is.
                             auto pose = rendered.eyes[eye];
-                            pose[12] += travel.x;
-                            pose[13] += travel.y;
-                            pose[14] += travel.z;
+                            pose[12] += travel.x - about.x;
+                            pose[13] += travel.y - about.y;
+                            pose[14] += travel.z - about.z;
                             const auto vp = multiply(projection(f.left, f.right, f.down, f.up, .03f, 200.f),
                                                      native_view::view(pose));
                             overlayViews[eye] = {target.texture, target.format, target.width, target.height,
@@ -5346,7 +5983,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
     startSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingStart"));
     submitSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSubmit"));
     sampleSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSample"));
+    sampleSlingshot = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySlingshotSample"));
     sampleBends = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingBends"));
+    sampleWebFlight = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyWebFlightSample"));
     sampleClimb = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyClimbSample"));
     rayResults = reinterpret_cast<const native_rays::Data*>(GetProcAddress(rays, "SpidyRayData"));
     stopSwing = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingStop"));
@@ -5364,6 +6003,18 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
     // Optional: an older ray module has no venom punch.
     venomCall = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyVenom"));
     sampleSense = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySenseSample"));
+    aimGameThrow = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyThrowAim"));
+    soundResults = reinterpret_cast<const game_sound::Data*>(GetProcAddress(rays, "SpidySoundData"));
+    soundMode = reinterpret_cast<DWORD(WINAPI*)(void*)>(GetProcAddress(rays, "SpidySoundMode"));
+    if (const game_sound::Data expected; soundResults && (soundResults->magic != expected.magic ||
+                                                          soundResults->version != expected.version ||
+                                                          soundResults->bytes != expected.bytes))
+        soundResults = nullptr;
+    dodgeResults = reinterpret_cast<const game_dodge::Data*>(GetProcAddress(rays, "SpidyDodgeData"));
+    if (const game_dodge::Data expected; dodgeResults && (dodgeResults->magic != expected.magic ||
+                                                          dodgeResults->version != expected.version ||
+                                                          dodgeResults->bytes != expected.bytes))
+        dodgeResults = nullptr;
     swingSettings = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidySwingSettings"));
     // Optional: an older ray module has no web shooter.
     startShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterStart"));

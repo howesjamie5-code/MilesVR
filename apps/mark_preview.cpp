@@ -354,6 +354,15 @@ int main(int argc, char** argv) {
                          {"SLOW 35% LATER", meter(.35f, true, 1, 0, .6f)},
                          {"REFUSED", meter(.1f, false, 0, 1, 0)},
                          {"EMPTY", meter(0, false, 0, 0, 0)}});
+            // The pad layer's sign over the back of a right hand held with no turn, 0.4 m and 0.6 m off.
+            const auto sign = [&](float metres) {
+                std::vector<Vertex> v;
+                const Pose hand{camera.ray(scene.u, scene.v) * metres - Vec3{0, .07f, .065f}, {}};
+                appendPadLayerSign(v, hand, viewer, pixelAngle, style);
+                return v;
+            };
+            ok &= sheet(name + "padlayer.bmp", scene.backdrop, camera, scene.u, scene.v,
+                        static_cast<int>(130 * scale), 2, {{"0.4 M", sign(.4f)}, {"0.6 M", sign(.6f)}});
             // The calibration panel 1.4 m ahead, as the XR worker places it, waiting, holding and done; and a
             // controller's ring.
             body_calibration::View calibration;

@@ -406,13 +406,17 @@ uint32_t game_offers::start(uintptr_t imageBase) {
             hooked = true;
         }
         enabled = true;
+        // Under one freeze of the game's threads (stereo_probe.cpp says why).
         for (auto* hook : hooks)
-            if (const auto s = MH_EnableHook(hook); s != MH_OK && s != MH_ERROR_ENABLED && !result)
+            if (const auto s = MH_QueueEnableHook(hook); s != MH_OK && !result)
                 result = 9770 + s;
+        if (const auto s = result ? MH_OK : MH_ApplyQueued(); s != MH_OK)
+            result = 9770 + s;
         if (result) {
             enabled = false;
             for (auto* hook : hooks)
-                MH_DisableHook(hook);
+                MH_QueueDisableHook(hook);
+            MH_ApplyQueued();
         }
     } while (false);
     publish([&](Data& d) {

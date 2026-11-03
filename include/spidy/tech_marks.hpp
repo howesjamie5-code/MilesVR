@@ -33,6 +33,8 @@ void appendAimMarker(std::vector<Vertex>& out, const AimMarker& marker, Vec3 vie
 // round an hourglass, a sweep turning round it in slow motion.
 void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view, Pose hand, Vec3 viewer,
                            float pixelAngle, float seconds);
+// The pad layer's sign: a tag as the knockout's over the right wrist.
+void appendPadLayerSign(std::vector<Vertex>& out, Pose hand, Vec3 viewer, float pixelAngle);
 // A landed blow: a hit marker's four strokes springing out and a ring going
 // out from it, amber for a hard blow, two rings for a finisher; the count
 // on a callout.

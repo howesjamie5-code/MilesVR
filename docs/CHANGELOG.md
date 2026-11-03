@@ -3,7 +3,1190 @@
 Every build, newest first, with what changed, why, and what was measured.
 Per-check results are in [VALIDATION.md](VALIDATION.md).
 
-**Latest build (October 21, fourth): RECORDING FOV, optional - pull request
+**Latest build (October 30): Spidy 0.7.0, the community patch - twelve pull
+requests.** You: "review open prs and fix what needs fixes, merge whats
+done", then "make a 0.7 release from what you merged - call it community
+patch".
+
+- **tristanlifn (#36): closing a menu no longer ends VR.** Around a menu
+  closing the game can take a few seconds to render a new eye pair while the
+  headset shows the last one, and the watchdog counted only new pairs
+  ("Native eye presentation stalled for 3 seconds"). It ends VR now only
+  when nothing at all reaches the headset for 3 seconds.
+- **AdrianGzzEsc (#37): COMBAT VISUALS off, uppercuts and ground smashes
+  need no hidden call.** Without the arrows there is nothing to follow, so
+  the directional calls are gone with them: an uppercut launches, a blow
+  down knocks a standing enemy down or slams one in the air, finisher count
+  or not.
+- **iplusdvr (#39 to #48), every new setting off or as before until you pick
+  it:** WEB RANGE (10 to 1000 m) and WEB SPEED (a web flies to where it
+  sticks, pulls once it arrives and catches softly), SMART ANCHOR (with
+  open-air webs off, a near miss catches the nearest real surface), ELASTIC
+  WEB, SOFT RELEASE, SWING ASSIST (speed into a wall is cut in time),
+  SLINGSHOT SPEED (up to 300 m/s), BETTER CLIMBING from the ground and on
+  open-air webs, TWO HAND WEB ZIP and HAND ROPE STEERING, HAND MOMENTUM down
+  to 0%, RECORDING FOV from 70 to 160 degrees and RECORDING SMOOTHING.
+- **The review's fixes**, one commit on each branch: the swing settings'
+  versions in sequence (11 to 20; nine pull requests had each taken 11), each
+  new row in its own section with a launcher row, nine choices at most a row,
+  and nothing changed for players who leave the new settings alone (#44's
+  strand check, #48's attach vibration and ray limit). The SPIDY VR tab has
+  62 rows. #38 (JOYSTICK WALL RUN CAMERA, HALF PUNCH DAMAGE) waits for your
+  review: it changes HAND WALL CLIMBING's wall run by default.
+- **Checked:** ctest 3/3 and the six Python protocol suites on the twelve
+  together, built after each step. Not run: the game, a headset (each author
+  played their own feature in their own build).
+
+**Earlier build (October 27, eighth): a floor too high is caught by your
+arms.** You: "height calibration showed very wrong number in one of today's
+sessions - 1.43 or something instead of 1.88".
+
+- **What happened (14:17 session, Quest Pro over Virtual Desktop).** The
+  calibration measured what the headset said: your eyes 1.33 to 1.34 m above
+  its floor through the hold, and 1.30 to 1.33 m standing all through that
+  session, before and after it. At 13:48 the same headset had you at 1.78 to
+  1.80 m: its floor rose about 0.45 m between the two (at 14:03 and 14:05 it
+  lay still at 0.56 m, on the desk). So the whole session's view stood that
+  much low, not only the panel's number. 1.43 m is inside HEIGHT's 1.20 to
+  2.20 m, so the October 27 fourth build's check let it through; launcher.ini
+  now holds eye_height_mm=1334, arm_length_mm=614 (it held 1758 and 560).
+- **The fix: the controllers' span.** Arms straight out, your controllers
+  were 1.65 m apart in both calibrations (1.63 to 1.66 m), whatever the
+  floor: 0.94 of your eyes on October 26, 1.24 of the 1.33 m today. Arms
+  reach no further than straight, so a span over 1.15 times the eyes'
+  height now holds the pose with CHECK YOUR HEADSET'S FLOOR
+  (`Config::widestSpan`, checked once both arms are out and straight). For
+  you it catches a floor more than about 0.3 m too high; a player whose arm
+  span is 10% over their height stays well under it.
+- **Checked:** 703 core tests (new: your T-pose at eyes 1.758 m counts, at
+  1.334 m asks for the floor; the shortest player's arms now in proportion),
+  ctest. Not run: the headset.
+
+**Earlier build (October 27, seventh): EYE AIM gets a Quest Pro's eyes over
+Virtual Desktop.** You: "eye tracking didnt work on my quest pro just now",
+then, with eye tracking on in the headset, "it still isn't working again".
+
+- **First run (13:48): no tracker.** Virtual Desktop's runtime says a
+  headset has an eye tracker only when its Streamer shares the eyes on the
+  PC (`VirtualDesktop.BodyState`) and the headset reports eye tracking; the
+  shared eyes were empty. Its Streaming setting "Forward face/eye tracking to
+  PC" was off: switched on, both eyes came through at 14:03.
+- **Then a tracker and still no gaze (14:03, 14:05): 0 of 4,675 frames.**
+  The runtime (v1.0.10) gives a gaze only when both eyes are valid and more
+  than half confident (`eye_tracking.cpp`), and the Quest Pro's eyes came at
+  exactly 0.50 in every reading, with the eyes moving. Foveated streaming
+  works because Virtual Desktop does it in the headset, not through that check.
+- **The fix.** On Virtual Desktop's runtime (it calls itself
+  VirtualDesktopXR), when it gives no gaze, Spidy reads the eyes from the
+  Streamer's shared state itself (`vd_eyes.hpp`): both eyes valid, at least
+  half confident, unit orientations; their two lines averaged, relative to
+  the head, on the frame's head pose. Other runtimes, and Virtual Desktop
+  whenever its own gaze comes, are as before. No protocol change.
+- **The session log** on Virtual Desktop now names both switches when it has
+  no tracker: eye tracking in the headset (Settings > Movement tracking) and
+  Forward face/eye tracking to PC in its Streaming settings.
+- **Checked:** 703 core tests (new: the shared eyes at half confidence, one
+  eye, an unsure eye, a broken orientation), the six Python suites (new: the
+  Virtual Desktop line). The layout read live on this PC: both eyes valid,
+  confidence 0.50/0.50, the gaze moving. Not run: a session with the fix.
+
+**Earlier build (October 27, sixth): the buildings beside you keep their full
+models, and textures get room.** You: "there is still a bug where buildings
+and detail on objects is low even when really visible and nearby mostly when
+swinging, and it loads in the proper model\textures\lod in front on my eyes
+very crearly. suddenly a blurry low detail large building would pop into an
+sharp detailed version of itself. maybe the culling system is not tracking
+the right camera or body".
+
+- **Which camera each part follows, read from the game's code.** The world's
+  units stream around your body (the hex streaming source is the player's
+  position). Props and details near you become full models within distances
+  of the game's active view (`UpdateHibernateRegistration`, `1a22530`, given
+  the view at `7a34ec8`, the one `189daa0` tests), which Spidy keeps on your
+  head with a lens over both eyes. Each eye picks its own level of detail and
+  asks for its own textures (since October 19). One part was not on your
+  head: which far buildings draw their full models.
+- **The cause: the left eye's exact picture.** A far building is an impostor,
+  a card, until the deciding view wants its full model, and nothing that view
+  does not see keeps one: each frame's wanted states start at none
+  (`16fadbe`), only the impostors that view's frustum query returns get one
+  (`16f8ae0`), and every other one's full model goes that same frame
+  (`16f7f30`). Since October 19 the left eye decides, so the right eye's outer
+  edge never counted, and a building lost its model the moment it left that
+  eye's picture. Swinging with your head ahead, the buildings beside you were
+  cards; turning to look at one swapped it back in front of you, the full
+  model fading in and then streaming its textures.
+- **What changed: a cone about your head.** The left eye's query for far
+  buildings takes the lens over both eyes widened by 30 degrees each way, to
+  at most 80 from straight ahead (about 160 by 159 degrees on a Quest 3),
+  made into the cull the game makes for an eye (`187de80`; the query copies
+  it). Buildings beside you and just out of view keep their full models; the
+  eyes' own culling still draws only what each sees.
+- **A pool the details share.** The full models take their slots from a pool
+  of the scene's (`7a42f80`: size `+1c8`, in use `+1cc`) that the nearby
+  props and details register from too, each checking for room first
+  (`190cb80`); a full pool leaves a zone's details as they were until slots
+  free up. The cone's margin eases off from 60% full to none at 85%, a degree
+  a frame. The pool's size comes from the game's data files, so how full it
+  gets in VR is not known yet: the report says.
+- **Textures: up to twice the budget where the card has room.** In your
+  October 26 session the texture streamer's budget (3,874 MB at Very High,
+  `7a793c0`) was full in every minute, 3,858 to 3,872 MB, with 22 GB of the
+  5090's 32 unused, so a texture came in sharp only once another went. The
+  budget is an account the streamer evicts by, not memory set aside (its heap
+  is made with no size, `19b2e50`). While both eyes render it is raised to at
+  most twice the game's, leaving an eighth of the card's budget for the game
+  (DXGI's), at least 2 GB, free: 7,748 MB on your card, about 6,800 on a 16
+  GB card with 5 GB to spare, the game's own on a 12 GB card in VR. It is
+  looked at every two seconds; with less than 1 GB of the card's budget left
+  the game's comes back for the session, and at the end of VR in any case.
+- **The report's `streaming`** (`SpidyStreamData`, a new export; XrData and
+  the appearance data are unchanged): the cone's frames, margin and angles,
+  the pool's size, use, most and frames 85% full, the game's and the eyes'
+  texture budgets and the card's numbers; each sample has the margin, the
+  pool's use, the budget and the card's use. `SpidyBuildingCone` (0-60
+  degrees, 0 the eye's own lens) and `SpidyTextureBudget` (0 or 1) are there
+  for comparisons.
+- **Checked:** a build of the working tree in a separate folder, ctest 3/3,
+  702 core tests (new: the cone for a Quest 3 lens and lopsided ones, at most
+  80 degrees, never narrower, numbers that are no lens; the pool's easing;
+  the budget for a 32, 16 and 12 GB card, and a card running short), the six
+  Python suites (new: `SpidyStreamData` decoded, torn and of another
+  version), the graphics test with the debug layer, and the built module's
+  new exports refusing a margin over 60 and a budget switch over 1. Not run:
+  the game or the headset. In the headset: swing along a street looking
+  ahead, then look at the buildings beside you; and the report's `streaming`
+  says how full the pool got and what the texture budget was.
+
+**Earlier build (October 27, fifth): EYE AIM - web balls and zips go where
+your eyes look, on a headset that tracks them.** You: "lets make eye tracked
+aiming for zipping and webshooting on xr runtime and headsets where its an
+option (make it optional)".
+
+- **The setting.** EYE AIM, under EXPERIMENTAL before REALISTIC FLIPS: OFF
+  (the default), WEB BALLS, ZIPS or BOTH; kept in spidy_vr.ini as
+  `eye_aim`, and in the launcher's Webs card. Not in settings profiles: it
+  is the headset's, as RECORDING FOV is the monitor's.
+- **Where the eyes come from.** OpenXR's `XR_EXT_eye_gaze_interaction`,
+  enabled wherever the runtime lists it, its pose in an action set of its
+  own that is synced only while EYE AIM is on; a gaze counts only while the
+  tracker tracks it. Whether the headset has a tracker the system says
+  (`supportsEyeGazeInteraction`). Without one, or with the row off, hands
+  aim web balls and the head zips exactly as before.
+- **Web balls.** The trigger still fires from the hand that pulled; the eyes
+  pick what the ball goes to (`Shooter::aim` with a `ShooterGaze`): the
+  enemy nearest their line within the same assist (one they cannot see past
+  a wall is not taken), else the first surface on it, else open air along
+  it. Looking at the hand itself leaves the aim to the hand.
+- **Zips.** The game zips to the point its own camera has in view, so from
+  the stick going up for a zip to the zip's end the camera is turned onto
+  what the eyes look at - the point the gaze meets (the swing module's aim
+  previews raycast it, `AimData::gaze`), seen from where that camera stands
+  - with a close band (starts at 2.5 degrees, rests within 1; the head's is
+  12 and 4). A tap waits for the camera to be within 3 degrees, a third of a
+  second at most (`game_pad::EyeZip`); a hold into the game's aim mode
+  follows the eyes until let go.
+- **Protocol.** Swing Command v6 (272 bytes: v5's 4 bytes of padding named,
+  then the gaze and its web-ball bit; v2-v5 still taken), AimData v2 (128,
+  `tools/probe_aim.py` too), XrData v43 (1312: eye tracking, the row,
+  frames with it on and with the eyes tracked, balls the eyes aimed, zips
+  on the camera's point and late ones; the report's `eye_aim`). The
+  session log says once what the eyes can do ("Eye aim: ..."), and warns
+  when a tracker sends no gaze in 3 s of play.
+- **Checked:** 699 core tests (new: the eyes' wall, thug, hidden thug, sky and
+  hand; the camera's close band; EyeZip's wait and counts; the camera's
+  look from where it stands; Command v6; the row and its ini key), 38
+  launcher checks, the six Python suites (new: XrData v43 and the log line).
+  The instance-only probe (`spidy_xr_lab --probe`): Virtual Desktop's
+  runtime takes the eye gaze binding; Meta's on this PC does not list the
+  extension (its runtime has it, and seems to offer it only with eye
+  tracking over Link switched on). Not run: any headset with eye tracking,
+  or the game.
+
+**Earlier build (October 27, fourth): the calibration shows your height, and
+a wrong headset floor no longer counts.** You: "calibration menu shows wrong
+numbers for some reason - (im around 1,88 m and it shows 1.7 something),
+others reported on discord".
+
+- **Your height, not your eyes.** The CALIBRATED panel (both UI styles) said
+  EYE HEIGHT, the height of the eyes above the floor, which reads as a wrong
+  height: your launcher.ini holds 1.758 m, right for a 1.88 m player. The
+  panel now says HEIGHT, the eye height / 0.936 (the share HEIGHT uses,
+  `seated::eyeShare`): 1.88 M for you. The launcher's "Body calibration" row
+  says "Height 1.88 m (eyes at 1.76 m)". Nothing measured or kept changed:
+  launcher.ini and the session still hold the eye height.
+- **CHECK YOUR HEADSET'S FLOOR.** The two reports on the Discord were not
+  about the label: "2.50 meters tall" (0.3.8, Virtual Desktop, October 19)
+  and "I am 170cm but the calibration measures me for 105cm" (0.4.0, Link,
+  October 21), both gone after the players reset things. Those are eyes
+  measured from a floor the headset had wrong, and the calibration took
+  anything above 1 m. Eyes that give a height outside HEIGHT's 1.20 to 2.20 m
+  now hold the pose with that line instead of baking the wrong size in (the
+  report's calibration hint `floor`, 8; the others keep their numbers).
+- **Checked** in a scratch build of main with only this change: the core
+  tests (697; new: eyes 1.05 and 2.50 m up ask for the floor, 1.13 and 2.05 m
+  count, 1.758 m is a 1.878 m player), the launcher tests, the six Python
+  protocol suites, and the GPU test's panel (eyes 1.63 m read HEIGHT 1.74 M).
+  Not run: the headset.
+
+**Earlier build (October 27, third): the phone's pocket stays put, and the
+report says why a draw failed.** You, on why so many players cannot draw the
+phone, to my two proposals: "sure do both".
+
+- **A look at the pocket no longer turns it away.** The pocket is the body's,
+  and the body's way followed the head past 34 degrees and drifted half the
+  rest a second, so looking over a shoulder at the pocket you reach for
+  turned it toward the side: a back pocket 20 cm behind the eyes read 7.5
+  after a second's look at 60 degrees. The pocket's way now follows only
+  looks past about 70 degrees (1.2 rad), and drifts 0.2 a second.
+- **Measured from the neck.** The eyes go round the neck as the head turns
+  or nods (a nod brings them 4 to 5 cm forward), and every distance was from
+  the eyes. The pocket is now measured from a neck 10 cm under and 9 cm
+  behind the eyes in the head's own axes: 45 to 100 cm under it, 5 to 40 cm
+  to the side, 6 cm behind (the same pocket as before with the head straight:
+  a back pocket about 11 cm behind the neck, a hand hanging at the side about
+  1). Bringing the phone out in front is still judged from the eyes.
+- **The session report's `pocket`** (XrData version 42): grip presses that
+  may have been for the phone (in play, the hand 30 cm or more under the
+  neck and no more than 10 cm in front of it, or lost), draws begun, phones
+  out, draws too slow or let go of, presses that began none by why (`lost`,
+  `high`, `low`, `central`, `wide`, `ahead`), and the latest miss with the
+  hand from the neck, how long the headset had lost it and how far the head
+  looked from the body's way. One report from a player who cannot draw it
+  now tells which.
+- **Checked:** the core tests (new: a 60 degree look held a second at the
+  pocket, a nod with the hand at the side, every count; the old pocket fails
+  the look) and the protocol test of version 42. Not run: the headset. The
+  stereo module and the Python runner must come from one build (version 42).
+
+**Integration (October 27): every open branch and pull request together.**
+You: "create a merge with all changed for all active branches\prs". Branch
+`integration-2026-10-27`, on main (#33 in it) with the fixes below:
+
+- **Pull request #34** (AdrianGzzEsc): wall-run animations, controlled
+  flips and the COMBAT VISUALS switch, then spidy-1b's review corrections:
+  COMBAT VISUALS on by default, vents with the hands still off (October 24),
+  no row with more than 9 choices. Its FLIPS rework (FLIPS on the right
+  stick, CONTROLLED FLIPS) waits on your review of the flip settings; the
+  body command is version 16, so the stereo and body modules come from one
+  build.
+- **Copy for Discord** (October 12, never merged): a button beside Reports
+  above the session log copies a short code block for a help post (Spidy's
+  version, runtime, headset, game, graphics card, memory, upscaling, render
+  resolution, web button, the last session's last line and error, no
+  Windows user name). Moved onto the October 21 launcher, which had
+  rewritten the card it sat in.
+- **The release announces itself** (October 12, asked for October 20): the
+  Release workflow posts the new version to #spidy-updates through the
+  DISCORD_SPIDY_RELEASES_WEBHOOK secret (`tools/announce_release.ps1`), new
+  releases only, and a failed post leaves the release standing. Once this
+  is on main every release is announced there automatically.
+- **Checked:** the build, the core, flips and launcher tests (38 of 38),
+  every Python suite, the graphics test with the debug layer. Not run: the
+  game, the headset, a release run.
+
+**Earlier build (October 27): fixes from the players' 0.5.0 reports.** You:
+"review bugs on discord in bugs and spidy chat, fix what you know how to or
+problems where the user provided to info for reseach (reports, save etc)".
+
+- **No Ground Strike in the middle of a swing.** Since 0.5.0 both fists
+  thrown down hard in the air were the Ground Strike, and a hard pull down on
+  two webs is that motion: the webs let go mid-pull, the arms went on down,
+  and the game's Ground Strike dashed players to the ground ("Can't Swing",
+  owen_scorpion, tacomaster699, frost_vr1 and a bug post asking for a
+  switch). Now it needs an enemy near (the 3 s FLIPS IN COMBAT already used),
+  and a hand whose web let go in the last 0.4 s throws no blow at all, a
+  prompt's X included. owen_scorpion's session showed REALISTIC FLIPS off,
+  where the slam had no limit.
+- **"Native eye presentation stalled for 3 seconds" as play begins.**
+  LOST_INVAD3 measured it on a PC with some 10,000 threads: MinHook lists
+  every thread on the PC each time it switches a hook on, about 300 ms each
+  there, and the eyes' start switched on 26 one by one and the swing's 11
+  (7.9 s and 4.2 s; the eyes stop after 0.25 s without the XR thread). The
+  reports of "crashes as soon as I load" since 0.5.0 (ghostboi1918,
+  exist483, fnafgamer0) end the same way: `prepare` 6.1 to 6.2 s, one or two
+  stereo pairs. Each module start now switches its hooks on together under
+  one freeze, as `game_menu` did: the stereo probe (19), the HUD (4), the
+  webs (2), the eye GPU (4, then the presented frame's 2), movement (4),
+  offers, shooter and throw (3 each) and the controller (its XInput
+  modules). Movement's stop takes them off together too, and a failed start
+  takes off what it queued, so no later start switches them on by accident.
+  His numbers after the same change: eyes 1.6 s, swing 1.4 s.
+- **Spidy in a folder named outside the PC's code page.** haim.knafo's Spidy
+  sat in OneDrive's Hebrew Desktop, and every start said the game held
+  "Spidy from another folder (C:\Users\...\????? ??????\...)": its own.
+  Windows' module snapshot hands paths through the ANSI code page, so a
+  Hebrew (or Cyrillic, or Japanese) letter came back as `?` and matched
+  nothing. Such paths are read again from the game's loader
+  (`GetModuleFileNameExW`). Reproduced here with a DLL in a Hebrew folder:
+  `????? ??????` before, the real name after.
+- **An empty saved-settings file no longer stops every start.**
+  spazzmatic_1's `desktop-view-before-vr.json` was empty (the PC went off as
+  it was written, most likely), and each start ended in a Python traceback,
+  "Expecting value: line 1 column 1". An unreadable file is now set aside
+  as `desktop-view-before-vr.unreadable.json` with a warning, and the file is
+  written whole or not at all (a temporary file, then a rename).
+- **The phone from the back pocket, for a hand the headset loses.** A Quest
+  stops seeing a controller at the side of the hip on its way back, and the
+  pocket was judged where it was last seen, short of 15 cm behind the eyes:
+  players found theirs "just above the knee", where the cameras still see
+  it. A hand lost on its way is now carried along the way it was moving for
+  up to 0.3 s (at most 2.5 m/s); one hanging still at the side goes nowhere,
+  so its grip stays a web's.
+- **Not changed, waiting on you or on reports:** X as the throw and as the
+  gadget wheel (in a fight full of props X throws, and players ask for the
+  wheel on another control); bosses that freeze or float after a launch
+  (Doc Ock, Mr Negative, Octavius: Spidy asks the game to fling a bot its
+  blow did not fling within 0.4 s, which may be what a boss does not
+  recover from; not checked); the reel failing since 0.5.0 (no report yet).
+- **Checked:** the build, the core tests (new: the slam with webs let go
+  mid-pull and a moment later, a fist just off its web, a hand lost on its
+  way to the pocket and one lost hanging still), every Python suite (new:
+  the unreadable backup, the Hebrew folder in a real process). Not run: the
+  game and the headset, so neither the hooks' start nor the pocket was
+  tried in play.
+
+**Earlier build (October 25, third): the controls in four pictures.** You:
+"lets update the control infographic and also maybe describe controls in
+context and add the motion actions and what's in the phone", then "can we
+make an infograhpic with other common controllers with diffirent button
+layouts, like frame, psvr2 and index".
+
+- **The controls picture is current again.** X: hold it for the gadget
+  wheel, and where the game shows LB + RB it throws a prop or tears off a
+  door (the right stick's click no longer does). Both sticks clicked: the pad
+  layer. The red box: LB + RB is X, and LT, LB, RT or RB alone is one of
+  your triggers. In the row along the bottom the phone, drawn from behind
+  the hip, took the pad layer's place.
+- **The moves, by where you are**, a second picture: what your body does
+  without a button, in four columns (on a web, in a fight, Spider-Sense,
+  anywhere). The ring, a called blow, the finisher and the three
+  Spider-Sense colours are the game's own marks as `spidy_mark_preview`
+  draws them; small figures show the hand at the temple, the hands at the
+  chest, the draw from the back pocket and the T-pose. Realistic flips and
+  hand wall climbing are at the foot, as off until you switch them on.
+- **Your phone**, a third: how to draw it, the keys while it is out, and
+  its four apps (MUSIC, MENU, GEAR, CAMERA), the phone drawn by
+  `spidy_phone_preview` (its sample song named TRACK 03 there).
+- **Your controller**, a fourth: the buttons that differ, side by side for
+  Quest Touch, the Steam Frame, the Valve Index and PS VR2 Sense controllers
+  (jump, dodge, interact, the gadget wheel, pause, the game menu, heal, web
+  and reel), each named as it is printed on that controller, in the colour
+  of its hand. The Quest, Frame and Index are rendered from their models
+  (the WebXR one for the Quest, SteamVR's own for the other two); no model
+  of the PS VR2 Sense controllers is free to use, so theirs is a likeness
+  built from simple shapes (the white band round the dark loop, the stick
+  and two face buttons), lit and turned as the others are. PS VR2
+  controllers play SteamVR's translation of the Touch layout (Cross and
+  Circle are A and B, Square and Triangle X and Y, with no menu button), as
+  a community port for those controllers describes it; it says so on the
+  picture, with "no player report yet".
+- **The players' guide has the Index's and PS VR2's buttons** beside the
+  Steam Frame's.
+- **The README and the launcher's Controls tab show all four**, one under
+  another, before the controls in words.
+- **Checked:** the launcher built (no warnings) and its 32 checks; a test
+  copy's Controls tab shows the three in order. Every line on the pictures
+  checked against [PLAYERS.md](PLAYERS.md). Not run: the game and the
+  headset (nothing in them changed).
+
+**Earlier build (October 25, second): the pad layer shows, and drawing the
+phone leaves it.** You, after the 10:23 session: "I couldn't access the phone
+and some other aspects of the vr mode broke after playing around with
+camera (was fixed by opening and closing the pause menu)".
+
+- **What happened:** two seconds after you took the game's camera out from
+  the phone, a click of both thumbsticks latched the pad layer (the whole Xbox
+  controller, for moments VR play cannot reach). Nothing in the headset
+  showed it: a buzz in both hands, and "Pad layer on" in the launcher's
+  window only. In it the grips are the game's LB and RB and the triggers its
+  LT and RT, so no web went out, the right stick is its D-pad (it took the
+  camera out and put it away again), and the phone's draw was off. It lets
+  go after 20 seconds of nothing pressed, but you kept pressing, so it stayed
+  on for 110 seconds, until the pause menu (which ends it) let it go. It was
+  the session's only time in the layer; the camera's other three times out
+  were fine.
+- **The phone always comes out.** Drawing it from a back pocket works in the
+  pad layer too and ends the layer. That grip sends the game no bumper while
+  it draws.
+- **PAD LAYER over your right wrist** while the layer is on, and under it
+  CLICK BOTH STICKS TO LEAVE, in both UI styles (`tools/preview-marks.ps1`
+  draws it: `padlayer.png`).
+- **Checked:** ctest 3/3, 572 core tests (more checks: the phone drawn lets a
+  busy layer go and a click latches it again; the sign in both styles, over
+  the wrist, nothing for a hand that is no number), the six Python suites.
+  Not run: the game, the headset.
+
+**Earlier build (October 25): fewer options - the ones that did nothing or
+were never meant for play.** You, after we went through the options:
+"cleanup the redundant".
+
+- **"Wall running" is gone from the launcher.** Off, it handed every wall to
+  the game's own crawl, which walls have not been for moving since October
+  15 ("can you not just use our locomotion system only"); it stayed only as
+  a way to tell whether something on a wall was the swing's doing. The
+  swing's own walls are always on now; `run_game_vr.py --no-wall-run` still
+  turns them off for tests. launcher.ini's `wall_run` is passed over.
+- **"Normal camera on the monitor" has a Troubleshooting card of its own.**
+  It sat in the Monitor card beside Recording FOV, which does nothing while
+  it is on, and it has the eyes' shadows and far detail follow the game's
+  flat camera. It is what the player's guide offers for a display driver
+  error as VR starts, and its help says so now.
+- **Four realistic flips settings are the launcher's alone.** MINIMUM
+  FLIGHT SPEED, ROTATION RESPONSE, ANGULAR DRAG and MINIMUM HAND SPEED,
+  thresholds and how a spin builds and dies away, showed in the SPIDY VR tab
+  whether realistic flips were on or not. The launcher still shows all ten
+  under Realistic flips while they are on; the tab has the other six, and
+  its RESET ALL leaves those four as they are. What you set them to stays
+  (spidy_vr.ini, profiles).
+- **Leftovers gone.** STAND ON WALLS and WALL CAMERA DISTANCE had no row
+  anywhere (since October 15 and October 24) but were still settings in the
+  code: the launcher went on writing `stand_on_walls` to launcher.ini and
+  never read it, and spidy_vr.ini carried `wall_distance_cm=25`. Neither is
+  a setting now, and older files' lines are passed over. The view on walls
+  stays on unless `--no-stand-on-walls`, and the hand climb's eyes keep 25 cm
+  from the wall as before.
+- **Profiles read and write as before.** You: "make sure it wont break
+  profiles". A profile still holds `wall_run=1` and `wall_distance_cm=25`, in
+  their old places: Spidy 0.4.1 and the builds since have both settings, and
+  a profile without one of them would read there as partial ("It has 32 of
+  the 34 settings a profile holds") and never be taken for the settings in
+  use. Read, the two are wall running on and 25 cm whatever a profile says,
+  so an older profile with wall running off still counts as the one in use
+  once used, and lists no change for it. For the same settings this build
+  writes the same text as the last one did.
+- **The tab** has 43 rows (from 47); no other row's setting number moved. No
+  XrConfig or XrData change.
+- **Checked:** ctest 3/3, 571 core tests (each row's place: VR VIEW on the
+  pause menu's first page, the four the launcher's, 43 in the tab;
+  spidy_vr.ini's text without `wall_distance_cm`, an older file's line passed
+  over), 32 launcher checks (no wall switch for a session or from a headset
+  line; an older profile's `wall_run=0` and `wall_distance_cm=100` read as 1
+  and 25, it matches once used, and a profile written again has both; a
+  profile holds every key of 0.4.1's), the six Python suites. Profiles across
+  versions, this PC's settings and a 0.4.1 player's with wall running off and
+  the wall camera at 60 cm, each written by 0.4.1, the last commit and this
+  build and read by each: every one reads whole wherever it did before, and
+  this build's read whole in 0.4.1 (34 of 34). Not run: the game (the tab in
+  the pause menu, `tools/probe_menu.py`), and the launcher's window (yours
+  was open, and one runs at a time).
+
+**Earlier build (October 24, sixth): moving on a web dodges, and broken glass
+lets you through.** You: "Swinging and moving with webs should count as
+dodging"; "also walking up broken glass (trough which you can walk) was still
+responding as a wall not letting me pass in vr".
+
+- **A web carrying you dodges for you.** A swing, a zip, a pull, a web
+  strike's flight, the game's zip to a point out of the swing, and the flight
+  a web leaves you in for a second after it lets go, at 3 m/s or faster: a
+  blow the game warns of (red or blue lines) is dodged 0.3 s before it lands
+  by the game's own dodge on the move, its traversal dodge. It answers every
+  warning standing then and those that go off while it lasts (0.6 s, longer
+  while a blow it may have dodged is still on its way, 1.5 s at most), as
+  the game's dodge does: you are immune to that attacker's blow, an accurate
+  or a perfect dodge earns its Focus, the game plays its dodge sound. A
+  whoosh runs across the vest and both controllers breathe once when one
+  answers a warning. Its perfect dodge does not slow time: the swing goes on
+  at its own speed. On the ground nothing changes: B and a dodge by moving.
+- **Why nothing dodged there before:** neither B nor a dodge by moving goes
+  out while a web carries you (the game's dodge would take you off the web).
+  In the flat game the web rush and the zip to a target are dodges
+  themselves.
+- **How:** read from the game's code. The hero's HeroDodgeManager runs his
+  dodges; each of the hero's states that dodges starts one of its own kind
+  as it starts and ends it as it ends, and a dodge started answers the
+  warnings the manager holds by the game's own rules (which attacks that
+  kind may dodge, the immunity, accurate or perfect). Spidy hooks the
+  manager's update, once a frame on the game's main thread, and starts and
+  ends the traversal dodge's kind there (`game_dodge.cpp`; when, in
+  `spider_sense.hpp`'s `WebDodge`). The session report has `dodge`: the
+  dodges asked for, taken, and what the game answered.
+- **Checked:** 570 core tests (new: when a dodge on a web starts and ends,
+  and when none does). In the game without a headset, perched in free roam
+  with no enemy about: three dodges started from the hook each put the
+  traversal dodge's kind on the hero's manager, answered nothing (no warning
+  stood) and ended; the game ran on. Not seen: a blow dodged on a web (no
+  enemy), and the headset.
+- **Broken glass is no wall.** Your 21:39 session: in the burning office 141 m
+  up, the swing took you up as onto a wall eleven times, at two spots where
+  Spidy's rays met broken glass partitions (1 to 4 m up each time); the game
+  would have let you walk through. Each surface carries a collision filter
+  word, and the game's own test lets two things collide only when they share a
+  category in it. The game queries your body's collisions with categories
+  0x004 (your mover's collision profile, 3); the panes are 0x10 and share
+  none, so your body passes them. Spidy's rays carry 0x410, which the webs'
+  anchors want, so they met the panes. Now the rays that stand in for your
+  body (what you walk at and onto, the ground under you, the hands' climb, the
+  head's clearance, the web strike's line) take the nearest thing your body
+  itself meets, by that same test with your mover's own profile, read from the
+  game as you play. The webs still take whatever they meet. In that session's
+  rays other surfaces your body passes turned up as well (categories 0x400,
+  0x43b and a few more, mostly flat); they are passed the same way.
+- **Checked:** 571 core tests (new: the game's test for your profile against
+  the panes, the office's walls and floor; a pane your body passes walked at
+  mounts nothing, the same pane solid does; the head's, hands' and roof's
+  rays stand in for the body, the aim's do not). In the game: the profile,
+  the filter's tables and the game's own collision test, read in free roam
+  (every query of your mover's profile: no collision with 0x10, collision
+  with 0x43f); Spidy's ray module found your mover's manager and read 0x004
+  and 0xe7 from it (`tools/probe_body_rays.py`). Not seen: the office's
+  panes in this build (they are in a mission, not in free roam).
+
+**Earlier build (October 24, fifth): the throw goes where your other hand
+points.** You: "the x works well but really hard or not possible to aim
+where the throw will go", at enemies and at a spot alike; and for the aim,
+the free hand, pointing.
+
+- **While X throws a prop, the hand X is not on aims it** (the right hand on
+  Touch and Index, the left on a Steam Frame). Point it at an enemy and the
+  throw goes at him; point it anywhere else and the throw goes that way. The
+  aim marker of that hand is the throw's mark: the ring on the enemy, or the
+  ring where the hand points.
+- **How:** the game's throw (the hero's HeroStateWebYankEnviro) asks the
+  hero's aim manager for its target as you hold the throw: an enemy and the
+  point on him to aim for, or a level direction with none. Left alone that
+  direction is the game camera's heading (measured), and the camera is no
+  hand. Spidy now answers those questions (three hooked getters, slot 4 of
+  the aim manager's results) while X holds the throw: the enemy standing
+  within 2 m of what the hand's aim marker is on, or the level direction
+  from you to what it points at. Nothing else that reads the aim manager
+  changes, and with no hand aiming the throw is the game's own.
+- **Checked:** 569 core tests (new: the hand's aim made a throw's, at a
+  character and at a surface; the game's actor handle; the enemy nearest a
+  point). In the game without a headset: a research build that handed the
+  throw's slot a direction 90 degrees off the camera was read 117 times
+  in one hold, and in frames 0.15 s apart Spider-Man let the prop go toward
+  the side it was given (the probes could not follow the prop's own flight).
+  Spidy's own module installed its three hooks in the game and took a hand's
+  aim. The throw through Spidy's own
+  module, and aiming at an enemy, have not been seen: there was no enemy,
+  and no prop within reach when it was loaded. Not run in a headset.
+
+**Earlier build (October 24, fourth): the phone's screen stays over its glass,
+and the marker over a prop says X.** You: "phone still z-fighting between
+screen and its body i think. rb+lm still appears over the object together
+with the static places press x indicator - can we have the press x appear
+instead of the rb+lb over the relevant object".
+
+- **The phone's screen no longer flickers through its glass.** The cause
+  was the size of the city. The overlay drew everything in the game's world
+  coordinates, and your 19:06 session was 2 km from the world's origin, at
+  (319, 1, 2004), where a single float resolves only 0.12 mm. Put through
+  the eye's view-projection there, every point of the phone was off by about
+  a tenth of a millimetre, each by its own amount and anew every frame; the
+  screen lies 0.3 mm over the glass. A simulation of those floats put the
+  screen behind the glass at 11% to 27% of its points, at three places 0.6
+  to 1.7 km from the origin. The GPU test, with an eye at (1158, 9, -360)
+  looking off the world's axes, put it there at 293 of 8242 points. The
+  overlay is drawn about the middle of your
+  eyes now, where the same test finds none. The preview and the earlier GPU
+  check drew the phone at the origin, which is why they showed nothing.
+  Everything else the overlay draws (the aim markers, the fight's marks, the
+  wheel, the calibration panel) gains the same precision.
+- **The marker over a prop says X.** The HUD draws that marker from its own
+  Flash. Its throwable marker asks the game for the icons of the web yank
+  (LB and RB, on Spidy's virtual pad) and sets them either side of its
+  diamond. The same kind of marker has a subtype that draws the left face
+  button, X, alone. In VR play Spidy now hands the HUD that subtype for every
+  throwable. In the game, without a headset, a research build making the
+  same change drew a circled X over a mailbox where LB • RB had been. The
+  marker loses the throwable's ring and the fill that grows while you hold.
+  Read this time from the HUD's own bytecode in the game's memory
+  (REFERENCE.md); the October 24 tries below had the call wrong: the subtype
+  changed then (1) is a pedestrian's talk marker, the throwable's is 7.
+- **Checked:** 568 core tests (new: the throw marker drawn as X, and no other
+  marker changed). The GPU test has a new check: the phone at (1158, 9,
+  -360), drawn about the eye, its screen over its glass at all 8242 points
+  (in the world's coordinates the glass showed at 293). The launcher's tests and the
+  six Python suites pass. In the game: the marker, with the research build
+  above. Spidy's own build makes the same call; the game passes `AddPOI`'s
+  name from the literal Spidy compares (`lea rdx` at 0x1f07f98, before the
+  call the research build logged), but this build has not run in the game,
+  and the phone has not been seen in a headset. No protocol change: the
+  markers count with the rewritten texts (the report's `prompts` `rewrites`).
+
+**Earlier build (October 24, third): X is the game's LB + RB, the wheel opens
+with no gadgets, the street without the duct's crouch, a phone with depth.**
+Your list after the 14:04 and 14:05 sessions.
+
+- **X is the game's LB + RB where the game shows the two** (you: "press
+  RB+LB popups constantly, which is not the mapping (lets move it to x
+  maybe) and replace the popups like we did for y"). While the game asks
+  for LB + RB (its throw of a prop, a yank, a door or a grate to tear off),
+  X pressed or held is both, for as long as you hold it; with nothing of
+  the kind asked, held X is the gadget wheel as before. The right stick's
+  click is no longer LB + RB. The prompt the game shows says X now: the
+  line at the bottom of the screen reads "(X) (Hold) Throw" where it read
+  "LB + RB (Hold) Throw". Spidy writes X into the text before the game makes
+  the prompt from it, as it does for Y, and reads which button the shown
+  prompt asks for from the game's prompt widget (`0x7793d0` shows one,
+  `0x77a1e0` hides it). Not yet: the marker the game sets on a throwable
+  thing in the world still shows its LB and RB icons. That marker takes a
+  button id from the game's HUD, not a text, and none of the tries made it
+  show X.
+- **The gadget wheel opens with no gadgets** (you: "Can't access gadget
+  wheel now"). Your 14:04 and 14:05 sessions were on profile 2, a new game at
+  2% of the story, where the game has given you no gadget yet. Spidy offered
+  the wheel only with a gadget on it, so holding X did nothing. Now it opens
+  with the web shooter alone and "NO GADGETS YET" in the middle.
+- **Walking no longer puts you in a crouch outside a duct** (you: "Walking
+  around on the street sucks (constantly getting stuck, slow to respond etc)
+  feels bad."). In the 14:05 session Spidy took 958 frames on the street
+  and on a rooftop for a duct: it held your view at crouch height (1.2 m) in
+  670 of them and knelt the body in 685. It read the game's floor-crawl flag
+  (the mover's bit 0x1, which the first mission's duct sets) as a duct. The
+  game sets the same flag where it crouches its hero under something low:
+  for seconds at a time under the steel beams of a roof 113 m up, and in
+  short bursts on the street. The nearest roof any ray found all session
+  was 1.7 m over the feet. Now the crouch holds only once that crawl has
+  seen a roof within 1.5 m of the feet, which is the duct. Once seen, it
+  holds to the crawl's end, so the part of the duct whose roof no ray hits
+  keeps it (`FloorCrawlRoof`, `game_tracking.hpp`). Not changed: the
+  game still stops its hero for a moment when he bumps a pedestrian ("Sorry
+  about that"), as in the flat game.
+- **A phone with depth** (you: "lets improve the phone design to something
+  better (currently its very flat with tons of zfinghiting) can we use an in
+  game model and replace it its screen texture"). The phone is a solid body
+  now: 9 mm thick, with rounded edges and corners, a graphite frame, a red
+  back, the camera bump with its lenses and the side buttons, lit as it
+  turns. Its screen (the title bar, the apps, the songs, the gear) is drawn
+  once a frame into its own picture, 960 x 2048 with mip levels, and that
+  picture lies on the glass. Before, each layer of the screen was its own
+  sheet a fraction of a millimetre over the last, and at arm's length they
+  flickered through each other. It is Spidy's own phone, not the game's
+  model: the overlay cannot draw the game's models, and taking one out of
+  the game's files is a job of its own.
+- **The long frame drops** (you: "Performance sucked in last session with
+  huge spikes and long frame drops"): not changed in this build. In both
+  sessions the long drops were Virtual Desktop holding frames back, about
+  100 ms at a time (the reports' `stream_stalls`). 69 of the game's 75
+  stalls fell inside those holds. Such holds came in every session with
+  bHaptics devices connected (October 20, October 22 and both of today's)
+  and in none of the four without. Two of those three sessions with the
+  suit also had stretches where the GPU was full, the overlay waiting
+  11 ms on the game's queue, which it shares. A session with the suit off
+  (its Bluetooth dongle out) would show whether the holds go with it.
+- **Building textures that load late** (you: "Still have popins of
+  textures or impostors on buildings right in front of me (wasnt like that
+  in first versions, check when reports of it started on discord (people
+  called it "blurry" too)"): not fixed in this build. On Discord no report
+  from before 0.2.12 is about far textures. The "blurry" ones of
+  October 8-11 were about the whole picture, before anti-aliasing. The first
+  report about distance is Kinxy's on October 13 (0.3.5). The first about
+  pop-in is Keith's on October 14 (0.3.6), who said the flat game has no
+  such problem. HaNToP named 0.2.11 sharp ("the textures loaded instantly")
+  and 0.2.12, "the performance update", worse, on October 18. KRIS, HaNToP
+  and Kinxy say it is still there in 0.4.0, with only the dark windows
+  fixed. 0.2.12 brought the eyes' own TAA upscaling; 0.3.2 turned the
+  game's sharpening off in VR.
+- **Checked:** 567 core tests (new: the duct's roof, X sending LB + RB
+  where the game names the two, the game's action words and LB + RB
+  written as X, the prompt kinds' demands, the phone's body and screen
+  corners). The GPU test has a new check, the phone's picture: its own
+  texture with mips on a quad, its layers by depth, under nearer geometry.
+  Also the phone preview and all six Python suites. In the game, without a
+  headset: this build's prompt hooks with the rewriting on
+  (`tools/probe_prompt_watch.py --rewrite`, profile 2, at the trash can
+  below its lamp post). The game made the throw prompt four times, each
+  with `[BTN_X] (Hold) Throw`, and drew "(X) (Hold) Throw". The live demand
+  meanwhile was LB + RB held, which X sends. The marker over the can still
+  showed LB • RB. No crash; of the saves only `-userprefs.save` changed, as
+  on every run. Not run in a headset: X sending LB + RB, the wheel, the
+  phone, the duct. No protocol change.
+
+**Earlier build (October 24, second): realistic flips can stay out of fights.**
+You: "lets add a toggle to disable realistic flips during combat".
+
+- **FLIPS IN COMBAT, the last of REALISTIC FLIPS' rows, on by default** (as
+  before: a fight changes nothing), and "Flips in combat" under "Realistic
+  flips" in the launcher (`flips_in_combat=` in `spidy_vr.ini`). Off, while
+  enemies are within a web strike's reach (10 m, and 3 m past it) or any
+  bot within a fist's, and for 3 s after the last of them, the arms, the
+  webs, a let-go swing and the left stick turn you no more, and a spin you
+  bring into the fight dies away until you are upright, as on landing. The
+  left stick steers your flight again there, and both fists thrown down in
+  the air are the Ground Strike again, which REALISTIC FLIPS otherwise
+  keeps for a flip. A web still held when the fight ends turns you again.
+- The fight is the one the fist and web strike code already reads
+  (`game_punch`'s enemies in reach), so it holds only while punching runs.
+- Checked: 566 core tests (one new: in a fight the stick turns nothing and
+  steers again), the realistic flips' program (a fight brings an arm spin
+  upright, a web turns nothing until it ends; on, nothing changes), the
+  launcher's, all six Python suites. Not run in the game or the headset. No
+  protocol change: the switch is one of the tab's own settings.
+
+**Earlier build (October 24, first): three pull requests - wall crawling and vents
+for hand climbers (pull request 27, AdrianGzzEsc), the web slingshot (28)
+and better climbing (29, both iplusdvr).** You: "review the 3 open prs, fix
+if needed and merge with what we have here".
+
+- **WEB SLINGSHOT, under SWINGING, off by default (28).** On, a web shot on
+  the ground no longer lifts you off it, and drawing a web there zips
+  nothing. Standing still, shoot a web from each hand at two solid surfaces
+  at least 1.5 m apart, draw both hands back 16 cm or more and hold: both
+  controllers buzz, harder as it charges (full in about a second and a half,
+  with a 40 cm draw). Let go of both web buttons within 0.2 s of each other
+  and you fly at the point between the two anchors, at 16 to 40 m/s within
+  SWING SPEED LIMIT. Walking, a jump, a turn, lost tracking, one hand let go
+  alone, an anchor gone or open air cancel it.
+- **BETTER CLIMBING, under SWINGING, off by default (29).** Take one web in
+  both hands and pull hand over hand: each pull takes the rope in, up to 3 m
+  a second, and keeps it while the other hand reaches up again, so you climb
+  the web. None of it zips you.
+- **Hand wall climbing (27, with HAND WALL CLIMBING on).** The body crawls
+  on the wall in a pose of its own: feet planted on it, stepping in turn
+  with the opposite hand's pulls, toes into the facade, knees under the
+  hips. Take one hand off the wall, turn your head the other way and touch
+  the wall with that hand again, and the body turns its back to the wall
+  with its feet still on it (your eyes 40 cm out; the same again turns you
+  back). Palms stop at a building's surface, and pressing harder pushes your
+  view and upper body off it, up to 45 cm. Moving your head while you hold
+  on no longer moves you: the grips are measured from where your head was
+  when the hold began. WALL CAMERA DISTANCE is gone; the eyes keep 25 cm
+  from the wall. Its vents (your hand pulls driving the game's crawl, the
+  view lying down along the duct) are off for now, below. The author's
+  fixes to the camera when dodging, on quick left stick moves and
+  on LB + RB pulls are in it too. The author played it in a Quest 3
+  (Virtual Desktop) on 0.4.1.
+- **What the review changed.**
+  - The slingshot kept every lift off the ground while it was on, so a
+    web's reel (its trigger) no longer lifted you; it does again.
+  - Both 28 and 29 appended their switch to the swing settings as version
+    9: the slingshot keeps 9, better climbing is 10.
+  - Main's dive kick (October 22, fifth, below) had taken the body
+    Command's version 5 and the flag 27 also uses: the kick is version 11
+    now, after 27's versions 5 to 10. The wall roll keeps the October 22
+    rule that two grips roll the view only while both hands hold the wall,
+    and 27's tests point the climbing hand at the wall, as main's own do
+    since.
+  - When a hold ended (a jump, a run, a gap, a fast move), 27 dropped two
+    things in one frame: the hand push, so the eyes jumped up to 45 cm back
+    toward the wall, and the grips' fixed reference, so every hand jumped by
+    the head's travel since the hold began - a hand speed that could zip a
+    held web or land a blow. Both ease back now (the reference at 0.5 m/s).
+  - 27's camera gate also took away the duct's head cap from hand climbers
+    until a vent was confirmed: in the first mission's duct, whose roof no
+    ray hits, the head stood out through it again. The cap comes from the
+    game's own floor crawl again.
+  - The XR thread waited out the body's solve every frame, for every player
+    with the body on, to read the crawl's turn away from the wall; it reads
+    an atomic now. The launcher's "Wall camera distance", which every start
+    reset, is gone with the row, and 27's own page (WALL_CRAWLING.md) went
+    into PLAYERS.md and DEVELOPMENT.md.
+  - **27's vents are off for now** (you: "turn vents off for now"). On a
+    vent's walls and ceiling its legs kept the game's crawl animation;
+    once a vent was recognised the view tipped 90 degrees by itself (a
+    level head looked at the duct's floor, and up to look along it); and
+    the test for a vent (the game's floor-crawl flags with a surface within
+    2 m over them, or two walls within 1 m either side) passes in narrow
+    rooms and alleys too, which would have handed the movement to the
+    game's crawl there. With hand climbing on, a vent is the game's crawl
+    on the stick again, the view upright under its roof and the legs
+    kneeling, as before. The code stays (`ventHandCrawl`, crawl_hands.hpp).
+- **Checked:** core tests (564; new: 27's own, the slingshot's and better
+  climbing's, the reel with the slingshot on, the hand push and the grips'
+  reference easing back), the launcher's, the realistic flips', the six
+  Python suites. Not run in the game or a headset here. The modules and the
+  launcher go together: the swing settings (version 10), the climb sample
+  (version 2) and the body Command (version 11) changed on both sides.
+
+**Earlier build (October 23, second): a frozen game saves where it stood, and
+seated play at your own height.** You: "check what was sent in mod chat and
+fix it (the reports and the bug), also add proper height calibration or
+override for seated mode".
+
+- **HaNToP's freeze in Straw, Meet Camel** (#mod-chat, October 23: "everytime
+  my game freeze"; his Straw_meet_Camel_crash.zip, Spidy 0.4.0, and the video
+  he sent as "my VR controls stopped working", which is the same freeze). The
+  game stopped for good 105 s into VR, mid-swing down a building's wall while
+  the helicopter's gunfire hit that building beside him: from one sample to
+  the next no eye image, camera commit or read of the controller came again,
+  while the headset's loop went on showing the last picture. The left eye's
+  render job had begun and never ended (the right eye's never began), every
+  GPU fence had completed, and the game's own log shows nothing wrong. So the
+  game's render thread waited, or spun, inside the left eye's work - but a
+  report holds counters, not thread stacks, and cannot say where. Ruled out by
+  reading: Spidy's GPU bridge (its waits all time out within 0.5-5 s, its two
+  locks are always taken in the same order), the swing (every loop bounded)
+  and the rope points laid round edges (the game's fill stops at its own
+  count). His web had wrapped round an edge 0.18 s before, as on October 15,
+  but ten wraps that session passed without a freeze.
+- **Now a frozen game says where.** When the game makes nothing for eight
+  seconds - no eye image, no game-screen frame, no camera commit, no read of
+  the controller - and Windows marks its window as not responding, the
+  session writes a minidump of its threads beside the report
+  (game-vr-...-freeze.dmp, `tools/game_freeze.py`), the report's `freeze`
+  lists each thread's code addresses by module, and the launcher's log says
+  to send both. HaNToP's freeze comes at the same moment every time, so one
+  report from that mission with this build names the code the game waits in.
+  Until then: pause, SWITCH TO GAME SCREEN for that moment, SWITCH TO VR after.
+- **HEIGHT** (SPIDY VR > BODY, and "Height" in the launcher's options): AUTO,
+  or your height from 150 to 190 cm. Set, it sizes Spider-Man instead of the
+  calibration's or the headset's eye height (the calibration still fits his
+  arms). Asked for on the Discord, October 14: "options like in bonelab where
+  you measure yourself and then enter your measurements instead of tposing".
+- **SEATED** (under it, and "Seated" in the launcher): play sitting down.
+  Spidy measures your eyes over your first second of play and after each
+  recenter, and raises the tracking space by the difference to your standing
+  eye height - HEIGHT's, else a calibration made standing, else a 1.76 m
+  player's; at most 1.2 m, eased in over a few tenths of a second. What the
+  game's world places from the tracking space rises with it: the camera,
+  Spider-Man's body, your hands and their webs, the T-pose's measure. The
+  headset's own poses stay as tracked, so its reprojection is untouched, and
+  the gestures measured from your head (the temple, the chest, a back
+  pocket) work as before. Until now a seated player was a crouched
+  Spider-Man with his eyes at a standing man's chest, and a T-pose made
+  sitting stored the seated eyes as standing ones (Spider-Man at 70%); such
+  a calibration (eyes under 1.35 m) is no target for the lift.
+- **Kept in spidy_vr.ini** with the tab's other own settings (`height_cm`,
+  `seated`). SEATED goes into settings profiles, HEIGHT does not: it is
+  yours, as a calibration is. Session reports carry `seated` (XrData version
+  41: on, measured, HEIGHT, the seated eye height, the lift now, how often
+  measured): the module and `tools/run_game_vr.py` go together.
+- **Not yet answered** from #mod-chat: the pigeons ("I can't catch them ...
+  the marker is displayed": it needs a report from a pigeon chase), and the
+  HUD missing from recordings (the HUD is a layer of its own in the headset,
+  not in the eye image the monitor mirrors). The map on the phone he asked
+  for is in the build before.
+- **Checked:** core tests (441; new: seated play), the launcher's (30;
+  profiles with SEATED), the six Python suites (new: when a game counts as
+  frozen and a real minidump read back, the package carrying every tool the
+  session imports, XrData 41), the build. The freeze capture ran on a
+  sleeping process, not on a frozen game; SEATED and HEIGHT not in a headset.
+
+**Earlier build (October 23, first): the suit power reaches the game, and the game
+menu is on the phone.** You: "i couldnt trigger the suit power (at least it
+didn't feel like it) also lets move the menu we open with x to the phone".
+
+- **The suit power never reached the game.** Your sessions asked for it 24
+  times (3 on October 22 at 21:28, 21 on October 23 at 18:01): the gesture
+  worked each time, both hands buzzed and the report counted it, but nothing
+  put its L3 + R3 on the virtual controller. The scan's R3 goes out through
+  the swing's leave (`Walk::scan`); the suit power had no such field, and
+  its tests checked the gesture, and that the controller clicks no stick by
+  itself, never that the gesture clicks both. Now `Walk::suit` carries it:
+  both triggers pulled at the chest are the game's L3 + R3 for 0.15 s. The
+  game still uses its power only when its meter is full, as in the flat
+  game.
+- **The game menu is the phone's MENU.** Draw the phone (a grip squeezed
+  behind your hip, brought up in front), push the stick down once to MENU
+  (under MUSIC) and press A: the phone goes away and the game's Back opens
+  its menu, the map, suits and skills; B closes it. MENU takes MAP's place,
+  a screen of hideouts that said COMING SOON (the game's own map is in the
+  menu). X no longer opens it: held, X is the gadget wheel as before; a tap
+  does nothing; while the game asks for its X, it is that X. A Steam
+  Frame's View button is still the game's Back.
+- **Prompts:** one naming the game's Back reads "the phone's MENU" in the
+  session log (it said "a tap of X"), and L3 + R3 together count as
+  something play sends (`reachableInPlay`; the prompt rewriting, off in
+  sessions, names them PHONE, MENU and BOTH TRIGGERS AT YOUR CHEST).
+- **A check of the wiring** (`tests/game_vr_protocol_tests.py`): every
+  gesture the XR worker keeps with a `held()` has it read there, and every
+  field of `game_pad::Walk` is filled there. With either of this build's
+  two new lines in game_xr.cpp taken out, it fails.
+- **Single-pass stereo is not in this build.** The October 23 experiment
+  (the game renders only the left eye, the right eye a replay of its
+  commands) is kept on the branch `single-pass-stereo`: in your 18:01
+  session it gained no frame rate (a median of 47.6 new frames a second
+  against 48.4 the night before; the laptop's GPU is the limit) and the
+  right eye showed many artifacts. This build is main as of October 22's
+  fifth with the two changes above.
+- **Checked:** core tests (440; changed: the suit power test checks the
+  controller gets L3 + R3, X sends nothing in play and the phone's MENU
+  sends Back, the pad-wide reach test covers the suit and the menu, the
+  phone's MENU puts it away), the launcher's (30), the six Python suites
+  (141 tests; new: the wiring check), the GPU test, the phone preview. Not
+  in a headset, and no game run.
+- **Not changed:** the controls picture (README and the launcher's
+  Controls tab) still shows X as the game menu; it needs re-rendering from
+  its page, which is not on this PC. The launcher's list of controls under
+  it is updated.
+
+**Earlier build (October 22, fifth): four ideas from the Discord - dodging
+by moving, the suit power at your chest, the dive, the game's own blow
+sounds.** You: "commit current dif and do all 4", the four picked from the
+ideas forum.
+
+- **Dodging by moving** (arturonomin, October 15: "IRL dodging mechanics,
+  similar to Batman: Arkham Shadow"; Armie, October 14, 4 votes: "when you
+  Flip, Web-zip, you dodge enemies"). While a red or blue Spider-Sense
+  warning stands, a quick step or lean across the attacker's line (17 cm),
+  a step back from him (20 cm) or a duck (15 cm), within 0.3 s, is the
+  game's own B, the way the head went (a duck: the way the game picks), so
+  its perfect dodge and slowed time come with it as they do with B. A lean
+  toward him is none (a counter leans in), nor a yellow warning (A's). The
+  head is measured in the tracking space, so walking with the stick and a
+  snap turn move nothing; one dodge answers the warnings standing, and a
+  jump of the tracking (the view re-placed) starts the measure over. Not
+  while a web carries you, as B (`MoveDodge`, spider_sense.hpp). Flips and
+  zips carry you on a web or Spidy's own flight, where the game's dodge
+  cannot go out: they dodge nothing yet.
+- **The suit power at your chest** (Tru, October 15, 4 votes; ItzWadde:
+  "both your hands to your chest and hit trigger like the scan"). VR play
+  had no way to the game's L3 + R3 at all: clicking both sticks is the pad
+  layer, and only the game screen sent it. Both hands before the chest (38
+  cm under the eyes, 15 cm ahead, 22 cm round it) with both triggers pulled
+  within 0.4 s of each other are now its L3 + R3, a 0.15 s press, both hands
+  buzzing; those triggers shoot no web ball until let go
+  (`game_pad::SuitPowerPress`, beside the temple's scan). The game uses its
+  power when its meter is full.
+- **The dive** (grundy_chumbo, October 21-22: swing kicks, slow motion at
+  the end of a zip; Armie, October 21: launching yourself into an enemy
+  should hit like two punches). A web strike's blow was the fist's alone:
+  swinging through a crowd did nothing. Now the player's own flight - a
+  swing, a zip, a jump, a fall, 9 m/s or faster, off the ground - on course
+  for the enemy the ring marks (his line passing within 1.1 m of his middle,
+  there within 0.35 s, 7 m at most) opens a strike: the webs let go, the
+  last of the way flies on at the player's own speed (12 m/s at least), feet
+  first, the world slowed for it (`Moment::dive`, which a moment before does
+  not hold back), and the blow is as hard as he was fast - a heavy one from 9
+  m/s, the hardest from 20 - sending him flying the way the player came. In
+  the air the player then hangs beside him for the next blow
+  (`WebStrike::dive`; `game_punch::Player::velocity`). The legs kick out at
+  him from the hips, the right one straight, instead of keeping the game's
+  air pose (`body::Targets::kick`, the body Command's version 5). Only at
+  the ringed one and only on course: a swing past a crowd kicks nobody.
+- **The game's own blow sounds** (FEDI, October 13, 12 reactions: "pls an
+  option to remove the sfx when punching"; Stoinked: "add multiple punch
+  sounds"; Tru: "less like popping balloons"). The headset played four
+  tones of its own. The game sounds its own melee through the attacker's
+  `AnimImpactEventManager`, which Spidy's blows never reach: on the one
+  struck it sets five switches of its "Melee Impact Event" and plays a hit
+  sound. Each blow of Spidy's on an enemy now does the same from the game's
+  main thread (`game_sound.cpp`): where it landed (head, torso, leg), how
+  hard (a jab light, a firm blow medium, a heavy one heavy, a finisher
+  extreme), the flow's count, in the air or not, a fist or a web strike, on
+  his sound sources - or the player's, at arm's length, when he has none -
+  and the first of its three hit sounds, the impact's plain case (which one
+  the game's own punches name could not be read: the hero has impact entries
+  only while the flat game's own attack runs). While the game plays them the
+  headset plays none of its own. **BLOW SOUNDS** under HAPTICS:
+  GAME (the default), SPIDY (the old tones) or OFF.
+- **Measured in the game here** (your save, a sign over a plaza at night,
+  no headset; `tools/probe_sound.py`, new): the sound call gave a sound back
+  for every one of over 200 plays from Spidy's frame hook; the player's 3
+  sound sources took all 15 switches; actors with no sound sources of their
+  own had the blow sounded on the player's (8 of 8). A street crime's thugs
+  80 m off, in its opening scene, had no sound sources at all. **Not heard:**
+  a recording of the PC's output while the game played, the plays lined up
+  and compared with as many moments of nothing, showed neither these sounds
+  nor the game's own Spider-Sense sound played the same way, nor the game's
+  own air punches, out of the plaza's noise. If blows are silent in the
+  headset, BLOW SOUNDS: SPIDY brings the old tones back - and tell me.
+- **Session reports** carry `sound` (`SpidySoundData`, version 1, 72 bytes:
+  blows asked, played, refused, dropped, sounded on the player, the sound
+  sources and switches, live) and `combat_headset` (XrData version 40: suit
+  powers, dodges by moving, dives, blows the headset sounded itself).
+- **Checked:** core tests (440; new: dodging by moving, the suit power, the
+  dive, the kick's legs, the dive's moment, the sound engine's ids, the BLOW
+  SOUNDS row), the launcher's, the six Python suites, the GPU test, the game
+  runs above; your 19 save files byte-identical after them. Not in a
+  headset. `spidy_ray_bridge.dll`, `spidy_stereo_probe.dll`,
+  `tools/run_game_vr.py` and the launcher change, and XrData's version: the
+  whole package goes together.
+
+**Earlier build (October 22, fourth): webs off a wall with hand wall
+climbing on.** You: "webbing from a wall with current settings doesnt work,
+i need to jump down to do it".
+
+- **Why, from your 17:48 session.** Your webs did attach on walls - six
+  between 84 and 89 s, three between 618 and 623 s - and you did not move:
+  at rest on the wall, tension 0, no zip, until A jumped you off each time.
+  Since October 10 Spidy's wall holds you with no gravity along it, and a
+  web is shot taut, so at rest nothing pulled: a web from a wall moved you
+  only with a zip, the reel or a jump.
+- **Now a web whose end is further out than you takes you off the wall**,
+  to hang and swing from it, the way a web shot off a ledge does; no wall
+  takes you back for the wall jump's 0.3 s. A web up the wall you are on
+  keeps you on it, for a zip or the reel up it.
+- **Two more ways a web press on a wall went nowhere with HAND WALL
+  CLIMBING on** (on in your `spidy_vr.ini`; neither shows in the report,
+  which keeps no grips):
+  - It took any grip squeezed within 18 cm of the wall as a hold, and its
+    view keeps your eyes 40 cm from the wall, so a hand raised to web up
+    the wall was that near. A squeeze there now holds the wall only where
+    the hand points at it - its aim meets the wall within 50 cm of the
+    palm, where a web would end too near you to hold (`SwingConfig::gripAim`,
+    `Swing::pointsAtWall`); pointed up the wall, along it or away, it
+    shoots its web. Your hands at the wall in this session pointed into it
+    10 to 66 degrees, which still holds.
+  - Both grips held started the view roll, which took both grips from the
+    webs: a second web's press let go of the first web and shot nothing.
+    The roll now starts only while both hands hold the wall
+    (`GameTrackingRig::wallHands`, from the swing's climbing hands).
+- **A web shot from a hand at the wall starts outside it.** The web shooter
+  sits on the forearm 10 cm behind the grip, so a hand at the wall aimed
+  away has it inside the wall, and the game's rays meet a face from behind
+  too: the shot would meet the wall it started in. It now starts at least
+  15 cm out of the wall you are on (`shotOutOfWall`); the aim markers show
+  the same shot.
+- **Checked:** core tests (434; new: a web out from a wall swings you off
+  it and one up the wall keeps you on it, squeezes at the wall by where the
+  hand points, a shot from a hand inside the wall, the roll only with both
+  hands on it; the climbing tests' hands now point at the wall as a reach
+  does), the launcher's, the six Python suites. Not run in the game or a
+  headset. No struct the modules share changed.
+
+**Earlier build (October 22, third): Spidy's blows fill the game's Focus.**
+You: "also check our combat is filling up focus for healing". It was not,
+for any blow of Spidy's.
+
+- **Why, read out of Spider-Man.exe.** Focus is the hero's "spider assault"
+  meter (`Hero::HeroSpiderAssaultManager`): three segments of 100 on your
+  save. The game fills it from its own events, and for a blow from the
+  hero's DamageDealtEvent, by the damage's DamageHash and the attack data
+  its own attacks attach to the request. Spidy's punches, web strikes,
+  counters, yanks and throws are plain requests to the game's DamageSystem
+  with neither, so the handler files every one under `kOtherDamage`, a kind
+  its config gives 0. Only the game's own moves filled it in VR: its dodge,
+  and since the build before the game's Web Shooter.
+- **Now each blow of Spidy's on an enemy asks the game for the Focus its
+  own blow of that kind earns**, through its own function (961e90: the
+  config's amount for the kind, the difficulty, the perks): a fist's, a
+  strike's or a counter's blow `kMeleeDefault` on the ground and
+  `kMeleeAir` in the air; the web's yank `kYankBot`, with the game's
+  `kYankBotIntoAirBonus` when you are in the air; a throw `kThrowBot`; a
+  thug flung into another `kBotFlungIntoBot`; a thrown prop into a thug
+  `kThrowObjectIntoBot`. Earned on the blow's thread, given on the game's
+  main thread after the hero's update (`game_focus.cpp`), only for a blow
+  the game took. The heal (right stick down) spends it as ever.
+- **Measured in the game here** (your save, free roam, no headset;
+  `tools/probe_focus.py`, new, through the new probe export
+  `SpidyFocusTest`): the meter at 0 of 300; `kOtherDamage` twice left it at
+  0; six `kMeleeDefault` raised it 1.25 each, to 7.5; `kMeleeAir` +4,
+  `kYankBot` +4, to 15.5. The game read and changed its own meter, the
+  module's hooks came off clean. Not measured: blows on a real thug (no
+  enemy near that roof), the HUD's bar (the game hides it out of a fight).
+- **Still short of the flat game:** those are the amounts at the bottom of
+  the game's combo. Its `Hero::HeroComboCounter` scales Focus by its tier
+  (AddEnergy multiplies by it), and it counts a hit only from the same
+  attack data (its handler 9197b0, its add-a-hit 919450), so Spidy's blows
+  should not raise it (read from the code; not seen in a fight). A thug of
+  six punches fills
+  under a tenth of a segment; air blows and yanks three times as much. Next
+  step, not done: Spidy's blows into the game's combo the same way, which
+  wants a fight to measure.
+- **Session reports** carry `focus`: blows that asked, given, missed, and
+  the meter (`SpidyFocusData`, version 1, 56 bytes; a new export of
+  `spidy_ray_bridge.dll`, read by `tools/run_game_vr.py`).
+- **Checked:** core tests (430), the six Python suites (a new Focus reader
+  test), the game run above. No struct the two modules share changed.
+
+**Earlier build (October 22, second): hantop's research stations - the
+game's own web from the trigger, its camera on the phone, the Ground Strike
+by a slam.** You: "check the bug and save files hantop sent in mod chat and
+fix it". His list in #mod-chat named eight of Harry's research stations in
+Harlem that VR could not finish, with one session's report (0.4.1, 45
+minutes, five loads); no save files were posted. Then your picks: run the
+game here, a CAMERA app on the phone, both fists slammed down for the Ground
+Strike.
+
+- **The trigger's web ball is the game's own Web Shooter shot** (Under
+  Pressure's leaks, Chemical Leak's and Ventilate the Problem's vents). His
+  report: 723 balls, 718 of them struck something; in two bursts about 190
+  struck the same three actors again and again, and `webbed` stayed 0.
+  The ball is the hero's built-in web shooter fired at its fire event, and
+  that shot carries no damage of any kind (game_shooter.hpp, October 8).
+  The game's RB fires the gadget equipped - every player's Web Shooter
+  unless a wheel chose another - and its shots carry the game's web. Since
+  October 15 the hand fired the gadget equipped for every gadget but that
+  one, which got the built-in ball instead. Now a pull fires the game's Web
+  Shooter from the hand whenever the game has it equipped, as the wheel's
+  other gadgets go out, and the ball only once it has no charge left, so no
+  pull goes unanswered.
+- **Measured in the game here** (your save, CONTINUE, free roam on a roof,
+  no headset; `tools/probe_gadgets.py --only-web-shooter`, new): 12 pulls,
+  12 shots, the first 10 the Web Shooter's own and the last 2 balls once its
+  10 charges were spent, none dropped; the game's HUD showed its Web
+  Shooter. Not measured: a leak or a vent sealed by it (no station on that
+  roof).
+- **CAMERA on the phone** (Smog Alert and Snapping Up Smog; hantop's own
+  suggestion). Measured here with the virtual pad: the game's D-pad up
+  takes its camera out (the equipped weapon changes and the UI calls
+  ShowCameraOverlay()), LT held raises the viewfinder, RB takes the photo
+  (the screen flashes white; RT takes none), D-pad up again puts it away
+  (HideCameraOverlay()). VR play has no D-pad up of its own, and nothing
+  names these buttons once a station's hint has gone. The phone's home
+  screen has a fourth app, CAMERA: A on it puts the phone away and sends the
+  game's D-pad up. While the camera's overlay is up the game counts as
+  asking for LT, RB and D-pad up (`prompt_buttons::cameraDemand`), so press
+  what you see does the rest: the left trigger aims, the right trigger takes
+  the photo, the right stick up puts it away. A load or the HUD's shutdown
+  ends that too, ten minutes at most.
+- **The Ground Strike by a slam** (Shaking Harlem). His session read no ask
+  for X and A in 45 minutes: the hint that names them shows once a save,
+  and the downward fist of October 20 needed it. Both free fists thrown down
+  together in the air (within a quarter of a second, each at a punch's
+  speed and steeply) are now the game's X and A held 0.6 s, its Ground
+  Strike, named or not; the swing lets the game have its move as for any
+  named press. One fist stays a punch. Not while REALISTIC FLIPS is on,
+  where both arms swung down are a flip.
+- **The prompts read from any of the UI's calls.** The session read 13
+  texts naming buttons in 45 minutes, none of them a station's, and its
+  census had all 48 places taken by the map's, the menus' and the HUD's
+  calls, so it could not show where a station's hint came from. Any call
+  whose text names a button now counts as a prompt for 8 s after its latest
+  call, and the census keeps its last 8 places for calls that prompt. Still
+  open: whether the stations' hints come that way, or name their buttons in
+  `[ACTION_*]` words Spidy does not read. The next report says.
+- **The session log names the control, not the interact button.** Every ask
+  since October 20 said "the interact button sends it" and, for X or a
+  trigger alone, "VR play has no button of its own for it", both untrue
+  since press what you see. Now: "The game is asking for LT + RB - in VR:
+  the left trigger + the right trigger."
+- **Still open from his list:** Dive and Dash (a web swing while falling
+  does not count: the game watches its own swing, and Spidy's is not it) and
+  Visibly Shaken (drones not destroyed while invisible: in that stretch the
+  report has no drone within reach of a fist and the balls struck no actor,
+  so the cause is not known). From October 21: stealth in the vents, and
+  Fisk.
+- **Checked:** core tests (430; new: another call's text and the camera's
+  standing demand, the slam and the camera's controls, the phone's CAMERA),
+  the six Python suites, and in the game: the reading through CONTINUE and
+  free roam, the Web Shooter from the hand, the camera's calls and buttons.
+  Not in a headset. `spidy_ray_bridge.dll`, `spidy_stereo_probe.dll` and
+  `tools/run_game_vr.py` change; no protocol changed.
+
+**Earlier build (October 22, first): body haptics after bHaptics' notes.**
+You: "add there bhaptics changes", with the six notes of bHaptics' haptics
+team. They singled out the web traversal, the wind, Spider-Sense and the
+high-impact landings; these six change, the rest plays as it did.
+
+- **A jump lands on the waist alone.** Their note: a low landing, as after
+  a regular jump, felt slightly stronger than expected; the vest's bottom
+  row alone would set it apart from a hard one. The game's jump comes down
+  at about 9.4 m/s, which the landing's strength makes 0.34. Under 0.4 a
+  landing now plays the bottom row only, front and back, without the arms;
+  the rows above and the arms come in between 0.4 and 0.6 (about 11 to 16
+  m/s down), so a fall from a roof plays up the vest as before.
+- **A charged leap's charging 30% gentler:** its start 10.5% (was 15%),
+  its building round the waist 4-18% (was 6-26%) and in the arms 3-11%
+  (was 4-16%). The leap itself is unchanged.
+- **The heart a row higher,** nearer where it is: the shoulders' row and
+  the one under it, left of the chest's middle (it was the second and
+  third rows).
+- **Your attacks on the upper torso,** the shoulders' two rows: a heavy
+  blow on the front's (it was the whole front), a finisher on the front's
+  and the back's (the whole vest), a web strike's rush on the front's (the
+  whole front), a knockout and a counter on the upper chest's middle (a row
+  lower). Punches already played in the arm and shoulder. Strengths are
+  unchanged.
+- **A dodge 20% lighter:** 16% (was 20%). A perfect dodge plays as it did.
+- **A grab's pull in the shoulder too.** While a web pulls a thug or a prop,
+  its sleeve had it alone; now the shoulder on that side (the shoulders'
+  row, front and back, the outer motor most) feels it at 40% of the arm's,
+  12% at most. A yank already played there.
+- **Checked:** core tests (428; new: a jump's landing on the bottom row
+  alone and a roof's up the vest, the charge's start and build under 70% of
+  before, the five attacks nowhere below the second row, the dodges'
+  strengths, a grab's pull in its own shoulder only; the heartbeat's test
+  moved up a row) and `spidy_haptics_test.exe --dry` (each pattern's frames
+  as text). `spidy_haptics_test.exe effects --only landing` (or leap,
+  punches, fight, dodges, low_health, grab) plays them on the devices
+  without the game. Not felt on the devices, not run in the game. Only the
+  stereo module and the test tool change; no protocol change.
+
+**Earlier build (October 21, fourth): RECORDING FOV, optional - pull request
 21 (iplusdvr).** You: "review and fix whats needed if needed", then "it should
 be an optional feature".
 

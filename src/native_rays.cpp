@@ -87,8 +87,38 @@ void bodyMetadata(uintptr_t world, Hit& hit) {
         hit.bodyMatches = get<uint32_t>(metadata, 0x30) == hit.bodyId && (hit.bodyFlags & 3);
     }
 }
-uint32_t queryOne(void* world, const void* nativeQuery, const Ray& ray, Hit& result) {
+// The player's body (native_rays::BodyFilter): his MoverManager (the registry's
+// component of that table on his record), the game's collision profiles and
+// what was last read of his. Packed as categories | types << 32.
+constexpr uintptr_t registryTable = 0x83f9fa0, registryCount = 0x83f9fc0, moverManagerTable = 0x3e123d8,
+                    profilesRva = 0x81c75a0;
+constexpr uintptr_t profileIndexAt = 0xd9c, profileBytes = 32, profileTypesAt = 8, profileCategoriesAt = 0xc;
+SRWLOCK bodyLock = SRWLOCK_INIT;
+uint64_t bodyRecord{};
+uintptr_t bodyManager{};
+ULONGLONG bodyReadAt{}, bodySearchAt{};
+std::atomic<uint64_t> bodyWord{};
+uintptr_t managerOf(uint64_t record) {
+    const auto table = pointer(config.base + registryTable);
+    int32_t count{};
+    if (!table || !read(config.base + registryCount, &count, 4) || count <= 0 || count > 0x100000)
+        return 0;
+    for (int32_t i = 0; i < count; ++i) {
+        uintptr_t entry[2]{};
+        if (!read(table + 16ull * i, entry, sizeof(entry)) || entry[0] < 0x10000 || !(entry[1] & 0xffffffffu))
+            continue;
+        if (pointer(entry[0]) == config.base + moverManagerTable && pointer(entry[0] + 8) == record)
+            return entry[0];
+    }
+    return 0;
+}
+BodyFilter currentBody() {
+    const uint64_t word = bodyWord.load(std::memory_order_relaxed);
+    return {static_cast<uint32_t>(word), static_cast<uint32_t>(word >> 32)};
+}
+uint32_t queryOne(void* world, const void* nativeQuery, const Ray& ray, Hit& result, bool bodyOnly = false) {
     result.ray = ray;
+    const BodyFilter body = bodyOnly ? currentBody() : BodyFilter{};
     alignas(16) uint8_t query[0x70]{};
     if (!read(reinterpret_cast<uintptr_t>(nativeQuery), query, 0x30))
         return 2101;
@@ -117,12 +147,19 @@ uint32_t queryOne(void* world, const void* nativeQuery, const Ray& ray, Hit& res
     // meets 10-15 bodies; treating a 16th as an error ended the October 6
     // session in flat screen.
     result.count = std::min(get<uint32_t>(collector, 0xc), 16u);
+    // For a ray of the player's body, the hits his body passes (meets()) are
+    // as good as none: the nearest it meets is the hit, and with none it is a
+    // miss.
+    uint32_t taken{};
     for (unsigned h = 0; h < result.count; ++h) {
         const auto hit = hits + h * 0x90;
         const auto fraction = get<float>(hit, 0x20);
         const auto normal = get<Vec3>(hit, 0x10);
         if (!std::isfinite(fraction) || fraction < 0 || fraction > 1 || !finite(normal))
             return 2104;
+        if (!meets(body, get<uint32_t>(hit, 0x78)))
+            continue;
+        ++taken;
         if (fraction > result.fraction)
             continue;
         result.fraction = fraction;
@@ -131,6 +168,7 @@ uint32_t queryOne(void* world, const void* nativeQuery, const Ray& ray, Hit& res
         result.bodyId = get<uint32_t>(hit, 0x48);
         result.filter = get<uint32_t>(hit, 0x78);
     }
+    result.count = taken;
     if (result.count)
         bodyMetadata(reinterpret_cast<uintptr_t>(world), result);
     return 0;
@@ -145,24 +183,10 @@ class Context final : public QueryContext {
         return error_;
     }
     std::optional<RayHit> raycast(Vec3 origin, Vec3 direction, float distance) const override {
-        if (distance >= 0 && distance < .01f)
-            return {};
-        Command check;
-        check.count = 1;
-        check.serial = 1;
-        check.rays[0] = {origin, distance, direction, 0};
-        if (!valid(check) || !enabled || GetTickCount64() >= deadline) {
-            error_ = 2105;
-            return {};
-        }
-        Hit hit;
-        if (const auto code = queryOne(world_, query_, check.rays[0], hit)) {
-            error_ = code;
-            return {};
-        }
-        if (!hit.count)
-            return {};
-        return RayHit{hit.position, hit.normal, hit.bodyId, fixedSurface(hit)};
+        return castOne(origin, direction, distance, false);
+    }
+    std::optional<RayHit> bodyRaycast(Vec3 origin, Vec3 direction, float distance) const override {
+        return castOne(origin, direction, distance, true);
     }
     bool exists(uint64_t id) const override {
         if (id > UINT32_MAX)
@@ -175,6 +199,26 @@ class Context final : public QueryContext {
     }
 
   private:
+    std::optional<RayHit> castOne(Vec3 origin, Vec3 direction, float distance, bool body) const {
+        if (distance >= 0 && distance < .01f)
+            return {};
+        Command check;
+        check.count = 1;
+        check.serial = 1;
+        check.rays[0] = {origin, distance, direction, 0};
+        if (!valid(check) || !enabled || GetTickCount64() >= deadline) {
+            error_ = 2105;
+            return {};
+        }
+        Hit hit;
+        if (const auto code = queryOne(world_, query_, check.rays[0], hit, body)) {
+            error_ = code;
+            return {};
+        }
+        if (!hit.count)
+            return {};
+        return RayHit{hit.position, hit.normal, hit.bodyId, fixedSurface(hit)};
+    }
     void* world_;
     const void* query_;
     mutable uint32_t error_{};
@@ -215,7 +259,7 @@ void cast(void* world, const void* nativeQuery, void* nativeCollector) {
         // Superseded or expired requests must not publish usable old targets.
         if (!enabled || GetTickCount64() >= deadline)
             break;
-        error = queryOne(world, nativeQuery, batch.rays[i], results[i]);
+        error = queryOne(world, nativeQuery, batch.rays[i], results[i], (batch.bodyRays >> i) & 1);
         if (error)
             break;
         ++count;
@@ -247,6 +291,47 @@ void cast(void* world, const void* nativeQuery, void* nativeCollector) {
 } // namespace
 void spidy::native_rays::setVisitor(Visitor value) {
     visitor = value;
+}
+void spidy::native_rays::setPlayer(uint64_t record) {
+    if (!config.base)
+        return;
+    AcquireSRWLockExclusive(&bodyLock);
+    const ULONGLONG now = GetTickCount64();
+    if (record != bodyRecord) {
+        bodyRecord = record;
+        bodyManager = 0;
+        bodyReadAt = bodySearchAt = 0;
+        bodyWord = 0;
+    }
+    if (record && now - bodyReadAt >= 250) {
+        bodyReadAt = now;
+        // His MoverManager, still his; else found again, no more often than
+        // every two seconds (the registry is long).
+        if (bodyManager && (pointer(bodyManager) != config.base + moverManagerTable ||
+                            pointer(bodyManager + 8) != record))
+            bodyManager = 0;
+        if (!bodyManager && (!bodySearchAt || now - bodySearchAt >= 2000)) {
+            bodySearchAt = now;
+            bodyManager = managerOf(record);
+        }
+        // The profile it queries with: a live entry of the game's table
+        // (each starts with -1), its types and categories.
+        BodyFilter found{};
+        uint32_t index{}, first{}, categories{};
+        uint8_t types{};
+        const auto profiles = pointer(config.base + profilesRva);
+        if (bodyManager && profiles && read(bodyManager + profileIndexAt, &index, 4) && index < 64) {
+            const auto entry = profiles + index * profileBytes;
+            if (read(entry, &first, 4) && first == 0xffffffffu && read(entry + profileTypesAt, &types, 1) &&
+                read(entry + profileCategoriesAt, &categories, 4))
+                found = {categories & 0x7ff, types};
+        }
+        bodyWord = found.categories | static_cast<uint64_t>(found.types) << 32;
+    }
+    ReleaseSRWLockExclusive(&bodyLock);
+}
+native_rays::BodyFilter spidy::native_rays::body() {
+    return currentBody();
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayStart(void* input) {
     AcquireSRWLockExclusive(&lifecycle);
@@ -344,6 +429,20 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyRaySample(void* out) {
     ReleaseSRWLockShared(&output);
     ReleaseSRWLockShared(&requests);
     return write(out, &sample, sizeof(sample)) ? 0 : 2201;
+}
+// For a probe: the player's body as the rays that stand in for it see it
+// (BodyFilter), for the actor record the 8 bytes in name, written back over
+// them (categories, types). 0, 2202 a bad pointer, 2203 the module not
+// started (its image base unknown).
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayBody(void* inout) {
+    uint64_t record{};
+    if (!read(reinterpret_cast<uintptr_t>(inout), &record, sizeof(record)))
+        return 2202;
+    if (!config.base)
+        return 2203;
+    native_rays::setPlayer(record);
+    const BodyFilter found = native_rays::body();
+    return write(inout, &found, sizeof(found)) ? 0 : 2202;
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyRayStop(void*) {
     AcquireSRWLockExclusive(&lifecycle);

@@ -31,6 +31,7 @@ from probe_native_motion import snapshot as motion_snapshot
 from vr_launcher import (LauncherLock, alive, bring_to_front, wait_for_game, enlarge_render_memory, elevated,
                          RENDER_MEMORY_HOOKS, NeedsAdministrator, NEEDS_ADMINISTRATOR_EXIT, CLOSE_GAME_EXIT,
                          close_game)
+import game_freeze
 import vr_display
 import xr_runtime
 
@@ -611,6 +612,34 @@ def pad_ignored(watch, sample, quiet=5):
     return False
 
 
+# What the game makes while it runs - eye images, frames of its screen, camera commits, reads of Spidy's
+# controller - and how long they may all stand still, seconds, before a game whose window Windows calls not
+# responding counts as frozen (game_freeze.py).
+FREEZE_COUNTERS = ('unique_submitted', 'screen_submitted', 'camera_commits', 'pad_reads')
+FREEZE_SECONDS = 8
+
+
+def game_frozen(watch, sample, quiet=FREEZE_SECONDS):
+    """Whether the game has made none of FREEZE_COUNTERS for `quiet` seconds. `watch` carries the counters and
+    since when they stood still. A game paused behind another window stands still too: the caller asks Windows
+    whether its window still answers."""
+    counters = tuple(sample.get(name) for name in FREEZE_COUNTERS)
+    if counters != watch.get('counters'):
+        watch.update(counters=counters, since=sample['seconds'])
+        return False
+    return sample['seconds']-watch['since'] >= quiet
+
+
+def freeze_line(freeze):
+    """What the session log says once the game froze and its threads were saved (or could not be)."""
+    if not freeze.get('dump'):
+        return (f"The game stopped answering {freeze['seconds']:.0f} s into VR (error {freeze.get('error')} saving "
+                'where its threads stood). Close it from Task Manager if it stays frozen.')
+    return (f"The game stopped answering {freeze['seconds']:.0f} s into VR. Where each of its threads stood is saved "
+            f"in {pathlib.Path(freeze['dump']).name} ({freeze['dump_mb']} MB) beside the session report: send both, "
+            'they show what the game waits for. Close it from Task Manager if it stays frozen.')
+
+
 # The layout the VR runtime uses for a hand's controller (controller_layout.hpp ControllerKind).
 CONTROLLER_KINDS = {0: None, 1: 'touch', 2: 'index', 3: 'steam_frame', 4: 'runtime'}
 
@@ -638,6 +667,36 @@ def controllers_line(controllers, runtime=None):
     return f"Controllers: the {' and '.join(sorted(names[kind] for kind in kinds))} layout." + pause
 
 
+# The headset's eye tracking as XrData's eye_gaze gives it (XrRuntime::EyeTracking + 1; 0: not known yet).
+EYE_TRACKING = {1: 'none', 2: 'no_tracker', 3: 'tracker'}
+
+
+def eye_aim_line(eye_aim, runtime_name=None):
+    """What the session log says about EYE AIM and the headset's eye tracking, or None: nothing while it is not
+    known, nor for a headset without eye tracking whose player never asked for it."""
+    tracking = eye_aim.get('eye_tracking')
+    wanted = [name for name, on in (('web balls', eye_aim.get('web_balls')), ('zips', eye_aim.get('zips'))) if on]
+    if tracking == 'tracker':
+        if wanted:
+            return f"Eye aim: the headset's eye tracker aims {' and '.join(wanted)}."
+        return 'Eye tracking: this headset tracks the eyes. SPIDY VR > EYE AIM can aim web balls and zips with them.'
+    if tracking and wanted:
+        why = ('this VR runtime offers no eye tracking' if tracking == 'none' else
+               'the VR runtime has no eye tracker for this headset')
+        # Meta's runtime has eye gaze, and offers it only with eye tracking over Link switched on.
+        link = (' A Quest Pro over Quest Link: switch on eye tracking over Link in the Meta Quest Link app '
+                '(Settings > Beta, beside Developer Runtime Features), then start VR again.'
+                if tracking == 'none' else '')
+        # Virtual Desktop's offers it for every headset, and has a tracker only where the headset forwards the
+        # eyes as the game starts VR (its runtime asks once per game).
+        if tracking == 'no_tracker' and runtime_name == 'Virtual Desktop':
+            link = (' A Quest Pro: switch on eye tracking in the headset (Settings > Movement tracking) and '
+                    "Forward face/eye tracking to PC in Virtual Desktop's Streaming settings, then close the "
+                    'game and start VR again.')
+        return f'Eye aim: {why}, so the hands aim web balls and the head zips, as without it.' + link
+    return None
+
+
 # A demand as prompt_buttons::pack lays it out: the pad's button bits, then each trigger, the hold, and
 # two bits an axis of each stick (0 no way, 1 back or left, 2 forward or right).
 PAD_BUTTONS = ((0x1, 'D-pad up'), (0x2, 'D-pad down'), (0x4, 'D-pad left'), (0x8, 'D-pad right'),
@@ -646,8 +705,9 @@ PAD_BUTTONS = ((0x1, 'D-pad up'), (0x2, 'D-pad down'), (0x4, 'D-pad left'), (0x8
 PAD_STICKS = ((19, 'left stick left', 'left stick right'), (21, 'left stick back', 'left stick forward'),
               (23, 'right stick left', 'right stick right'), (25, 'right stick back', 'right stick forward'))
 # What VR play can send on its own, without the pad layer or the interact button carrying it
-# (prompt_buttons::reachableInPlay): each bumper and each trigger only with its pair.
-PLAY_BUTTONS = 0x1000 | 0x2000 | 0x8000 | 0x10 | 0x20 | 0x2 | 0x80 | 0x100 | 0x200
+# (prompt_buttons::reachableInPlay): each bumper and each trigger only with its pair, L3 only with R3 (both
+# triggers at the chest: the suit power), Back from the phone's MENU.
+PLAY_BUTTONS = 0x1000 | 0x2000 | 0x8000 | 0x10 | 0x20 | 0x2 | 0x40 | 0x80 | 0x100 | 0x200
 
 
 def demand_name(word):
@@ -687,7 +747,45 @@ def reachable_in_play(word):
     shoulders = word & 0x300
     if shoulders and shoulders != 0x300:
         return False
+    if word & 0x40 and not word & 0x80:                   # L3 goes out only with R3
+        return False
     return not word & 0xffff & ~PLAY_BUTTONS
+
+
+# The VR control that sends each named button while the game names it (game_pad::NamedPress: press what you
+# see), in PAD_BUTTONS' order; LT and RT are the triggers' own.
+NAMED_CONTROLS = ((0x1, 'the right stick pushed up'), (0x2, 'the right stick pushed down'),
+                  (0x4, 'the right stick pushed left'), (0x8, 'the right stick pushed right'), (0x10, 'Menu'),
+                  (0x20, "the phone's MENU"), (0x40, 'a click of the left stick'), (0x80, 'a click of the right stick'),
+                  (0x100, 'the left trigger'), (0x200, 'the right trigger'), (0x1000, 'A'), (0x2000, 'B'),
+                  (0x4000, 'X'), (0x8000, 'Y'))
+
+
+def named_controls(word):
+    """What a player in a headset presses for a packed demand, or None for nothing. The game's right stick is
+    not among them: in VR play that stick turns the player. Both bumpers together are X's (since October 24),
+    unless the game names its own X too; a trigger is its bumper only when that one is named alone."""
+    controls = []
+    pair = word & 0x300 == 0x300 and not word & 0x4000
+    for bit, control in NAMED_CONTROLS:
+        if pair and bit in (0x100, 0x200):
+            continue
+        if word & bit and control not in controls:
+            controls.append(control)
+    if pair:
+        controls.append('X')
+    for shift, control in ((16, 'the left trigger'), (17, 'the right trigger')):
+        if word >> shift & 1 and control not in controls:
+            controls.append(control)
+    for shift, back, forward in PAD_STICKS[:2]:
+        way = word >> shift & 3
+        if way:
+            controls.append(back if way == 1 else forward)
+    if word >> 27 & 1:
+        controls.append('the left stick (any way)')
+    if not controls:
+        return None
+    return ' + '.join(controls) + (', held' if word >> 18 & 1 else '')
 
 
 def prompts_line(word):
@@ -695,15 +793,28 @@ def prompts_line(word):
     asked = demand_name(word)
     if not asked:
         return None
-    own = '' if reachable_in_play(word) else ' (VR play has no button of its own for it)'
-    return (f'The game is asking for {asked}{own}: the interact button sends it, and clicking both '
-            'thumbsticks latches the whole pad.')
+    notes = []
+    press = named_controls(word)
+    if press:
+        notes.append(f'in VR: {press}')
+    if word >> 23 & 15 or word >> 28 & 1:
+        notes.append("the game's right stick is not sent in VR play, where it turns you: SWITCH TO GAME "
+                     'SCREEN in the pause menu plays the moment with the controllers as an Xbox controller')
+    if word >> 29 & 1:
+        notes.append('it shows a key or a mouse button: press something on the controllers so it shows the pad')
+    return (f"The game is asking for {asked} - {'; '.join(notes)}. While the game names a button, the control "
+            'of that name sends it; clicking both thumbsticks latches the whole pad.')
 
 
 # The T-pose calibration's phases and what its panel asks for (body_calibration.hpp Phase, Hint).
 CALIBRATION_PHASES = {0: 'none', 1: 'waiting', 2: 'holding', 3: 'done'}
 CALIBRATION_HINTS = {0: None, 1: 'tracking', 2: 'stand_up', 3: 'arms_out', 4: 'straight', 5: 'look_ahead',
-                     6: 'triggers', 7: 'still'}
+                     6: 'triggers', 7: 'still', 8: 'floor'}
+
+
+# Why a grip pressed at the hip drew no phone (phone.hpp's PocketDraw::Miss): the headset had lost the hand,
+# it was above the pocket or below it, too near the middle or too far out, or not behind.
+POCKET_MISSES = ('lost', 'high', 'low', 'central', 'wide', 'ahead')
 
 
 # Why the view rig could not place a frame of play (GameTrackingRig::Inactive bits).
@@ -713,10 +824,10 @@ TRACKING_GAP_REASONS = ((1, 'not_playing'), (2, 'unfocused'), (4, 'no_head'), (8
 
 def snapshot(game, address):
     for _ in range(8):
-        raw = game.read(address, 1352)
-        if len(raw) != 1352:
+        raw = game.read(address, 1416)
+        if len(raw) != 1416:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53585244, 48, 1352):
+        if struct.unpack_from('<3I', raw) != (0x53585244, 49, 1416):
             raise RuntimeError('Game XR protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -881,6 +992,26 @@ def snapshot(game, address):
         s_shown, s_frames, s_sight, s_tingles, s_broken, s_dodges = struct.unpack_from('<6I', raw, 1300)
         result.update(sense_headset=dict(shown=s_shown, mark_frames=s_frames, sight_frames=s_sight,
                                          tingles=s_tingles, broken=s_broken, dodges=s_dodges))
+        # Version 49 (Spidy's 40): suit powers asked for with both hands at the chest, dodges made by moving out of a warned
+        # attack's way, dives (the player's own flight into the marked enemy, feet first), and the blows whose
+        # sound the headset played itself because the game's own was not there (game_sound.hpp).
+        c_suit, c_moved, c_dives, c_own = struct.unpack_from('<4I', raw, 1348)
+        result.update(combat_headset=dict(suit_powers=c_suit, move_dodges=c_moved, dives=c_dives,
+                                          own_sounds=c_own))
+        # Version 49 (Spidy's 41): seated play (seated.hpp) - SEATED on and a seated eye height measured, HEIGHT (cm, 0 AUTO),
+        # the seated eye height last measured and how far the tracking space is raised now, and how often it
+        # was measured.
+        s_flags, s_height, s_eye, s_lift, s_measures = struct.unpack_from('<5I', raw, 1364)
+        result.update(seated=dict(on=bool(s_flags & 1), measured=bool(s_flags & 2), height_cm=s_height,
+                                  seated_eye_m=s_eye/1000, lift_m=s_lift/1000, measures=s_measures))
+        # Version 49 (Spidy's 43): EYE AIM - the headset's eye tracking (EYE_TRACKING; None until the XR session says), the
+        # row (web balls, zips), frames of play with it on and those with the eyes tracked, web balls the eyes
+        # aimed, and zips they aimed that went out with the game's camera on their point or, late, without.
+        e_state, e_frames, e_gazed, e_shots, e_zips, e_late = struct.unpack_from('<6I', raw, 1388)
+        result.update(eye_aim=dict(
+            eye_tracking=EYE_TRACKING.get(e_state & 0xff), web_balls=bool(e_state >> 8 & 1),
+            zips=bool(e_state >> 8 & 2), frames=e_frames, gaze_frames=e_gazed, shots=e_shots, zips_aimed=e_zips,
+            zips_late=e_late))
         result.update(crawl=dict(frames=crawl_frames, stood=crawl_stood, stick_samples=crawl_stick,
                                  stick_turn_degrees=round(math.degrees(crawl_turn), 1),
                                  stick_agreement=round(crawl_agreement, 3),
@@ -1074,6 +1205,88 @@ def strike_snapshot(game, address):
                     last_strength=round(strength, 3), last_damage=round(damage, 1),
                     last_kind=BLOW_KINDS[kind] if kind < len(BLOW_KINDS) else kind, last_count=count,
                     last_hand=last_hand, last_by_strike=bool(by_strike))
+    return None
+
+
+FOCUS_STATUS = {0: 'off', 2: 'running', 3: 'another build'}
+
+
+def focus_snapshot(game, address):
+    """The game's Focus for Spidy's blows (game_focus.hpp): the punches', strikes' and counters' and the web's
+    yanks and throws, which the damage alone never earned. `asked` blows that asked for it, `given` those the game
+    was given (its own amount for its own kind of blow), `missed` those that found no meter; `now` and `most` the
+    meter after the latest given (its segments' fill and their most)."""
+    for _ in range(8):
+        raw = game.read(address, 56)
+        if len(raw) != 56:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53464344, 1, 56):
+            raise RuntimeError('Focus protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        status, = struct.unpack_from('<I', raw, 12)
+        asked, given, missed = struct.unpack_from('<3Q', raw, 24)
+        now, most = struct.unpack_from('<2f', raw, 48)
+        return dict(status=FOCUS_STATUS.get(status, status), asked=asked, given=given, missed=missed,
+                    now=round(now, 2), most=round(most, 2))
+    return None
+
+
+SOUND_STATUS = {0: 'off', 2: 'running', 3: 'another build'}
+
+
+def sound_snapshot(game, address):
+    """The game's own melee impact sounds for Spidy's blows (game_sound.hpp): `asked` blows that asked for one,
+    `played` those the game played, `refused` those it gave no sound back for, `dropped` those that never reached
+    it (nobody to sound it on, a full queue); `on_player` blows sounded on the player's own sound sources, the one
+    struck having none; the sound sources the latest blow's switches were set on and the switches that took; `live`
+    while the headset leaves the blows' sound to the game."""
+    for _ in range(8):
+        raw = game.read(address, 72)
+        if len(raw) != 72:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53534e44, 1, 72):
+            raise RuntimeError('Sound protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        status, = struct.unpack_from('<I', raw, 12)
+        asked, played, refused, dropped = struct.unpack_from('<4Q', raw, 24)
+        on_player, sources, live, switches = struct.unpack_from('<4I', raw, 56)
+        return dict(status=SOUND_STATUS.get(status, status), asked=asked, played=played, refused=refused,
+                    dropped=dropped, on_player=on_player, sources=sources, switches=switches, live=bool(live))
+    return None
+
+
+DODGE_STATUS = {0: 'off', 1: 'running', 3: 'another build'}
+DODGE_ANSWERS = ('none', 'plain', 'accurate', 'perfect')
+
+
+def dodge_snapshot(game, address):
+    """The game's own dodge for a player a web carries (game_dodge.hpp): `frames` the hero's dodge manager was
+    updated in; dodges `asked` for, those the game `taken` and its `answers` to them (none: no warning it could
+    answer; plain: no immunity; accurate; perfect); dodges Spidy `ended` and those the game ended first
+    (`cut_short`); the latest one's answer, the warnings standing as it started, its way and the player's speed
+    then; `carried` while a web carries the player."""
+    for _ in range(8):
+        raw = game.read(address, 128)
+        if len(raw) != 128:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53444744, 1, 128):
+            raise RuntimeError('Dodge protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        status, = struct.unpack_from('<I', raw, 12)
+        frames, asked, taken = struct.unpack_from('<3Q', raw, 24)
+        answers = struct.unpack_from('<4Q', raw, 48)
+        ended, cut_short = struct.unpack_from('<2Q', raw, 80)
+        last, warnings, error, carried = struct.unpack_from('<4I', raw, 96)
+        way = struct.unpack_from('<3f', raw, 112)
+        speed, = struct.unpack_from('<f', raw, 124)
+        return dict(status=DODGE_STATUS.get(status, status), frames=frames, asked=asked, taken=taken,
+                    answers=dict(zip(DODGE_ANSWERS, answers)), ended=ended, cut_short=cut_short,
+                    last_answer=DODGE_ANSWERS[last] if last < len(DODGE_ANSWERS) else last,
+                    last_warnings=warnings, last_way=[round(x, 3) for x in way], last_speed=round(speed, 2),
+                    error=error, carried=bool(carried))
     return None
 
 
@@ -1290,6 +1503,37 @@ def appearance_snapshot(game, address):
                     # Frames the left eye chose which far buildings draw their full models (lit windows),
                     # standing in for the game's own view while it does not render; 0 = the game's view did.
                     impostor_frames=impostor_frames)
+    return None
+
+
+def stream_snapshot(game, address):
+    """SpidyStreamData (native_stream.hpp): the far buildings' cone about the head, the scene's slot pool their
+    full models share with the nearby details, and the texture streamer's budget."""
+    for _ in range(8):
+        raw = game.read(address, 88)
+        if len(raw) != 88:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53545244, 1, 88):
+            raise RuntimeError('Native stream protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        features = struct.unpack_from('<I', raw, 12)[0]
+        cone_frames, own_frames = struct.unpack_from('<2Q', raw, 24)
+        margin, across, up_down = struct.unpack_from('<3f', raw, 40)
+        capacity, used, most, full = struct.unpack_from('<3iI', raw, 52)
+        texture_game, texture_budget, video_budget, video_usage, drops = struct.unpack_from('<5I', raw, 68)
+        # Frames the left eye's query for far buildings took the cone (the lens over both eyes, widened by
+        # the margin), and frames it kept its own lens while standing in for the game's view.
+        return dict(cone=bool(features & 1), cone_frames=cone_frames, own_lens_frames=own_frames,
+                    cone_margin_deg=round(margin, 2), cone_across_deg=round(across, 1),
+                    cone_up_down_deg=round(up_down, 1),
+                    # The slot pool: its size, slots in use at the last frame, the most, and frames 85% full.
+                    pool_capacity=capacity, pool_used=used, pool_most=most, pool_full_frames=full,
+                    # The texture budget, MB: the game's and the one in force, and the card's budget for the
+                    # game and the game's use of it at the last look; drops = given back for lack of room.
+                    texture_budget_raise=bool(features & 2), texture_game_mb=texture_game,
+                    texture_budget_mb=texture_budget, video_budget_mb=video_budget, video_usage_mb=video_usage,
+                    texture_drops=drops)
     return None
 
 
@@ -1824,9 +2068,9 @@ def main():
     p.add_argument('--no-air-webs', action='store_true',
                    help='A web that meets nothing within reach misses, instead of holding in open air 100 m out')
     p.add_argument('--flips', action='store_true',
-                   help='Experimental: in the air the left stick turns you over, and a tap of A flips you')
+                   help='Basic flips: airborne right stick; up prioritizes zip/aim, release holds, A returns upright')
     p.add_argument('--flip-speed', type=int, default=180,
-                   help='How fast a flip turns you at full tilt of the left stick, in degrees a second (90..480; '
+                   help='How fast a flip turns you at full tilt of its steering stick, in degrees a second (90..480; '
                         'default 180)')
     p.add_argument('--game-depth-of-field', action='store_true',
                    help="Keep the game's own Depth of Field setting; without it a session turns it off (in the "
@@ -2086,7 +2330,8 @@ def session(a, startup):
             ROOT/'reports/ray-modules', ('SpidyRayStart', 'SpidyRaySubmit', 'SpidyRayStop',
                                        'SpidyRaySample', 'SpidyRayData', 'SpidySwingData', 'SpidyGrabData',
                                        'SpidyPunchData', 'SpidyStrikeData', 'SpidyShooterData', 'SpidyRopeData',
-                                       'SpidySenseData'))
+                                       'SpidySenseData', 'SpidyFocusData', 'SpidySoundData',
+                                       'SpidyDodgeData'))
         # Imported here: probe_game_grab imports from this module.
         from probe_game_grab import grab_snapshot
         ray_module = next(m['base'] for m in modules(game.pid) if m['name'].lower() == 'spidy_ray_bridge.dll')
@@ -2100,7 +2345,7 @@ def session(a, startup):
                                            'SpidyStereoFrames', 'SpidyXrSnapshot', 'SpidyStereoData',
                                            'SpidyBodyData', 'SpidySlowMotionData', 'SpidyHudData',
                                            'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData', 'SpidyImpostorReach',
-                                           'SpidyHapticsData'))
+                                           'SpidyHapticsData', 'SpidyStreamData'))
         stage_haptics(xr_hash)
 
         saved = vr_display.Registry().read(('ScreenSpaceReflections', 'RTReflections'))
@@ -2145,12 +2390,17 @@ def session(a, startup):
         eye_shots = deque()
         eye_folder = a.output.with_name(a.output.stem+'-eyes')
         shot_count = 0
-        appearance = None
+        appearance = streaming = None
         # The player's body and fists: the latest of each, and a sample when punches land.
         body = punch = None
         punch_samples = deque(maxlen=2000)
         strikes, strike_samples = None, deque(maxlen=2000)
         sense, sense_samples = None, deque(maxlen=2000)
+        # The game's Focus for those blows: the latest.
+        focus = None
+        sound = None
+        # The game's own dodges for a player a web carries: the latest.
+        dodge = None
         # Read while the game runs: a session that ends with the game has nothing to read them from.
         ropes = steam = venom_events = None
         # The web shooter: the latest, and a sample when a shot is asked for, fired or dropped.
@@ -2170,7 +2420,7 @@ def session(a, startup):
         lowest_commit = start_commit = free_commit_mb()
         printed_ring = False
         previous = None
-        printed_controllers = None
+        printed_controllers = printed_eye_aim = None
         printed_prompt = 0
         printed_dimensions=False
         renewed=0
@@ -2179,6 +2429,8 @@ def session(a, startup):
         # The game's reads of Spidy's controller: none while buttons are held on the game screen means its
         # menus cannot be played (the October 7 Steam Link session: the game had turned XInput off).
         pad_watch = dict(reads=None, since=0.0, warned=False)
+        # A game that stops answering: the counters it stood still with, and its threads once saved.
+        freeze_watch, freeze = {}, None
 
         # How the eyes are rendered: upscaled from `upscale` percent of their size per side and anti-aliased
         # (or neither), whether the game renders a view of its own for the monitor as well, how often the
@@ -2225,17 +2477,19 @@ def session(a, startup):
                         swing_samples=list(swing_samples), motion_samples=list(motion_samples),
                         grab_samples=list(grab_samples), body=body, punch=punch,
                         punch_samples=list(punch_samples), strikes=strikes, strike_samples=list(strike_samples),
-                        sense=sense, sense_samples=list(sense_samples),
+                        focus=focus, sense=sense, sense_samples=list(sense_samples), dodge=dodge,
                         ropes=ropes, steam_guard=steam, venom_events=venom_events,
                         shooter=shooter, shooter_samples=list(shooter_samples),
                         slow_motion=slow_motion, slow_motion_samples=list(slow_motion_samples), hud=hud_last,
                         haptics=haptics_last, prompts=prompt_section(list(samples)),
-                        ray_samples=list(ray_samples), appearance=appearance, eye_jobs=eye_jobs,
+                        ray_samples=list(ray_samples), appearance=appearance, streaming=streaming,
+                        eye_jobs=eye_jobs,
                         render_memory=render_memory, timing=timing, network=links,
                         stream_stalls=stream_stalls(list(samples)),
                         free_commit_mb=dict(start=start_commit, lowest=lowest_commit),
                         eye_snapshots=list(eye_shots), eye_snapshot_folder=str(eye_folder) if eye_shots else None,
-                        frame_rates=frame_rates(list(samples)), final=samples[-1] if samples else None, **extra)
+                        frame_rates=frame_rates(list(samples)), freeze=freeze,
+                        final=samples[-1] if samples else None, **extra)
 
         lost_device = {}
 
@@ -2292,6 +2546,10 @@ def session(a, startup):
                     sample['seconds'] = time.monotonic()-started
                     appearance = appearance_snapshot(game, xr['SpidyAppearanceData']) or appearance
                     sample['appearance'] = appearance
+                    streaming = stream_snapshot(game, xr['SpidyStreamData']) or streaming
+                    if streaming:
+                        sample['streaming'] = {k: streaming[k] for k in ('cone_margin_deg', 'pool_used',
+                                                                         'texture_budget_mb', 'video_usage_mb')}
                     body = body_snapshot(game, xr['SpidyBodyData']) or body
                     if body:
                         sample['body'] = {k: body[k] for k in ('state', 'problem', 'weight', 'hand_error_m',
@@ -2316,6 +2574,9 @@ def session(a, startup):
                                          'passed_over')):
                             strike_samples.append(dict(fight, seconds=round(time.monotonic()-started, 3)))
                         strikes = fight
+                    focus = focus_snapshot(game, rays['SpidyFocusData']) or focus
+                    sound = sound_snapshot(game, rays['SpidySoundData']) or sound
+                    dodge = dodge_snapshot(game, rays['SpidyDodgeData']) or dodge
                     senses = sense_snapshot(game, rays['SpidySenseData'])
                     if senses and 'protocol_mismatch' in senses:
                         sense = senses
@@ -2395,6 +2656,15 @@ def session(a, startup):
                     samples.append(sample)
                     if pad_ignored(pad_watch, sample):
                         print(PAD_IGNORED, flush=True)
+                    # Saved once, while it still hangs: the dump is what says where (game_freeze.py).
+                    if freeze is None and game_frozen(freeze_watch, sample) and \
+                            time.monotonic() >= freeze_watch.get('asked', 0)+1:
+                        freeze_watch['asked'] = time.monotonic()
+                        if game_freeze.window_hung(game.pid):
+                            freeze = dict(game_freeze.capture(game.pid, a.output.with_name(a.output.stem +
+                                                                                           '-freeze.dmp')),
+                                          seconds=round(freeze_watch['since'], 1))
+                            print(freeze_line(freeze), flush=True)
                     if sample['eye_width'] and not printed_dimensions:
                         print(rendering_line(sample['eye_width'], sample['eye_height'], a.render_scale, a.size,
                                              runtime['recommended_eye'], a.upscale, not a.no_eye_antialiasing),
@@ -2442,6 +2712,11 @@ def session(a, startup):
                     if layout and layout != printed_controllers:
                         print(layout, flush=True)
                         printed_controllers = layout
+                    # And the headset's eye tracking, for EYE AIM, once known and when the row changes.
+                    eyes = eye_aim_line(sample['eye_aim'], runtime.get('name'))
+                    if eyes and eyes != printed_eye_aim:
+                        print(eyes, flush=True)
+                        printed_eye_aim = eyes
                     # And what the game asks for, each time it asks for something new: the moments that
                     # used to stop a player are the ones where this names a button VR play never had.
                     asked = sample.get('prompt_last_demand', 0)
@@ -2506,6 +2781,9 @@ def session(a, startup):
             body=body_snapshot(game, xr['SpidyBodyData']) or body,
             punch=punch_snapshot(game, rays['SpidyPunchData']) or punch, punch_samples=list(punch_samples),
             strikes=strike_snapshot(game, rays['SpidyStrikeData']) or strikes, strike_samples=list(strike_samples),
+            focus=focus_snapshot(game, rays['SpidyFocusData']) or focus,
+            sound=sound_snapshot(game, rays['SpidySoundData']) or sound,
+            dodge=dodge_snapshot(game, rays['SpidyDodgeData']) or dodge,
             sense=sense_snapshot(game, rays['SpidySenseData']) or sense, sense_samples=list(sense_samples),
             ropes=rope_snapshot(game, rays['SpidyRopeData']) or ropes,
             steam_guard=steam_snapshot(game, xr['SpidySteamData']) or steam,
@@ -2515,6 +2793,7 @@ def session(a, startup):
             slow_motion=slow_motion_snapshot(game, xr['SpidySlowMotionData']) or slow_motion,
             slow_motion_samples=list(slow_motion_samples), haptics=haptics_last,
             motion_samples=list(motion_samples), appearance=appearance_snapshot(game,xr['SpidyAppearanceData']),
+            streaming=stream_snapshot(game, xr['SpidyStreamData']) or streaming,
             hud=hud_snapshot(game, xr['SpidyHudData']),
             prompts=prompt_snapshot(game, xr['SpidyPromptData']),
             eye_jobs=frame_snapshot(game, xr['SpidyStereoFrames']) or eye_jobs,

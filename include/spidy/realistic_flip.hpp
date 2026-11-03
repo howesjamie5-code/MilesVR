@@ -10,13 +10,15 @@ namespace spidy {
 // let-go web leaves its swing's spin; responseMs: how soon a turn reaches its
 // speed; handStrength: how much an arm's swing adds, percent; falloffMs: how
 // long a spin takes to fade; handThreshold: slower arms add nothing, cm/s;
-// airBrake: A in the air rights the player.
+// airBrake: A in the air rights the player; inCombat: off, a fight
+// (RealisticFlight::fighting) turns nothing, and the player comes upright as
+// on landing.
 struct RealisticFlipSettings {
     bool enabled = false, releaseFlip = true; // carry swing momentum on release
     int strength = 50, speed = 240, minimumSpeed = 3;
     int responseMs = 500, handStrength = 100, falloffMs = 3000;
     int handThreshold = 100; // centimetres per second
-    bool airBrake = true;
+    bool airBrake = true, inCombat = true;
     bool operator==(const RealisticFlipSettings&) const = default;
 };
 struct RealisticFlight {
@@ -24,6 +26,8 @@ struct RealisticFlight {
     bool valid{}, attached{};
     Vec3 handMomentum{}; // raw tracking-space arm movement, before virtual rotation
     float ropeLength = 20;
+    float coupling = 1;
+    bool fighting{}; // enemies in reach of the player's blows lately
 };
 struct RealisticControls {
     bool brake{};
@@ -198,8 +202,12 @@ class RealisticFlip {
             sampled_ = true;
         }
         averageVelocity_ += (velocity - averageVelocity_) * (1 - std::exp(-dt / .12f));
-        const bool flying = airborne && !surface;
-        const bool tether = flying && flight.attached && length(flight.pull) > .01f;
+        // FLIPS IN COMBAT off: in a fight the webs, the arms, a let-go swing
+        // and the stick turn nothing, and the player comes upright as on
+        // landing; a web still held when it ends turns him again.
+        const bool aloft = airborne && !surface;
+        const bool flying = aloft && !(flight.fighting && !settings.inCombat);
+        const bool tether = flying && flight.attached && flight.coupling > 0 && length(flight.pull) > .01f;
         const bool enough = length(averageVelocity_) >= std::clamp(settings.minimumSpeed, 3, 16);
         const float strength = std::clamp(settings.strength, 25, 100) / 100.f;
         const float drag = std::clamp(settings.falloffMs, 500, 3000) / 1000.f;
@@ -210,7 +218,9 @@ class RealisticFlip {
                 lastRadius_ = std::clamp(flight.ropeLength, 2.f, 100.f);
             if (enough) {
                 const auto delta = arc(tilt_.rotate({0, 1, 0}), lastPull_);
-                desired = limited(rotationVector(delta) * (strength / response), rate);
+                const float coupling = std::clamp(flight.coupling, 0.f, 1.f);
+                const Vec3 aligned = limited(rotationVector(delta) * (strength / response), rate);
+                desired = desired * (1 - coupling) + aligned * coupling;
             }
         } else if (flying && attached_ && settings.releaseFlip) {
             // Tangential orbit momentum supplements the rotation already present.
@@ -219,7 +229,7 @@ class RealisticFlip {
             desired = angular_ + limited(orbit * strength, rate * .5f);
         }
         if (flying) {
-            const float gain = 8.f * std::clamp(settings.handStrength, 25, 200) / 100.f;
+            const float gain = 8.f * std::clamp(settings.handStrength, 0, 200) / 100.f;
             const Vec3 hand = tilt_.rotate(flight.handMomentum) * gain;
             // Capture the short arm swing that straddles takeoff, then accept
             // ongoing gestures and opposite gestures that brake the rotation.
@@ -231,7 +241,7 @@ class RealisticFlip {
         if (manual && flying)
             desired = tilt_.rotate(controls.manualAngular);
         attached_ = tether;
-        airborne_ = flying;
+        airborne_ = aloft;
         momentum_ = limited(desired, rate);
         integrate(momentum_, acceleration, dt);
         if (tether || !flying || manual)

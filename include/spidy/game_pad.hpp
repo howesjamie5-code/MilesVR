@@ -47,24 +47,30 @@ static_assert(prompt_buttons::padDpadUp == dpadUp && prompt_buttons::padDpadDown
               prompt_buttons::padRightShoulder == rightShoulder &&
               prompt_buttons::padA == a && prompt_buttons::padB == b && prompt_buttons::padX == x &&
               prompt_buttons::padY == y);
+// The two bumpers together: the game's web pull and throw.
+constexpr uint16_t bumpers = leftShoulder | rightShoulder;
 enum class Mapping {
     none,
     // VR gameplay: the controllers swing, walk and jump. The menu button
-    // (Start: pause) and X (Back: map, suits, skills) reach the game as
-    // buttons; walking, jumping, B (the game's B: dodge), Y (the game's
-    // Y: interact), the right stick's click (the game's LB + RB: its
-    // web pull), that stick pushed down (the game's D-pad down: heal) and
+    // (Start: pause) reaches the game as a button; the game's menu (its Back:
+    // map, suits, skills) is the phone's MENU (phone.hpp), no button's (X's
+    // until October 23). Walking, jumping, B (the game's B: dodge), Y (the
+    // game's Y: interact), X where the game shows its LB + RB (its web pull
+    // and throw: NamedPress; the right stick's click until October 24), the
+    // right stick pushed down (the game's D-pad down: heal) and
     // up (its LT + RT: the zip to a point; held into the game's aim mode,
     // the zip as it is let go: ZipPress) reach it as the swing leaves them
     // (Walk). The virtual controller's own right stick turns the
     // game's camera to where the player looks (CameraLook, CameraPitch). A
-    // held on the ground charges the swing's own leap (ChargeJump), and a
+    // held on the ground charges the swing's own leap (ChargeJump), a
     // trigger pulled with its hand at the temple is the game's R3, its scan
-    // (TemplePress). The Steam Frame's View button and D-pad, which the
-    // other controllers lack, are the game's own Back and D-pad here as on
-    // the game screen: its D-pad down heals as the stick's push does. While
-    // the game names a button in a prompt, the VR control of that name sends
-    // it instead of doing its job in play (NamedPress).
+    // (TemplePress), and both triggers pulled with both hands at the chest
+    // are its L3 + R3, its suit power (SuitPowerPress). The Steam Frame's
+    // View button and D-pad, which the other controllers lack, are the
+    // game's own Back and D-pad here as on the game screen: its D-pad down
+    // heals as the stick's push does. While the game names a button in a
+    // prompt, the VR control of that name sends it instead of doing its job
+    // in play (NamedPress).
     gameplay,
     // The game screen: every control as on an Xbox controller. A, B, X and Y
     // sit where Xbox has them; grips are the bumpers.
@@ -90,9 +96,11 @@ enum class Mapping {
 // interact, Y the game menu and X the aim markers' switch. pull: the game's
 // LB and RB together, held: its web pull, where it shows the two (a door or
 // a grate to tear off). The grips are no bumpers in VR play (they shoot the
-// webs), so the right thumbstick's click gives them (PullPress): until
-// October 11 nothing did, and a door of the first mission that asks for
-// LB + RB could not be opened in VR. heal: the game's D-pad down, held: its
+// webs), so both web buttons on the thing, yanked, give them (WebPull), and
+// X does wherever the game shows the two (NamedPress, October 24: the
+// throw's prompt by every trash can on a street). The right thumbstick's
+// click gave them from October 11, when a door of the first mission that
+// asks for LB + RB could not be opened in VR, until then. heal: the game's D-pad down, held: its
 // heal. zip: the game's LT and RT together, held: its zip to a point, where
 // it shows the two (a perch, a vent to enter). Touch controllers have no
 // D-pad, and their triggers and grips are the webs in VR play, so the right
@@ -104,6 +112,11 @@ enum class Mapping {
 // CameraPitch). scan: the game's R3, held: its scan of the surroundings
 // (TemplePress). camo: the game's D-pad up, Miles's Camouflage (MilesVR
 // 0.1.35: the left hand's TemplePress, the right's being the scan).
+// suit: its L3 + R3, held: its suit power (SuitPowerPress).
+// Until October 23 nothing sent the suit power's: the gesture buzzed the
+// hands and counted, and the game never saw it (21 tries in one session).
+// menu: its Back, held: its menu of the map, suits and skills, from the
+// phone's MENU (phone.hpp); X sent it until October 23.
 struct Walk {
     float right{}, forward{};
     bool jump{}, interact{}, dodge{}, pull{}, heal{}, zip{}, aim{};
@@ -114,7 +127,7 @@ struct Walk {
     // either trigger and a held A did nothing; RT + A left it in 0.09 s).
     bool parkour{};
     float look{}, lookUp{};
-    bool scan{}, camo{};
+    bool scan{}, camo{}, suit{}, menu{};
     // The game's RT, a tap as a web takes the player into a swing (SwingTap):
     // what its own swing prompt ("Hold RT", the opening's first swing) waits for.
     bool swing{};
@@ -338,6 +351,83 @@ class SwingTap {
     bool was_{};
     uint32_t taps_{};
 };
+// Both hands at the chest with both triggers pulled: the game's L3 + R3, its
+// suit power. A player's idea, October 15 ("both your hands to your chest and
+// hit trigger like the scan"): VR play had no way to it at all, as clicking
+// both sticks is the pad layer and only the game screen sent the game its L3
+// + R3. The chest: a point `below` the headset and `ahead` of it, level with
+// where it looks; a hand counts within `reach` of it as its trigger goes down,
+// and the two triggers must go down within `together` of each other. Each
+// such trigger is the gesture's alone until it is let go: no web ball, no
+// reel (hands()). Outside VR play nothing holds, and a trigger held through
+// that must be let go first.
+class SuitPowerPress {
+  public:
+    static constexpr float below = .38f, ahead = .15f, reach = .22f, together = .4f, pressed = .6f,
+                           released = .3f, holdSeconds = .15f;
+    // seconds: since the previous update. play: the controllers play VR.
+    // head and grips: the headset's and each hand's grip pose, in one space;
+    // tracked and triggers: each hand's. Returns the game's L3 + R3: down or not.
+    bool update(float seconds, bool play, const Pose& head, const Pose grips[2], const bool tracked[2],
+                const float triggers[2]) {
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        left_ = std::max(0.f, left_ - dt);
+        Vec3 chest{};
+        bool placed = play && finite(head.position);
+        if (placed) {
+            Vec3 look = head.orientation.rotate({0, 0, -1});
+            look.y = 0;
+            look = length(look) > .1f ? normalized(look) : Vec3{0, 0, -1};
+            chest = head.position + Vec3{0, -below, 0} + look * ahead;
+            placed = finite(chest);
+        }
+        for (unsigned i = 0; i < 2; ++i) {
+            const float trigger = std::isfinite(triggers[i]) ? triggers[i] : 0.f;
+            const bool down = tracked[i] && trigger > (down_[i] ? released : pressed);
+            const bool press = down && !down_[i];
+            down_[i] = down;
+            since_[i] += dt;
+            const uint32_t bit = 1u << i;
+            if (!down || !play) {
+                hands_ &= ~bit;
+                continue;
+            }
+            if (press && placed && finite(grips[i].position) && length(grips[i].position - chest) <= reach) {
+                hands_ |= bit;
+                since_[i] = 0;
+                spent_ &= ~bit;
+            }
+        }
+        // Both triggers pulled at the chest, close together and not spent
+        // on a power already: the power.
+        if (hands_ == 3 && !spent_ && std::abs(since_[0] - since_[1]) <= together) {
+            spent_ = 3;
+            ++powers_;
+            left_ = holdSeconds;
+        }
+        if (!play)
+            left_ = 0;
+        held_ = left_ > 0;
+        return held_;
+    }
+    bool held() const {
+        return held_;
+    }
+    // A bit per hand whose trigger is the gesture's.
+    uint32_t hands() const {
+        return hands_;
+    }
+    // Suit powers asked for so far.
+    uint32_t powers() const {
+        return powers_;
+    }
+
+  private:
+    bool down_[2]{}, held_{};
+    float since_[2]{100, 100};
+    uint32_t hands_{}, spent_{}, powers_{};
+    float left_{};
+};
 // The right thumbstick pushed straight down or up, as Walk::heal and
 // Walk::zip. In VR play that stick turns the player with its left and right;
 // its down and up did nothing. A push counts from the stick at rest, once it
@@ -349,8 +439,32 @@ class SwingTap {
 // push already under way keeps through a moment out of play, as long as
 // graceSeconds (a long frame, a blink of the headset's focus), and goes on
 // counting after it. Until October 18 one such moment spent it.
+// Reserve an intentional upward zip command before basic flips read the
+// stick. Keep ownership through a diagonal drag until neutral is seen.
+class FlipZipPriority {
+  public:
+    bool update(bool play, bool tracked, float x, float y) {
+        began_ = false;
+        if (!play) { owned_ = ready_ = false; return false; }
+        if (!tracked || !std::isfinite(x) || !std::isfinite(y)) return owned_;
+        if (std::hypot(x, y) < .5f) { owned_ = false; ready_ = true; return false; }
+        if (!owned_ && ready_ && y >= .75f && std::abs(x) <= .45f) {
+            owned_ = began_ = true; ready_ = false;
+        }
+        return owned_;
+    }
+    bool began() const { return began_; }
+  private:
+    bool ready_{}, owned_{}, began_{};
+};
 class StickPush {
   public:
+    // Another control mode owns the stick. Require neutral before a new shortcut.
+    void cancel() {
+        way_ = Way::none;
+        spent_ = true;
+        held_ = lapse_ = 0;
+    }
     static constexpr float pushed = .75f, aside = .45f, released = .5f, holdSeconds = .15f,
                            graceSeconds = .25f;
     enum class Way { none, down, up };
@@ -421,6 +535,12 @@ class StickPush {
 // after, letting go sending nothing.
 class ZipPress {
   public:
+    bool active() const { return phase_ != Phase::idle; }
+    // Cancel ownership without releasing an aimed zip or clearing telemetry.
+    void cancel() {
+        phase_ = Phase::idle;
+        time_ = lapse_ = 0;
+    }
     static constexpr float slowBelow = .9f, pressSeconds = .2f, gapSeconds = .05f, graceSeconds = .25f;
     struct Keys {
         bool zip{}; // the game's LT + RT
@@ -516,13 +636,18 @@ class ZipPress {
 // root of the turn wanted, above `floor`: from 170 degrees off the camera
 // was within 4 in 1.4 s and stayed there. It starts beyond startDegrees and
 // rests within stopDegrees: a head that looks about turns nothing.
+//
+// precise: EYE AIM's zip (EyeZip), the camera brought onto what the eyes look
+// at, which is the point the game zips to: it starts beyond
+// preciseStartDegrees and rests within preciseStopDegrees.
 class CameraLook {
   public:
     static constexpr float startDegrees = 12, stopDegrees = 4, fullRate = 180, seconds = .25f, floor = .45f;
+    static constexpr float preciseStartDegrees = 2.5f, preciseStopDegrees = 1;
     // look: where the head looks; camera: the game camera's forward (both in
     // the world). steer: VR play, with that camera the player's own. Returns
     // the right stick's X, -1..1.
-    float update(Vec3 look, Vec3 camera, bool steer) {
+    float update(Vec3 look, Vec3 camera, bool steer, bool precise = false) {
         look.y = camera.y = 0;
         // Straight up or down says no way to look.
         if (!steer || !finite(look) || !finite(camera) || length(look) < .3f || length(camera) < .3f) {
@@ -535,7 +660,8 @@ class CameraLook {
         // To the camera's right, as the game takes the stick: cross(forward, up).
         error_ = std::atan2(dot(look, cross(camera, {0, 1, 0})), dot(look, camera)) * 57.29578f;
         const float off = std::abs(error_);
-        const bool turn = off > (turning_ ? stopDegrees : startDegrees);
+        const bool turn = off > (precise ? (turning_ ? preciseStopDegrees : preciseStartDegrees)
+                                         : (turning_ ? stopDegrees : startDegrees));
         turns_ += turn && !turning_;
         turning_ = turn;
         if (!turn)
@@ -571,8 +697,9 @@ class CameraPitch {
   public:
     static constexpr float lowest = -80, highest = 62;
     // look: where the head looks; camera: the game camera's forward (both in
-    // the world). steer: as CameraLook's. Returns the right stick's Y, -1..1.
-    float update(Vec3 look, Vec3 camera, bool steer) {
+    // the world). steer and precise: as CameraLook's. Returns the right
+    // stick's Y, -1..1.
+    float update(Vec3 look, Vec3 camera, bool steer, bool precise = false) {
         if (!steer || !finite(look) || !finite(camera) || length(look) < .5f || length(camera) < .5f) {
             turning_ = false;
             error_ = 0;
@@ -581,7 +708,9 @@ class CameraPitch {
         const auto pitch = [](Vec3 v) { return std::asin(std::clamp(v.y / length(v), -1.f, 1.f)) * 57.29578f; };
         error_ = std::clamp(pitch(look), lowest, highest) - pitch(camera);
         const float off = std::abs(error_);
-        const bool turn = off > (turning_ ? CameraLook::stopDegrees : CameraLook::startDegrees);
+        const bool turn =
+            off > (precise ? (turning_ ? CameraLook::preciseStopDegrees : CameraLook::preciseStartDegrees)
+                           : (turning_ ? CameraLook::stopDegrees : CameraLook::startDegrees));
         turns_ += turn && !turning_;
         turning_ = turn;
         if (!turn)
@@ -603,46 +732,67 @@ class CameraPitch {
     bool turning_{};
     uint32_t turns_{};
 };
-// The right thumbstick's click as Walk::pull. Like the left one's
-// (StickPress, slow_motion.hpp) it is not half of clicking both (which
-// switched between VR and the flat screen until October 12, and is neither
-// stick's press since): it holds once the stick has been
-// down chordSeconds without the other, for as long as it stays down, and a
-// click let go sooner holds for tapSeconds after it. Outside VR play
-// nothing holds, and a stick held through that must be let go first.
-class PullPress {
+// EYE AIM's zips (vr_settings::eyeAimZips). The game zips to the point its own
+// camera has in view (its aim "snaps to zip-to-perch targets": ZipPress), and
+// that camera follows the head's level look loosely (CameraLook,
+// CameraPitch). With the eyes aiming zips it follows them instead, closely
+// (`precise`), from the moment the stick goes up for one to the zip's end,
+// at the point the eyes meet as seen from where that camera stands. A zip
+// made at once (a tap of the stick) would leave before the camera got
+// there, so the zip waits for it - within settledDegrees each way - for
+// waitSeconds at most past the stick's own holdSeconds; a hold that turned
+// into the game's aim mode zips when let go, as before, with the camera on
+// the eyes all the while.
+class EyeZip {
   public:
-    static constexpr float chordSeconds = .12f, tapSeconds = .2f;
-    // seconds: since the previous update. play: the game has the player in
-    // VR. mine, other: the right and the left thumbstick's click.
-    bool update(float seconds, bool play, bool mine, bool other) {
-        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
-        if (!play) {
-            down_ = mine;
-            spent_ = true;
-            tap_ = 0;
+    static constexpr float settledDegrees = 3, waitSeconds = .35f;
+    // seconds: since the previous update. up: the stick held up for a zip
+    // (StickPush). eyes: the camera follows the eyes now. yaw, pitch: how far
+    // it is from them (CameraLook::error, CameraPitch::error), degrees.
+    // Whether the zip may go out: once it may, it may until the stick comes
+    // down.
+    bool update(float seconds, bool up, bool eyes, float yaw, float pitch) {
+        if (!up) {
+            waited_ = 0;
+            ready_ = false;
             return false;
         }
-        if (!mine) {
-            tap_ = down_ && !spent_ && held_ < chordSeconds ? tapSeconds : std::max(0.f, tap_ - dt);
-            down_ = spent_ = false;
-            return tap_ > 0;
+        if (ready_)
+            return true;
+        if (!eyes)
+            return ready_ = true;
+        waited_ += std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        const bool settled = std::abs(yaw) <= settledDegrees && std::abs(pitch) <= settledDegrees;
+        if (settled || waited_ >= waitSeconds) {
+            ready_ = true;
+            ++(settled ? settled_ : late_);
         }
-        if (!down_) {
-            down_ = true;
-            spent_ = false;
-            held_ = tap_ = 0;
-        } else {
-            held_ += dt;
-        }
-        spent_ = spent_ || other;
-        return !spent_ && held_ >= chordSeconds;
+        return ready_;
+    }
+    // Zips the eyes aimed that went out with the camera on them, and those
+    // that went out at waitSeconds without.
+    uint32_t settled() const {
+        return settled_;
+    }
+    uint32_t late() const {
+        return late_;
     }
 
   private:
-    bool down_{}, spent_{};
-    float held_{}, tap_{};
+    float waited_{};
+    bool ready_{};
+    uint32_t settled_{}, late_{};
 };
+// Where the game's camera must look for its centre to be on `target`, seen
+// from where it stands: the eyes' point (game_swing::AimData::gaze) from the
+// camera, which stands behind and above the head. A point too near the camera
+// to say (under a metre), or none, is the eyes' own direction.
+inline Vec3 cameraLookAt(Vec3 camera, Vec3 target, bool hasTarget, Vec3 gaze) {
+    const Vec3 to = target - camera;
+    if (hasTarget && finite(to) && length(to) >= 1)
+        return normalized(to);
+    return gaze;
+}
 // Y held, to reach what it is for. The game takes its Y only close to the
 // thing: a door of the first mission showed "Open Door" 1.1 m from its middle
 // and not 1.2 m, nearer than a VR player stands to a wall (October 11: four
@@ -722,7 +872,7 @@ class InteractStep {
     uint32_t steps_{};
 };
 // Where B, X and Y went down. On the game screen they are the game's own B,
-// X and Y; in VR play B dodges, Y interacts and X opens the game menu. Held
+// X and Y; in VR play B dodges, Y interacts and X opens the gadget wheel. Held
 // from one into the other, a button stays what it was until it is let go:
 // Back held into play is no dodge, and an interact held into a menu the game
 // opened is no Y there (which resets a Settings tab).
@@ -775,8 +925,9 @@ class PressOrigins {
 constexpr float pauseHoldSeconds = .7f;
 // Clicking both thumbsticks together latches this layer, and every control of
 // the pad can be sent while it is on. The chord is free: neither stick's own
-// press has been half of clicking both since October 12 (PullPress,
-// slow_motion's StickPress both drop a chord), and a tap leaves the thumbs
+// press has been half of clicking both since October 12 (slow_motion's
+// StickPress drops a chord, and the right stick's click alone sends nothing
+// since October 24, unless the game names its R3), and a tap leaves the thumbs
 // free for the face buttons, which holding the chord would not. It never
 // latches while a web carries the player, and it lets go by itself after
 // idleSeconds of nothing pressed, so a player cannot be left in it.
@@ -824,6 +975,15 @@ class PadLayer {
     }
     bool latched() const {
         return latched_;
+    }
+    // Lets go of it at once: the phone drawn from a back pocket does, as the
+    // phone is play's. On October 25 a click of both sticks with the game's
+    // camera out latched it unseen, and for 110 s the phone would not come
+    // out and the grips and triggers shot no web; every press kept it on,
+    // until the pause menu let it go.
+    void leave() {
+        latched_ = false;
+        idle_ = 0;
     }
     // The times the layer was latched on.
     uint32_t entries() const {
@@ -989,8 +1149,9 @@ class ScreenControls {
 // prompt_buttons spells it), and its names are an Xbox controller's: the
 // virtual pad it plays with is one. Four of them are on the Touch and Index
 // controllers under the very same letters, but VR play gave those other jobs:
-// X opens the game menu or the gadget wheel, A charges a leap and flips in the
-// air, B dodges only off the swing, and the triggers and grips shoot webs. So
+// X opens the gadget wheel (and opened the game menu until October 23), A
+// charges a leap and flips in the air, B dodges only off the swing, and the
+// triggers and grips shoot webs. So
 // "Press [BTN_X] for Vent Takedown" opened the map, and "Hold [BTN_L2] and tap
 // [BTN_R1] to fire webs and seal the leaks" could not be answered at all. One
 // player's whole playthrough (October 14-19: the Oscorp research stations, the
@@ -999,18 +1160,31 @@ class ScreenControls {
 // every one of them, because there the controllers are an Xbox controller.
 //
 // So while the game names a button, the control with its name sends it:
-//   A, B, X, Y         the button itself, as long as it is held - no menu or
+//   A, B, X, Y         the button itself, as long as it is held - no gadget
 //                      wheel, no leap or flip, no dodge held back for the swing
+//   LB + RB            X, where the game names no X of its own (its throw by
+//                      every trash can, its pull of a door; October 24)
 //   LT or LB, RT or RB each hand's web-ball button (the trigger, or the grip
 //                      with WEB BUTTON: TRIGGER), the left hand's the left
-//                      ones: the swing's webs stay where they are, and a
-//                      mission that asks for its triggers still swings
+//                      ones, a bumper only where it is named alone: the
+//                      swing's webs stay where they are, and a mission that
+//                      asks for its triggers still swings
 //   L3, R3             each thumbstick's click
 //   D-pad up, left,    the right thumbstick pushed that way (pushed down it is
 //   right              the heal's D-pad down already: StickPush)
 // and while it names X, a fist thrown fast is its X (a takedown, an attack;
 // held, where the prompt says hold: the Air Launch), and with X and A named in
 // the air a fist thrown down is both (the Ground Strike).
+//
+// The Ground Strike also needs no prompt: both free fists thrown down together
+// in the air are its X and A, held. Its hint shows once a save, and hantop's
+// Shaking Harlem (October 22) asked for Ground Strikes with none on screen.
+// Two hands at once (chosen that day), so no single punch makes one; not
+// while REALISTIC FLIPS turns the player by his arms' swings (Input::slams),
+// where both arms swung down is a flip. Nor out of a fight (Input::slams),
+// nor from a hand that let go of its web a moment ago (letGoSeconds): 0.5.0's
+// players pulled both webs down hard to climb and were dashed to the ground
+// mid-swing (October 25-26, "Can't Swing").
 //
 // A control is the game's only when it goes down while the game names it, and
 // it stays the game's, sending what it began with, until it is let go: a web
@@ -1032,6 +1206,11 @@ class NamedPress {
     // sends its buttons for tapSeconds, or holdSeconds for a hold or two at once.
     static constexpr float blowSpeed = 2.2f, rearmSpeed = 1.2f, rearmSeconds = .45f, smoothing = .01f,
                            inward = .7f, steep = .6f, tapSeconds = .15f, holdSeconds = .6f;
+    // Both fists thrown down within this of each other in the air: a slam.
+    static constexpr float slamSeconds = .25f;
+    // A hand whose web let go this recently throws no blow: the pull on it is
+    // still in the arm.
+    static constexpr float letGoSeconds = .4f;
     // The VR controls a named button can claim, a bit each.
     enum Control : uint32_t {
         controlA = 1u << 0,
@@ -1065,6 +1244,9 @@ class NamedPress {
         Vec3 hands[2]{};
         bool tracked[2]{}, busy[2]{};
         bool airborne{};
+        // Both fists thrown down in the air are the Ground Strike's (in a
+        // fight, and not where they are a realistic flip).
+        bool slams = true;
     };
     // seconds: since the previous update. play: the controllers play VR, the
     // pad layer off. demand: what the game names now, {} for nothing. Returns
@@ -1131,6 +1313,10 @@ class NamedPress {
     uint32_t blows() const {
         return blows_;
     }
+    // Slams of both fists in the air (the Ground Strike with no prompt), among blows.
+    uint32_t slams() const {
+        return slams_;
+    }
     // What `control` sends while the game names what `demand` holds: {} where
     // the game names nothing of its.
     static State sends(uint32_t control, prompt_buttons::Demand d) {
@@ -1143,22 +1329,30 @@ class NamedPress {
             s.buttons = static_cast<uint16_t>(d.buttons & b);
             break;
         case controlX:
-            s.buttons = static_cast<uint16_t>(d.buttons & x);
+            // Its own X first; else the two bumpers together, which have no
+            // control of their own in VR play.
+            if (d.buttons & x)
+                s.buttons = x;
+            else if ((d.buttons & bumpers) == bumpers)
+                s.buttons = bumpers;
             break;
         case controlY:
             s.buttons = static_cast<uint16_t>(d.buttons & y);
             break;
+        // A web-ball button is its side's bumper only while the game names
+        // that bumper alone: the pair is X's, and every trash can on a street
+        // names the pair (the throw's "[ACTION_WEB_YANK] (Hold) Throw").
         case leftBall:
             if (d.leftTrigger)
                 s.leftTrigger = 255;
-            else
-                s.buttons = static_cast<uint16_t>(d.buttons & leftShoulder);
+            else if ((d.buttons & bumpers) == leftShoulder)
+                s.buttons = leftShoulder;
             break;
         case rightBall:
             if (d.rightTrigger)
                 s.rightTrigger = 255;
-            else
-                s.buttons = static_cast<uint16_t>(d.buttons & rightShoulder);
+            else if ((d.buttons & bumpers) == rightShoulder)
+                s.buttons = rightShoulder;
             break;
         case leftClick:
             s.buttons = static_cast<uint16_t>(d.buttons & leftThumb);
@@ -1221,12 +1415,19 @@ class NamedPress {
             hand.at = in.hands[h];
             hand.seen = true;
             hand.since += dt;
+            hand.down += dt;
+            hand.free = in.busy[h] ? 0.f : hand.free + dt;
             const float speed = length(hand.velocity);
             if (speed < rearmSpeed || hand.since >= rearmSeconds)
                 hand.armed = true;
-            if (!askedX || in.busy[h] || !hand.armed || speed < blowSpeed)
+            if (hand.free < letGoSeconds || !hand.armed || speed < blowSpeed)
                 continue;
             const bool thrownDown = hand.velocity.y <= -steep * speed;
+            // Half a slam, whatever the game names.
+            if (thrownDown && in.airborne)
+                hand.down = 0;
+            if (!askedX)
+                continue;
             const float reach = length(hand.at);
             const bool pulledIn = reach > 1e-3f && -dot(hand.velocity, hand.at) >= inward * speed * reach;
             if (strike ? !thrownDown : pulledIn)
@@ -1239,15 +1440,33 @@ class NamedPress {
             ++blows_;
             ++presses_;
         }
+        // Both fists down together in the air: the game's X and A, held, as
+        // its Ground Strike asks; one blow, both hands spent.
+        if (in.slams && in.airborne && fistLeft_ <= 0 && hands_[0].down < slamSeconds &&
+            hands_[1].down < slamSeconds) {
+            for (auto& hand : hands_) {
+                hand.armed = false;
+                hand.since = 0;
+                hand.down = slamSeconds;
+            }
+            fistSent_ = {};
+            fistSent_.buttons = static_cast<uint16_t>(x | a);
+            fistLeft_ = holdSeconds;
+            ++slams_;
+            ++blows_;
+            ++presses_;
+        }
     }
     struct Hand {
         Vec3 at{}, velocity{};
-        float since = rearmSeconds;
+        // since: its latest blow; down: since it was last thrown down in the
+        // air; free: since its web let go.
+        float since = rearmSeconds, down = slamSeconds, free = letGoSeconds;
         bool seen{}, armed = true;
     };
     std::array<Hand, 2> hands_{};
     State sent_[buttonControls]{}, fistSent_{};
-    uint32_t down_{}, claimed_{}, presses_{}, blows_{};
+    uint32_t down_{}, claimed_{}, presses_{}, blows_{}, slams_{};
     float fistLeft_{};
 };
 // Handing the player back to the game for an interact.
@@ -1381,8 +1600,6 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
         if (frame.buttons & held)
             s.buttons |= button;
     if (mapping == Mapping::gameplay) {
-        if (frame.buttons & buttonX)
-            s.buttons |= back;
         if (walk.jump)
             s.buttons |= a;
         if (walk.dodge)
@@ -1414,6 +1631,10 @@ inline State fromControllers(const XrFrame& frame, Mapping mapping, const Walk& 
             s.buttons |= dpadUp;
         if (walk.swing)
             s.rightTrigger = 255;
+        if (walk.suit)
+            s.buttons |= leftThumb | rightThumb;
+        if (walk.menu)
+            s.buttons |= back;
         s.thumbLX = stick(walk.right);
         s.thumbLY = stick(walk.forward);
         s.thumbRX = stick(walk.look);

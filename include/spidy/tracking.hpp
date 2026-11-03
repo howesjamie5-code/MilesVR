@@ -37,6 +37,11 @@ struct XrFrame {
     Pose head{};
     std::array<TrackedHand, 2> hands{};
     std::array<TrackedEye, 2> eyes{};
+    // Where the eyes look (XR_EXT_eye_gaze_interaction): from between them,
+    // -Z forward. gazeValid only while the headset's eye tracker tracks them
+    // and the session asked for it (XrRuntime::wantGaze).
+    Pose gaze{};
+    bool gazeValid{};
     std::int64_t predictedDisplayTime{};
     float seconds = 1.f / 90;
     bool focused{}, valid{}, jump{}, reset{}, recentered{};

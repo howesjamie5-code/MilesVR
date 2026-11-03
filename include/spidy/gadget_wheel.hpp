@@ -103,7 +103,13 @@ struct GadgetWheelView {
     std::array<Gadget, gadgetPlaces> places{}; // none: an empty place
     // Each gadget's charges and the most it holds (most 0: none to count).
     std::array<uint8_t, gadgetPlaces> ammo{}, most{};
+    // The web shooter alone: the game offers none of its gadgets yet (a new
+    // game's first missions). The wheel still opens, and says so in the
+    // middle while nothing is lit.
+    bool bare{};
 };
+// What the wheel's middle says while it is bare and nothing is lit.
+constexpr const char* bareWheelText = "NO GADGETS YET";
 // The wheel printed as the combat marks are (web_visual.hpp): each gadget a
 // paper badge keyed in ink with its picture, on a ring with a bead where a
 // place is empty; the equipped one's badge yellow, one out of charges grey,

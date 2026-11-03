@@ -50,6 +50,16 @@ struct ShotRequest {
     Vec3 origin{}, direction{}, aimPoint{};
     std::uint64_t target{}; // the character it goes to, 0 for none
     bool surface{};         // the aim point is on a surface, not in open air
+    bool gazed{};           // the eyes aimed it (ShooterGaze), not the hand
+};
+// EYE AIM: where the eyes look from and along (world; direction unit). A
+// ball still leaves the hand that pulled, for what the eyes pick: the
+// character nearest their line, else the first surface on it, else open air
+// along it. Something the eyes meet nearer than ShooterGaze::nearest to the
+// hand (the hand itself, looked at) leaves the aim to the hand.
+struct ShooterGaze {
+    static constexpr float nearest = 1;
+    Vec3 origin{}, direction{};
 };
 class Shooter {
   public:
@@ -57,8 +67,10 @@ class Shooter {
     // One sample, `seconds` after the previous one (0 repeats it): a bit per
     // hand whose pull shoots now.
     std::uint32_t update(float seconds, const std::array<ShooterHand, 2>& hands);
-    // Where a shot along this aim goes (the choice a pull makes).
-    ShotRequest aim(int hand, Pose aim, std::span<const ShooterTarget> targets, const WorldQueries& world) const;
+    // Where a shot along this aim goes (the choice a pull makes); with a
+    // gaze, where the eyes pick, from this aim's hand.
+    ShotRequest aim(int hand, Pose aim, std::span<const ShooterTarget> targets, const WorldQueries& world,
+                    const ShooterGaze* gaze = nullptr) const;
     void reset();
     const ShooterConfig& config() const {
         return config_;

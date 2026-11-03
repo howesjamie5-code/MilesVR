@@ -141,11 +141,15 @@ constexpr Named stickIds[] = {
 // exe does hold, is the melee's button: the pad's X. A session report keeps
 // each prompt call's text, which is where the next unknown word shows.
 // Another load that day brought "While in the air, hold [ACTION_WEB_YANK_BOT]
-// to yank enemies up to you": an action of the game's own binding configs
-// (HeroUsabilityBindingsConfig's Fire, Swing, WebZip, WebYankBot, WebStrike,
-// AimMode, UseGadget, Heal and the rest), whose buttons the configs hold and
-// the exe does not. Those stay unread until the configs are: a guess would
-// press the wrong thing.
+// to yank enemies up to you": an action of the game's own binding configs,
+// whose buttons the exe does not hold. Read out of the game on October 24:
+// its markup system (IconMarkupSystem, image 0x66f56c0) resolves each of its
+// 115 words to icons for the device the player has, and for Spidy's virtual
+// pad (the game's Generic icon family) the actions below came out as their
+// buttons here - the throw's [ACTION_WEB_YANK] as both bumpers, the yank up
+// to you as Y, the finisher as B and Y, the suit power as both sticks'
+// clicks. The menus' own actions ([ACTION_MENU_*]) are left out: in a menu
+// the controllers are the game's whole pad already.
 constexpr Named tokens[] = {
     {"[STICK_LEFT_PRESS]", held(padLeftThumb)},
     {"[STICK_RIGHT_PRESS]", held(padRightThumb)},
@@ -158,14 +162,40 @@ constexpr Named tokens[] = {
     {"[BTN_R1]", held(padRightShoulder)},
     {"[BTN_LB]", held(padLeftShoulder)},
     {"[BTN_RB]", held(padRightShoulder)},
+    {"[BTN_LB_GP]", held(padLeftShoulder)},
+    {"[BTN_RB_GP]", held(padRightShoulder)},
+    {"[BTN_OUTLINE_L1]", held(padLeftShoulder)},
+    {"[BTN_OUTLINE_R1]", held(padRightShoulder)},
     {"[BTN_L2]", pulled(true, false)},
     {"[BTN_R2]", pulled(false, true)},
+    {"[BTN_LT]", pulled(true, false)},
+    {"[BTN_RT]", pulled(false, true)},
     {"[BTN_L3]", held(padLeftThumb)},
     {"[BTN_R3]", held(padRightThumb)},
+    {"[BTN_START]", held(padStart)},
+    {"[BTN_SELECT]", held(padBack)},
     {"[DPAD_UP]", held(padDpadUp)},
     {"[DPAD_DOWN]", held(padDpadDown)},
     {"[DPAD_LEFT]", held(padDpadLeft)},
+    {"[DPAD_LEFT_GP]", held(padDpadLeft)},
     {"[DPAD_RIGHT]", held(padDpadRight)},
+    {"[STICK_LEFT]", moved(false)},
+    {"[STICK_RIGHT]", moved(true)},
+    {"[ACTION_WEB_YANK]", held(shoulders)},
+    {"[ACTION_WEB_YANK_BOT]", held(padY)},
+    {"[ACTION_ACTIVE_FINISHER]", held(padB | padY)},
+    {"[ACTION_SUIT_POWER]", held(padLeftThumb | padRightThumb)},
+    {"[ACTION_PING]", held(padRightThumb)},
+    {"[ACTION_ZIP_TO_POINT]", pulled(true, true)},
+    {"[ACTION_WEB_ZIP_OBJ1]", pulled(true, false)},
+    {"[ACTION_WEB_ZIP_OBJ2]", pulled(false, true)},
+    {"[ACTION_TRICKMODE]", held(padX)},
+    {"[ACTION_WEAPON_WHEEL]", held(padLeftShoulder)},
+    {"[ACTION_WEAPON_WHEEL_ALT]", held(padRightShoulder)},
+    {"[ACTION_LS_UP]", pushed(false, 0, 1)},
+    {"[ACTION_LS_DOWN]", pushed(false, 0, -1)},
+    {"[ACTION_LS_LEFT]", pushed(false, -1, 0)},
+    {"[ACTION_LS_RIGHT]", pushed(false, 1, 0)},
     {"[LS]", moved(false)},
     {"[RS]", moved(true)},
     {"[MKB_CUSTOM00]", typed()},
@@ -197,11 +227,12 @@ constexpr Named vrControls[] = {
     {"B", held(padB)},
     {"Y", held(padY)},
     {"MENU BUTTON", held(padStart)},
-    {"X", held(padBack)},
-    {"RIGHT STICK CLICK", held(shoulders)},
+    {"PHONE, MENU", held(padBack)},
+    {"X", held(shoulders)},
     {"RIGHT STICK UP", pulled(true, true)},
     {"RIGHT STICK DOWN", held(padDpadDown)},
     {"TRIGGER AT YOUR TEMPLE", held(padRightThumb)},
+    {"BOTH TRIGGERS AT YOUR CHEST", held(padLeftThumb | padRightThumb)},
     {"LEFT STICK UP", pushed(false, 0, 1)},
     {"LEFT STICK DOWN", pushed(false, 0, -1)},
     {"LEFT STICK LEFT", pushed(false, -1, 0)},
@@ -341,7 +372,8 @@ bool mayName(std::string_view text) {
         text.find("Stick") != std::string_view::npos || text.find("Mkb") != std::string_view::npos ||
         text.find("[DPAD_") != std::string_view::npos || text.find("[MKB_") != std::string_view::npos ||
         text.find("[LS]") != std::string_view::npos || text.find("[RS]") != std::string_view::npos ||
-        text.find("[STICK_") != std::string_view::npos || text.find("[FUNC_") != std::string_view::npos)
+        text.find("[STICK_") != std::string_view::npos || text.find("[FUNC_") != std::string_view::npos ||
+        text.find("[ACTION_") != std::string_view::npos)
         return true;
     for (const auto& s : spellings)
         if (text.find(s.name) != std::string_view::npos)
@@ -385,14 +417,20 @@ bool prompt_buttons::reachableInPlay(Demand d) {
     // his to answer.
     if (d.rightX || d.rightY || d.rightStickMotion)
         return false;
-    // Each bumper and each trigger reaches the game only with its pair: the
-    // right stick's click sends LB + RB, that stick pushed up sends LT + RT.
+    // Each bumper and each trigger reaches the game only with its pair: X
+    // sends LB + RB where the game shows the two (NamedPress; the right
+    // stick's click did until October 24), the right stick pushed up LT + RT.
     if (d.leftTrigger != d.rightTrigger)
         return false;
     if ((d.buttons & shoulders) && (d.buttons & shoulders) != shoulders)
         return false;
+    // L3 goes out only with R3: both triggers at the chest are the two
+    // together, the game's suit power. R3 alone is the scan. Back is the
+    // phone's MENU.
+    if ((d.buttons & padLeftThumb) && !(d.buttons & padRightThumb))
+        return false;
     constexpr uint16_t play =
-        padA | padB | padY | padStart | padBack | padDpadDown | padRightThumb | shoulders;
+        padA | padB | padY | padStart | padBack | padDpadDown | padLeftThumb | padRightThumb | shoulders;
     return (d.buttons & ~play) == 0;
 }
 
@@ -439,6 +477,39 @@ size_t prompt_buttons::rewrite(std::string_view text, char* out, size_t capacity
             break;
         any = true;
         i += token.length;
+    }
+    out[n] = 0;
+    return any ? n : 0;
+}
+
+size_t prompt_buttons::pairOnX(std::string_view text, char* out, size_t capacity) {
+    // The ways the game's texts name both bumpers together, each whole.
+    static constexpr std::string_view pairs[] = {
+        "[BTN_LB_GP] + [BTN_RB_GP]", "[BTN_RB_GP] + [BTN_LB_GP]", "[BTN_LB] + [BTN_RB]", "[BTN_RB] + [BTN_LB]",
+        "[BTN_L1] + [BTN_R1]",       "[BTN_R1] + [BTN_L1]",       "[BTN_LB]+[BTN_RB]",   "[BTN_L1]+[BTN_R1]",
+        "[ACTION_WEB_YANK]"};
+    constexpr std::string_view x = "[BTN_X]";
+    if (!out || capacity < 2 || text.find('[') == std::string_view::npos)
+        return 0;
+    size_t n = 0;
+    bool any = false;
+    for (size_t i = 0; i < text.size();) {
+        size_t taken = 1;
+        std::string_view piece = text.substr(i, 1);
+        if (text[i] == '[')
+            for (const auto& pair : pairs)
+                if (!text.compare(i, pair.size(), pair)) {
+                    taken = pair.size();
+                    piece = x;
+                    any = true;
+                    break;
+                }
+        // A text cut short would lose its end: leave it as the game wrote it.
+        if (n + piece.size() >= capacity)
+            return 0;
+        std::memcpy(out + n, piece.data(), piece.size());
+        n += piece.size();
+        i += taken;
     }
     out[n] = 0;
     return any ? n : 0;

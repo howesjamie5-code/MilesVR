@@ -10,7 +10,8 @@
 # for -Style Tech, the SPIDY VR tab's UI STYLE): for each of the two, `marks.png` (the ring and the calls, at rest
 # and as they land), `blows.png` (the bursts and the count, pose by pose), `sense.png`, `aim.png` (the aim markers)
 # and `eye.png` (the whole eye image with a call on him), and for the near one `wheel.png`, `meter.png` (slow
-# motion's) and `panel.png` (the calibration's), at about the headset's pixel density. -BuildDir takes a build
+# motion's), `padlayer.png` (the pad layer's sign) and `panel.png` (the calibration's), at about the headset's
+# pixel density. -BuildDir takes a build
 # folder of its own instead of build\<Build>.
 param([string]$Far, [int[]]$FarAt = @(256, 272), [double]$FarMetres = 2.6,
       [string]$Near, [int[]]$NearAt = @(256, 272), [double]$NearMetres = 0.75,

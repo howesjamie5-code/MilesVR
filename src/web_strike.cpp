@@ -16,7 +16,7 @@ bool inSight(const WorldQueries& world, Vec3 from, Vec3 to) {
     const float distance = length(line);
     if (distance < 1)
         return true;
-    const auto hit = world.raycast(from, line / distance, distance);
+    const auto hit = world.bodyRaycast(from, line / distance, distance);
     return !hit || !hit->fixed || length(hit->point - from) > distance - 1;
 }
 } // namespace
@@ -29,8 +29,48 @@ WebStrike::WebStrike(WebStrikeConfig c) : config_(c) {
         c.rearmSpeed >= c.minSpeed || bad(c.standOff) || bad(c.middle) || bad(c.speed) || c.speed == 0 ||
         bad(c.minSeconds) || bad(c.arrive) || c.arrive == 0 || bad(c.grace) || bad(c.reach) || bad(c.hang) ||
         bad(c.maxHang) || bad(c.minStrength) || c.minStrength > 1 || bad(c.pause) || bad(c.sustain) ||
-        bad(c.pressSeconds) || bad(c.stall) || c.stall == 0 || bad(c.liftOff) || bad(c.maxWait))
+        bad(c.pressSeconds) || bad(c.stall) || c.stall == 0 || bad(c.liftOff) || bad(c.maxWait) ||
+        bad(c.diveSpeed) || c.diveSpeed == 0 || bad(c.diveMiss) || bad(c.diveTime) || bad(c.diveReach) ||
+        bad(c.diveFlight) || c.diveFlight == 0 || bad(c.diveFull) || c.diveFull <= c.diveSpeed)
         throw std::invalid_argument("Invalid web strike configuration");
+}
+float WebStrike::diveStrength(float speed) const {
+    if (!std::isfinite(speed) || speed < config_.diveSpeed)
+        return 0;
+    // From a heavy blow's strength (DeliveryConfig::heavy) to the hardest.
+    return .85f + .15f * std::clamp((speed - config_.diveSpeed) / (config_.diveFull - config_.diveSpeed), 0.f, 1.f);
+}
+std::optional<WebStrike::Opening> WebStrike::dive(Vec3 velocity, bool grounded, Vec3 head, Vec3 feet,
+                                                  std::span<const FightTarget> targets, const WorldQueries& world,
+                                                  std::uint64_t marked, const PunchConfig& punch) {
+    const float speed = finite(velocity) ? length(velocity) : 0.f;
+    if (phase_ != Phase::Idle || sinceEnd_ < config_.pause || grounded || !marked || speed < config_.diveSpeed ||
+        !finite(head) || !finite(feet))
+        return std::nullopt;
+    const Vec3 way = velocity / speed, chest = feet + Vec3{0, config_.chest, 0};
+    for (const auto& t : targets) {
+        if (t.id != marked || !finite(t.feet))
+            continue;
+        // On course for him: his middle ahead, the line passing close to it,
+        // and reached soon.
+        const Vec3 to = t.middle() - chest;
+        const float along = dot(to, way), distance = length(to);
+        const float miss = length(to - way * along);
+        if (along <= 0 || distance > config_.diveReach || along / speed > config_.diveTime ||
+            miss > config_.diveMiss + std::max(0.f, t.radius - .3f) || !inSight(world, head, t.middle()))
+            return std::nullopt;
+        phase_ = Phase::Flying;
+        hand_ = diveHand;
+        target_ = t.id;
+        direction_ = way;
+        fistSpeed_ = speedOf(punch, diveStrength(speed));
+        elapsed_ = sinceStep_ = waited_ = 0;
+        destination_ = stop(feet, t);
+        const float flight = std::clamp(speed, config_.diveFlight, config_.speed * 1.25f);
+        duration_ = std::max(config_.minSeconds, length(destination_ - feet) / flight);
+        return Opening{hand_, target_, distance, false, false};
+    }
+    return std::nullopt;
 }
 void WebStrike::cancel() {
     if (phase_ == Phase::Flying)
@@ -129,7 +169,10 @@ std::optional<WebStrike::Opening> WebStrike::open(float seconds, const std::arra
         // Thrown out from the player; or, with an enemy marked, swung the way
         // the flow calls: a hook, an uppercut and a blow down go across.
         const bool outward = dot(way, normalized(f.position - neck)) >= config_.outward;
-        const bool swung = wished && length(calledWay) > .5f && dot(way, calledWay) >= config_.calledAim;
+        const bool vertical =
+            wish.freeDirections && verticalBlow(Punches{}.blow(way, speed), false) != CueWay::None;
+        const bool swung =
+            wished && (vertical || (length(calledWay) > .5f && dot(way, calledWay) >= config_.calledAim));
         const bool thrown = finiteBody && speed >= config_.minSpeed && (outward || swung);
         thrownFor = thrown ? thrownFor + dt : 0.f;
         if (!thrown || thrownFor < config_.sustain || phase_ == Phase::Flying || sinceEnd_ < config_.pause || !armed)
@@ -387,8 +430,17 @@ void Lock::clear() {
     since_ = away_ = 0;
 }
 
-Delivery deliver(const PunchEvent& blow, bool targetAirborne, int count, const Flow& flow, const DeliveryConfig& c,
-                 CueWay called, float calledDamage) {
+CueWay verticalBlow(const PunchEvent& blow, bool targetAirborne, const DeliveryConfig& c) {
+    if (blow.knockback == Knockback::PopUp)
+        return CueWay::Up;
+    if (blow.direction.y < -c.slamPitch && (targetAirborne || blow.strength >= .35f))
+        return CueWay::Down;
+    return CueWay::None;
+}
+Delivery deliver(const PunchEvent& blow, bool targetAirborne, int count, const Flow& flow,
+                 const DeliveryConfig& c, CueWay called, float calledDamage, bool freeDirections) {
+    if (freeDirections)
+        called = CueWay::None;
     Delivery d;
     d.damage = blow.damage * flow.damage(count) * (called == CueWay::None ? 1.f : calledDamage);
     d.knockback = blow.knockback;
@@ -400,7 +452,17 @@ Delivery deliver(const PunchEvent& blow, bool targetAirborne, int count, const F
         d.knockback = Knockback::FlyBack;
         d.velocity = level * carry + Vec3{0, lift, 0};
     };
-    if (flow.finisher(count)) {
+    const CueWay vertical = freeDirections ? verticalBlow(blow, targetAirborne, c) : CueWay::None;
+    if (vertical == CueWay::Up) {
+        fly(targetAirborne ? BlowKind::Juggle : BlowKind::Launch, c.launchCarry, c.launchLift);
+    } else if (vertical == CueWay::Down) {
+        if (targetAirborne) {
+            fly(BlowKind::Slam, c.slamCarry, -c.slamSpeed);
+            d.damage *= c.slamDamage;
+        } else {
+            d.knockback = Knockback::Knockdown;
+        }
+    } else if (flow.finisher(count)) {
         fly(BlowKind::Finisher, c.finisherSpeed, c.finisherLift);
         d.damage *= c.finisherDamage;
     } else if (called == CueWay::Down && targetAirborne) {

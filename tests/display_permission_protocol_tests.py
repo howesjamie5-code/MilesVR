@@ -42,6 +42,27 @@ class DisplayPermissionTests(unittest.TestCase):
                 self.assertEqual(registry.values, USER)
                 self.assertFalse(backup.exists())
 
+    def test_unreadable_backup_is_set_aside_and_launch_goes_on(self):
+        # spazzmatic_1, October 25: an empty backup ended every start with "Expecting value: line 1 column 1".
+        for contents in ('', '{"key": "Software', '\x00\x00'):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as folder:
+                registry = FakeRegistry(USER)
+                backup = pathlib.Path(folder)/'before.json'
+                backup.write_text(contents)
+                with patch('sys.stdout', io.StringIO()) as shown:
+                    self.assertEqual(display.session_changes(backup), {})
+                    self.assertFalse(display.restore(registry, backup))
+                self.assertIn('WARNING:', shown.getvalue())
+                self.assertFalse(backup.exists())
+                self.assertEqual((pathlib.Path(folder)/'before.unreadable.json').read_text(), contents)
+                backup.write_text(contents)
+                with patch('sys.stdout', io.StringIO()):
+                    display.prepare_launch(registry=registry, backup=backup, screen=(3440, 1440))
+                self.assertEqual(json.loads(backup.read_text())['values'], USER)
+                self.assertFalse(list(pathlib.Path(folder).glob('*.tmp')))
+                self.assertTrue(display.restore(registry, backup))
+                self.assertEqual(registry.values, USER)
+
     def test_startup_continues_after_settings_failure_and_records_it(self):
         class Prepared(Exception):
             pass

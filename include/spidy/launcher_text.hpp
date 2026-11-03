@@ -486,7 +486,9 @@ inline std::wstring quoteArgument(std::wstring_view argument) {
 
 // Webs catching props and thugs, the web shooter, your own body and punching
 // are always on, and the game draws the webs: the launcher has not offered
-// them since October 8 (run_game_vr.py's switches still turn them off).
+// them since October 8 (run_game_vr.py's switches still turn them off). So
+// are the swing's own walls and the view standing on them: no "Wall running"
+// since October 25 (--no-wall-run, --no-stand-on-walls).
 struct SessionOptions {
     bool smallWindow = true;
     bool stockMonitorView = false;
@@ -501,7 +503,7 @@ struct SessionOptions {
     int screenDepth = 2; // the depth cutscenes have on that screen: 0 off (flat), 1 low, 2 medium, 3 high
     int smoothTurn = 0; // degrees a second the right stick turns you while held over; 0: it snap turns
     int weight = 100;   // how heavy you are while webs fly you, percent of real gravity
-    bool flips = false; // experimental: in the air the left stick turns you over, and a tap of A flips you
+    bool flips = false; // basic flips: airborne right stick; release holds orientation, A returns upright
     int flipSpeed = 180; // degrees a second a flip turns you at full tilt of the left stick
     // The trigger shoots and holds webs, and the grip reels them in and shoots web balls; off, the other way round.
     bool triggerWebs = false;
@@ -515,13 +517,6 @@ struct SessionOptions {
     // things, and swings stay above the street; off, realistic webs bend round whatever comes in their way.
     bool arcadeWebs = false;
     int hud = 2; // the game's HUD in the headset: 0 off, 1 small, 2 medium, 3 large
-    // Walking a wall or stopped on it, your view turns so that the wall is your floor; off, you stay upright.
-    bool standOnWalls = true;
-    // The swing takes you onto a wall and runs it; off, the game's own wall crawl takes you there instead, as
-    // before October 10. Off is slower and stiffer, and it is how to tell whether something on a wall is the
-    // swing's doing: the game refuses its own interactions while the swing owns the hero (October 13, a closed
-    // vent reached by walking up the wall it is on).
-    bool wallRun = true;
     // The game's own Depth of Field and Sharpness settings stay as they are in VR; off (the default), a
     // session turns the first off and the second to its lowest, and puts both back when the game closes.
     bool gameDepthOfField = false, gameSharpening = false;
@@ -584,8 +579,6 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--venom-trigger");
     if (options.arcadeWebs)
         args.emplace_back(L"--arcade-webs");
-    if (!options.wallRun)
-        args.emplace_back(L"--no-wall-run");
     if (options.gameDepthOfField)
         args.emplace_back(L"--game-depth-of-field");
     if (options.gameSharpening)
@@ -672,8 +665,6 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.triggerWebs = number != 0;
         else if (key == "arcade_webs")
             next.arcadeWebs = number != 0;
-        else if (key == "wall_run")
-            next.wallRun = number != 0;
         else if (key == "swing_speed")
             next.swingSpeed = std::clamp(number, 10, 65);
         else if (key == "snap_turn")
@@ -795,6 +786,152 @@ inline std::string unsupportedGame(std::string_view version, std::string_view ex
                       "game files, then press Re-check.";
     return text + " Spidy works with Steam's copy of the game: choose the MilesMorales.exe in your Steam "
                   "library with Change...";
+}
+
+// A text with each Windows profile folder in it (C:\Users\<name>, with either slash, single or doubled as
+// Python prints them) written as ~, so that a path can be posted without the Windows user name. Names have
+// spaces: the name ends at the next slash, or at a character no file name has.
+inline std::string withoutUserName(std::string_view text) {
+    std::string lowered(text);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    // Skips the slashes at `at`; false when there are none.
+    const auto slashes = [&](size_t& at) {
+        const size_t from = at;
+        while (at < text.size() && (text[at] == '\\' || text[at] == '/'))
+            ++at;
+        return at > from;
+    };
+    std::string out;
+    for (size_t i = 0; i < text.size();) {
+        size_t at = i + 2;
+        if (lowered[i] >= 'a' && lowered[i] <= 'z' && i + 1 < text.size() && text[i + 1] == ':' &&
+            slashes(at) && lowered.compare(at, 5, "users") == 0 && slashes(at += 5)) {
+            size_t end = at;
+            while (end < text.size() && static_cast<unsigned char>(text[end]) >= 0x20 &&
+                   std::string_view("\\/\"<>|:*?").find(text[end]) == std::string_view::npos)
+                ++end;
+            if (end > at) {
+                out += '~';
+                i = end;
+                continue;
+            }
+        }
+        out += text[i++];
+    }
+    return out;
+}
+
+// How a session went, from what it printed (the launcher's log, or the console log beside its report):
+// its last error line, and its last line of all when that is another one.
+struct SessionEnd {
+    std::string error, last;
+};
+
+inline SessionEnd sessionEnd(std::string_view log) {
+    SessionEnd end;
+    while (!log.empty()) {
+        const size_t stop = log.find('\n');
+        std::string_view line = log.substr(0, stop);
+        log = stop == std::string_view::npos ? std::string_view() : log.substr(stop + 1);
+        while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back())))
+            line.remove_suffix(1);
+        // Most sessions end with a notice about the game's own settings (tools/run_game_vr.py's
+        // settle_display: "Restored your game settings..."), which says nothing of how they went.
+        if (line.empty() || line.find("our game settings") != std::string_view::npos)
+            continue;
+        if (classifyLine(line) == LineKind::error)
+            end.error = std::string(line);
+        end.last = std::string(line);
+    }
+    if (end.last == end.error)
+        end.last.clear();
+    return end;
+}
+
+// This PC's graphics card and memory. What Windows does not say stays empty or 0.
+struct Hardware {
+    // The card with the most memory of its own (on a laptop, the one games run on), and that memory.
+    std::string gpu;
+    uint64_t gpuMemoryMb{};
+    // RAM; what Windows can promise programs (RAM plus page file), and how much of that is free now.
+    uint64_t ramMb{}, commitLimitMb{}, commitFreeMb{};
+};
+
+// What "Copy for Discord" says: Spidy's version, this PC, the options a helper asks about and the last
+// session. What the launcher does not know stays empty and is written as unknown; a session that never
+// ran is left out.
+struct SupportFacts {
+    std::string version; // Spidy's own
+    std::string runtime; // the VR runtime chosen, and the ones installed
+    std::string headset; // the headset check's line, or what the last session found
+    std::string game;    // the game's line: the supported version, or what is wrong with it
+    Hardware pc;
+    std::string upscaling, renderResolution, webButton; // the options, as the launcher words them
+    SessionEnd session;
+};
+
+// The most a summary is long, its code fence included: a Discord message holds 2000 characters, and the
+// player writes around it.
+inline constexpr size_t kSummaryLimit = 1200;
+
+// The summary as a Discord code block. Its first line, "Spidy <version> summary", is what a bot knows it
+// by; then one fact a line, "Label: value", always in this order. Values carry no line ends, no code
+// fence and no Windows user name, and the session's lines are cut to what the limit leaves.
+inline std::string supportSummary(const SupportFacts& facts) {
+    const auto value = [](std::string_view text, size_t limit) {
+        std::string out = withoutUserName(text);
+        for (char& c : out)
+            if (static_cast<unsigned char>(c) < 0x20)
+                c = ' ';
+            else if (c == '`')
+                c = '\'';
+        while (!out.empty() && out.back() == ' ')
+            out.pop_back();
+        out.erase(0, out.find_first_not_of(' '));
+        if (out.size() > limit) {
+            // Not inside a UTF-8 character.
+            size_t cut = limit - 3;
+            while (cut && (static_cast<unsigned char>(out[cut]) & 0xC0) == 0x80)
+                --cut;
+            out.resize(cut);
+            out += "...";
+        }
+        return out.empty() ? std::string("unknown") : out;
+    };
+    const auto gigabytes = [](uint64_t mb) {
+        const uint64_t tenths = (mb * 10 + 512) / 1024;
+        return std::to_string(tenths / 10) + '.' + std::to_string(tenths % 10) + " GB";
+    };
+    std::string text = "```\nSpidy " + value(facts.version, 20) + " summary\n";
+    text += "VR runtime: " + value(facts.runtime, 120) + '\n';
+    text += "Headset: " + value(facts.headset, 200) + '\n';
+    text += "Game: " + value(facts.game, 240) + '\n';
+    const Hardware& pc = facts.pc;
+    text += "GPU: " + value(pc.gpu, 100) +
+            (pc.gpu.empty() || !pc.gpuMemoryMb ? "" : ", " + gigabytes(pc.gpuMemoryMb)) + '\n';
+    text += "RAM: " + (pc.ramMb ? gigabytes(pc.ramMb) : "unknown") + '\n';
+    text += "Commit limit: " +
+            (pc.commitLimitMb ? gigabytes(pc.commitLimitMb) + " (RAM plus page file), " +
+                                    gigabytes(pc.commitFreeMb) + " free"
+                              : "unknown") +
+            '\n';
+    text += "Upscaling: " + value(facts.upscaling, 40) + '\n';
+    text += "Render resolution: " + value(facts.renderResolution, 40) + '\n';
+    text += "Web button: " + value(facts.webButton, 40) + '\n';
+    // The session's lines share what the limit leaves: the values above are capped, so that is 50
+    // characters or more for each.
+    const std::pair<std::string_view, const std::string*> lines[] = {{"Last session: ", &facts.session.last},
+                                                                      {"Last error: ", &facts.session.error}};
+    size_t left = (facts.session.last.empty() ? 0 : 1) + (facts.session.error.empty() ? 0 : 1);
+    for (const auto& [label, line] : lines) {
+        if (line->empty())
+            continue;
+        const size_t room = (kSummaryLimit - text.size() - 3) / left - label.size() - 1;
+        text += std::string(label) + value(*line, std::min<size_t>(room, 300)) + '\n';
+        --left;
+    }
+    return text + "```";
 }
 
 } // namespace spidy::launcher

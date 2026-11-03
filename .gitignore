@@ -11,3 +11,4 @@ __pycache__/
 # The phone's songs, in a checkout the launcher's folder (phone_music.hpp).
 /Music/
 /.claude/settings.local.json
+.idea/

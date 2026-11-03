@@ -8,10 +8,12 @@
 #include "spidy/native_eye_frame.hpp"
 #include "spidy/native_eye_gpu.hpp"
 #include "spidy/native_hud.hpp"
+#include "spidy/native_stream.hpp"
 #include "spidy/native_view.hpp"
 #include "spidy/native_webs.hpp"
 #include "spidy/near_clip.hpp"
 #include "spidy/recording_fov.hpp"
+#include "spidy/spectator_smoothing.hpp"
 #include <MinHook.h>
 #include <atomic>
 #include <cstdint>
@@ -31,7 +33,12 @@ float spidy::near_clip::metres() {
 }
 // RECORDING FOV's angle (recording_fov.hpp), degrees, 0 for off: the XR
 // worker sets it, each frame's rest and the game's view's lens read it.
-std::atomic<int> recordingFov{};
+std::atomic<int> recordingFov{}, recordingSmoothLevel{};
+SpectatorSmoothing recordingSmoothing;
+uint64_t recordingTick{};
+void spidy::recording_fov::smoothing(int level) {
+    recordingSmoothLevel.store(std::clamp(level, 0, 100), std::memory_order_relaxed);
+}
 void spidy::recording_fov::set(int degrees) {
     recordingFov.store(recording_fov::sanitized(degrees), std::memory_order_relaxed);
 }
@@ -92,6 +99,8 @@ __declspec(dllexport) ShadowData SpidyShadowData;
 __declspec(dllexport) Data SpidyStereoData;
 __declspec(dllexport) native_eyes::FrameData SpidyStereoFrames;
 __declspec(dllexport) native_appearance::Data SpidyAppearanceData;
+// The far buildings' cone and the texture budget (native_stream.hpp).
+__declspec(dllexport) native_stream::Data SpidyStreamData;
 // Frames in which the eyes marked what they drew for the game (rested, below).
 __declspec(dllexport) volatile LONG64 SpidyDrawnFrames;
 }
@@ -284,6 +293,25 @@ using ImpostorQueries = void* (*)(void*, void*);
 ImpostorQueries originalImpostorQueries{};
 void* impostorQueriesHook{};
 std::atomic<uint32_t> impostorReach{150};
+// Which impostors that query returns is the cone about the head while the left
+// eye stands in (native_stream.hpp): the lens covering both eyes, widened by
+// a margin each way, placed with the eyes for the frame's offscreen pass
+// (placeEyes) and turned into the 0x100-byte cull 187de80 makes, as 189fea0
+// does for the eye. SpidyBuildingCone sets the margin; 0 keeps the eye's own
+// lens. easedMargin is this frame's, by how full the scene's slot pool is.
+bool cones{};
+std::atomic<uint32_t> coneDegrees{static_cast<uint32_t>(native_stream::coneMargin)};
+Descriptor impostorCone{};
+uint64_t impostorConePass = UINT64_MAX;
+float easedMargin{};
+// The texture streamer's budget while the eyes render (keepTextureBudget):
+// the game's, and the one the eyes got (0 none). SpidyTextureBudget(0) keeps
+// the game's. Given back for the session where the card ran short.
+bool budgets{};
+std::atomic<bool> textureRaise{true};
+std::atomic<uint64_t> textureGame{}, textureRaised{};
+uint64_t textureChecked{};
+bool textureShortened{};
 // The HUD panel (native_hud.hpp): PlayerModelHudFollower's placement 73ab80,
 // on the main thread after the camera submits and before 1920240. It ends in
 // SetTransform 191c0e0 on the panel's render instance, which writes the
@@ -1379,6 +1407,14 @@ bool writeFloat(uintptr_t p, float value) {
         return false;
     }
 }
+bool writeQword(uintptr_t p, uint64_t value) {
+    __try {
+        *reinterpret_cast<volatile uint64_t*>(p) = value;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
 // Clears a view's list of drawn instances, as its scene submit does (1920e54).
 bool clearDrawn(uintptr_t view) {
     __try {
@@ -1410,8 +1446,24 @@ void matchDistances(void* eye, const Descriptor& lens, unsigned index) {
     InterlockedIncrement64(&data.sequence);
     ReleaseSRWLockExclusive(&telemetry);
 }
-// A view's impostor visibility queries (impostorReach above).
+// A view's impostor visibility queries (impostorReach and the cone above).
+// 191ecd0 copies the cull before its job reads it, so the cone's may live here.
 void* impostorQueries(void* view, void* cull) {
+    const bool standing = impostors && enabled && rested.load(std::memory_order_relaxed) &&
+                          view == eyes[0].load(std::memory_order_relaxed);
+    const bool coned = standing && cones && impostorConePass == offscreenPass;
+    alignas(16) uint8_t cone[0x100];
+    if (coned) {
+        reinterpret_cast<void (*)(const Descriptor*, void*)>(base + 0x1d892e0)(&impostorCone, cone);
+        cull = cone;
+    }
+    if (standing) {
+        AcquireSRWLockExclusive(&telemetry);
+        InterlockedIncrement64(&SpidyStreamData.sequence);
+        ++(coned ? SpidyStreamData.coneFrames : SpidyStreamData.ownFrames);
+        InterlockedIncrement64(&SpidyStreamData.sequence);
+        ReleaseSRWLockExclusive(&telemetry);
+    }
     const auto result = originalImpostorQueries(view, cull);
     float reach{};
     if (result && impostors && enabled && rested.load(std::memory_order_relaxed) &&
@@ -1432,6 +1484,91 @@ void restGameView(uintptr_t primary, bool rest) {
         writeByte(primary + 0x1208, 0))
         rested = primary;
     native_gpu::mirror(rested.load() != 0);
+}
+// The scene's slot pool (native_stream::poolMargin): its size and the slots in
+// use (7a42f80 +1c8, +1cc), into SpidyStreamData. False where it does not read.
+bool slotPool(int32_t& capacity, int32_t& used) {
+    int32_t pool[2]{};
+    if (!read(base + 0x83f8dc8, pool, sizeof(pool)))
+        return false;
+    capacity = pool[0];
+    used = pool[1];
+    AcquireSRWLockExclusive(&telemetry);
+    auto& data = SpidyStreamData;
+    InterlockedIncrement64(&data.sequence);
+    data.poolCapacity = capacity;
+    data.poolUsed = used;
+    data.poolMost = std::max(data.poolMost, used);
+    if (capacity > 0 && used >= capacity * .85f)
+        ++data.poolFullFrames;
+    InterlockedIncrement64(&data.sequence);
+    ReleaseSRWLockExclusive(&telemetry);
+    return true;
+}
+// This frame's margin for the cone, degrees: SpidyBuildingCone's as the slot
+// pool allows it, eased by at most a degree a frame, so buildings at the
+// cone's edge do not come and go with each frame's count.
+float coneMargin(int32_t capacity, int32_t used) {
+    const float wanted = native_stream::poolMargin(used, capacity, static_cast<float>(coneDegrees.load()));
+    easedMargin += std::clamp(wanted - easedMargin, -1.f, 1.f);
+    return easedMargin;
+}
+// The texture streamer's budget while the eyes render: the game's, raised as
+// far as the card has room for it (native_stream::textureBudget), looked at
+// every two seconds. The game's own comes back if the card runs short (for the
+// session) or SpidyTextureBudget(0) asks for it. A Texture Quality change in
+// the game's menu writes the game's new budget (1891174), raised in its turn.
+void keepTextureBudget() {
+    const auto now = GetTickCount64();
+    if (now - textureChecked < 2000)
+        return;
+    textureChecked = now;
+    uint64_t current{}, videoBudget{}, videoUsage{};
+    if (!read(base + 0x842f100, &current, sizeof(current)) || !current ||
+        !native_gpu::videoMemory(videoBudget, videoUsage))
+        return;
+    if (const auto raised = textureRaised.load(); raised && current != raised)
+        textureRaised = 0;
+    if (const auto raised = textureRaised.load()) {
+        const bool shortened = native_stream::textureShort(videoBudget, videoUsage);
+        if ((shortened || !textureRaise.load()) && writeQword(base + 0x842f100, textureGame.load())) {
+            textureRaised = 0;
+            current = textureGame.load();
+            textureShortened = textureShortened || shortened;
+            if (shortened) {
+                AcquireSRWLockExclusive(&telemetry);
+                InterlockedIncrement64(&SpidyStreamData.sequence);
+                ++SpidyStreamData.textureDrops;
+                InterlockedIncrement64(&SpidyStreamData.sequence);
+                ReleaseSRWLockExclusive(&telemetry);
+            }
+        }
+    } else {
+        textureGame = current;
+        if (const auto budget = native_stream::textureBudget(current, videoBudget, videoUsage);
+            !textureShortened && textureRaise.load() && budget > current &&
+            writeQword(base + 0x842f100, budget)) {
+            textureRaised = budget;
+            current = budget;
+        }
+    }
+    AcquireSRWLockExclusive(&telemetry);
+    auto& data = SpidyStreamData;
+    InterlockedIncrement64(&data.sequence);
+    data.textureGame = static_cast<uint32_t>(textureGame.load() >> 20);
+    data.textureBudget = static_cast<uint32_t>(current >> 20);
+    data.videoBudget = static_cast<uint32_t>(videoBudget >> 20);
+    data.videoUsage = static_cast<uint32_t>(videoUsage >> 20);
+    InterlockedIncrement64(&data.sequence);
+    ReleaseSRWLockExclusive(&telemetry);
+}
+// The game's own budget back as the eyes stop (SpidyStop), unless the game
+// has set another since.
+void restoreTextureBudget() {
+    uint64_t current{};
+    if (const auto raised = textureRaised.exchange(0);
+        raised && read(base + 0x842f100, &current, sizeof(current)) && current == raised)
+        writeQword(base + 0x842f100, textureGame.load());
 }
 // Diagnostic: 187e130 queues a render command (rdx) on a view's list (rcx).
 using EnqueueCommand = void (*)(void*, uint32_t, uint64_t, void*);
@@ -1495,6 +1632,12 @@ void placeEyes() {
     // The eyes' jobs of this frame mark into the resting view's list (see rested).
     if (const auto resting = rested.load(); resting && clearDrawn(resting))
         InterlockedIncrement64(&SpidyDrawnFrames);
+    // While both eyes render: the texture budget, and the slot pool the cone's
+    // margin is eased by.
+    int32_t poolCapacity{}, poolUsed{};
+    const bool pooled = render && enabled && live.load() == 2 && cones && slotPool(poolCapacity, poolUsed);
+    if (render && enabled && live.load() == 2 && budgets)
+        keepTextureBudget();
     // The HUD's second movie goes on its panel while the eyes are shown.
     // On the game screen in stereo only in a frame whose panel went onto
     // that screen (placeScreenHud, earlier in the frame): without the panel
@@ -1582,6 +1725,27 @@ void placeEyes() {
                     activeAligned = true;
                 }
             }
+            // The far buildings' cone for the left eye's query this pass
+            // (impostorCone): the lens over both eyes, widened by this frame's
+            // margin.
+            if (pooled && coneDegrees.load(std::memory_order_relaxed) && rested.load()) {
+                constexpr float radians = .0174532925f;
+                const float margin = coneMargin(poolCapacity, poolUsed);
+                const auto wide =
+                    native_stream::widened(lens, margin * radians, native_stream::coneMost * radians);
+                if (const auto cone = onHead(wide); native_view::valid(cone)) {
+                    impostorCone = cone;
+                    impostorConePass = offscreenPass;
+                    AcquireSRWLockExclusive(&telemetry);
+                    auto& data = SpidyStreamData;
+                    InterlockedIncrement64(&data.sequence);
+                    data.margin = margin;
+                    data.across = std::atan(std::max(-wide.left, wide.right)) / radians;
+                    data.upDown = std::atan(std::max(-wide.top, wide.bottom)) / radians;
+                    InterlockedIncrement64(&data.sequence);
+                    ReleaseSRWLockExclusive(&telemetry);
+                }
+            }
         }
     }
     for (auto& slot : eyes)
@@ -1641,6 +1805,56 @@ void placeEyes() {
             reinterpret_cast<Submit>(base + 0x1da50d0)(eye, &descriptor);
             matchDistances(eye, descriptor, index);
         }
+    // RECORDING FOV's own lens for the window (pull request #46): submitted
+    // last, after both eyes took their poses, just the angle across and turned
+    // as RECORDING SMOOTHING says. The view still culls with the head's lens
+    // covering both eyes (viewLens, at the frame's first submit), so the
+    // headset sees all it did; a view smoothed far behind a fast turn can show
+    // the window less than it should at its edge.
+    const int degrees = recordingFov.load(std::memory_order_relaxed);
+    if (!degrees || !(config.createViews & 8) || !latchedImmersive || live.load() != 2 ||
+        native_gpu::screenRequested()) {
+        recordingSmoothing.reset();
+        recordingTick = 0;
+    } else {
+        Mat4 pose{};
+        native_eyes::Bounds headLens{};
+        if (native_eyes::headView(desired, pose, headLens)) {
+            pose[12] += placed.offset.x;
+            pose[13] += placed.offset.y;
+            pose[14] += placed.offset.z;
+            const int level = recordingSmoothLevel.load(std::memory_order_relaxed);
+            if (level > 0) {
+                static const double frequency = [] {
+                    LARGE_INTEGER f{};
+                    QueryPerformanceFrequency(&f);
+                    return static_cast<double>(f.QuadPart);
+                }();
+                LARGE_INTEGER tick{};
+                QueryPerformanceCounter(&tick);
+                const auto now = static_cast<uint64_t>(tick.QuadPart);
+                const float seconds =
+                    recordingTick ? static_cast<float>((now - recordingTick) / frequency) : 0;
+                recordingTick = now;
+                pose = recordingSmoothing.update(pose, seconds, true, level * 5);
+            } else {
+                recordingSmoothing.reset();
+                recordingTick = 0;
+            }
+            float aspect = flatAspect.load();
+            if (!std::isfinite(aspect) || aspect < .2f || aspect > 6)
+                aspect = 16.f / 9;
+            const float halfWidth = std::tan(static_cast<float>(degrees) * .00872664626f);
+            const float halfHeight = halfWidth / aspect;
+            auto desktop = main;
+            reinterpret_cast<Lens>(base + 0x1d86f60)(
+                &desktop, near_clip::metres(), main.farZ(), -halfWidth, halfWidth, -halfHeight, halfHeight, 0,
+                0, main.values[0x428 / 4], main.values[0x42c / 4], false, false);
+            reinterpret_cast<SetPose>(base + 0x1d87e70)(&desktop, pose.data());
+            if (native_view::valid(desktop))
+                originalSubmit(reinterpret_cast<void*>(primary), &desktop);
+        }
+    }
 }
 // A KeyLightContext's cascades: +d and +f count them, +150 holds one each
 // 0x3e0 bytes, with its box's half sizes at +170 and its transform at +198.
@@ -2002,6 +2216,23 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
                                                       0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x41, 0x56, 0x41, 0x57};
         const unsigned char reachFirstBytes[] = {0xc7, 0x80, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x43};
         const unsigned char reachLastBytes[] = {0xf3, 0x0f, 0x11, 0xbb, 0x88, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xc3};
+        // The cone: the cull builder up to its read of a lens's flags, the
+        // slot pool's room check, and the full models' and the hibernate
+        // zones' loads of the scene registry (7a42f80) they check it on.
+        const unsigned char cullBytes[] = {0x48, 0x83, 0xec, 0x68, 0xf6, 0x81, 0x38,
+                                           0x04, 0x00, 0x00, 0x02, 0x4c, 0x8b, 0xca};
+        const unsigned char poolBytes[] = {0x03, 0x91, 0xcc, 0x01, 0x00, 0x00, 0x3b, 0x91,
+                                           0xc8, 0x01, 0x00, 0x00, 0x0f, 0x9e, 0xc0, 0xc3};
+        const unsigned char registryBytes[] = {0x48, 0x8d, 0x0d, 0x36, 0x5c, 0x7f, 0x06};
+        const unsigned char hibernateRegistryBytes[] = {0x48, 0x8d, 0x0d, 0x53, 0x91, 0x4c, 0x06};
+        // The texture budget: the streamer's room (the budget at 7a793c0, less
+        // what it holds and loads and the reserve at 7a793c8), the Texture
+        // Quality's store of the budget, and the heap's 16 MB reserve.
+        const unsigned char roomBytes[] = {0x48, 0x8b, 0x05, 0xa9, 0x09, 0x57, 0x06, 0x48, 0x2b, 0x81,
+                                           0x50, 0x01, 0x00, 0x00, 0x48, 0x2b, 0x81, 0x28, 0x01, 0x00,
+                                           0x00, 0x48, 0x2b, 0x05, 0x9c, 0x09, 0x57, 0x06, 0xc3};
+        const unsigned char budgetStoreBytes[] = {0x48, 0x89, 0x05, 0x55, 0x2a, 0x69, 0x06};
+        const unsigned char reserveBytes[] = {0x48, 0xc7, 0x43, 0x08, 0x00, 0x00, 0x00, 0x01};
         const unsigned char setupDisplayBytes[] = {0x4d, 0x85, 0xc0, 0x0f, 0x84, 0x7f, 0x03, 0, 0};
         const unsigned char enqueueBytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10};
         // ActorDrawAction's DrawOff/DrawOn: toggle flag 0x20 at +5c and mark
@@ -2089,6 +2320,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
             impostors = impostors && entry(call.rva, call.bytes, sizeof(call.bytes));
         impostors = impostors && entry(0x1c05f40, reachFirstBytes, sizeof(reachFirstBytes)) &&
                     entry(0x1c060f3, reachLastBytes, sizeof(reachLastBytes));
+        cones = impostors && entry(0x1d892e0, cullBytes, sizeof(cullBytes)) &&
+                entry(0x1e18190, poolBytes, sizeof(poolBytes)) &&
+                entry(0x1c02fc3, registryBytes, sizeof(registryBytes)) &&
+                entry(0x1f2faa6, hibernateRegistryBytes, sizeof(hibernateRegistryBytes));
+        budgets = (config.createViews & 4) && entry(0x1ebe750, roomBytes, sizeof(roomBytes)) &&
+                  entry(0x1d9c6a4, budgetStoreBytes, sizeof(budgetStoreBytes)) &&
+                  entry(0x1ebe893, reserveBytes, sizeof(reserveBytes));
+        SpidyStreamData.features = (cones ? 1u : 0u) | (budgets ? 2u : 0u);
         if (!hooked) {
             auto s = MH_Initialize();
             if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
@@ -2184,24 +2423,29 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         attempted = false;
         stopRequested = false;
         deadline = config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
-        // MilesVR diagnostics: hook_mask.txt beside this module (a hex number) leaves the hooks whose bit
-        // is clear disabled, in the order below; without the file every hook is enabled.
-        const uint32_t mask = hookMask();
-        void* const ordered[] = {updateHook,       copyFinalHook,     toneHook,           copyJobHook,
-                                 beginJobHook,     endJobHook,        initBuffersHook,    sizeBuffersHook,
-                                 renderActorHook,  setupModelsHook,   isActiveViewHook,   impostorQueriesHook,
-                                 setupDisplayHook, submitHook,        renderOffscreenHook, hudPlaceHook,
-                                 submitSceneHook,  fitCascadesHook,   maintainHook};
+        // All under one freeze of the game's threads: MinHook lists every
+        // thread on the PC for each freeze, and on a PC with some 10,000 of
+        // them each took 300 ms, so 19 freezes one by one stalled the eyes
+        // for 8 s (LOST_INVAD3, October 23).
+        const std::initializer_list<void*> eyeHooks{
+            updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook, initBuffersHook,
+            sizeBuffersHook, renderActorHook, setupModelsHook, isActiveViewHook, impostorQueriesHook,
+            setupDisplayHook, submitHook, renderOffscreenHook, hudPlaceHook, submitSceneHook, fitCascadesHook,
+            maintainHook};
         auto s = MH_OK;
-        for (size_t i = 0; i < std::size(ordered) && s == MH_OK; ++i)
-            if (mask & (1u << i))
-                s = MH_EnableHook(ordered[i]);
+        // MilesVR diagnostics: hook_mask.txt beside this module (a hex number) leaves the hooks whose bit
+        // is clear disabled, in the order above; without the file every hook is enabled.
+        const uint32_t mask = hookMask();
+        unsigned bit = 0;
+        for (auto hook : eyeHooks)
+            if (s == MH_OK && (mask & (1u << bit++)))
+                s = MH_QueueEnableHook(hook);
+        if (s == MH_OK)
+            s = MH_ApplyQueued();
         if (s != MH_OK) {
-            for (auto hook : {updateHook, copyFinalHook, toneHook, copyJobHook, beginJobHook, endJobHook,
-                              initBuffersHook, sizeBuffersHook, renderActorHook, setupModelsHook, isActiveViewHook,
-                              impostorQueriesHook, setupDisplayHook, submitHook, renderOffscreenHook, hudPlaceHook,
-                              submitSceneHook, fitCascadesHook})
-                MH_DisableHook(hook);
+            for (auto hook : eyeHooks)
+                MH_QueueDisableHook(hook);
+            MH_ApplyQueued();
             result = 1300 + s;
             break;
         }
@@ -2236,8 +2480,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStop(void*) {
     const auto limit = GetTickCount64() + 5000;
     while ((live || hiddenHero.load()) && GetTickCount64() < limit)
         Sleep(10);
-    // The game's own view renders again (placeEyes no longer runs).
+    // The game's own view renders again (placeEyes no longer runs), and the
+    // texture streamer has the game's own budget.
     restGameView(pointer(base + 0x83ea910), false);
+    restoreTextureBudget();
     // The HUD's texture goes back to the game's size while frames still run
     // (SpidyHudData's restored says whether it did).
     native_hud::stop(1000);
@@ -2347,6 +2593,26 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyImpostorReach(void* percent) 
     if (value < 50 || value > 400)
         return 4401;
     impostorReach = static_cast<uint32_t>(value);
+    return 0;
+}
+// The far buildings' cone (native_stream.hpp): its margin each way, degrees,
+// 0-60; 0 keeps the left eye's own lens, as before October 27; 30 unless set.
+// Takes effect at the next frame.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyBuildingCone(void* degrees) {
+    const auto value = reinterpret_cast<uintptr_t>(degrees);
+    if (value > 60)
+        return 4501;
+    coneDegrees = static_cast<uint32_t>(value);
+    return 0;
+}
+// The texture budget while the eyes render (keepTextureBudget): 1 raised where
+// the card has room for it (unless set), 0 the game's own, back within two
+// seconds.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyTextureBudget(void* raise) {
+    const auto value = reinterpret_cast<uintptr_t>(raise);
+    if (value > 1)
+        return 4601;
+    textureRaise = value != 0;
     return 0;
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeTemporal(void* packed) {

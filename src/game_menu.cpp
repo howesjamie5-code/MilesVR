@@ -161,7 +161,7 @@ std::atomic<bool> hooked{}, created{};
 std::atomic<int> built{};
 alignas(16) unsigned char tab[tabBytes];
 alignas(16) unsigned char items[rowCount][itemBytes];
-// The tab's own items (the rows not on the first page), and the row that is.
+// The tab's own items (its Place's rows), and the row on the first page.
 alignas(16) unsigned char tabItems[rowCount][itemBytes];
 size_t tabRows{};
 int pageRow = -1;
@@ -218,7 +218,7 @@ void addTexts() {
         const auto& row = vr_settings::rows()[r];
         sprintf_s(tag, "MILES_VR_%zu", r);
         titles[r] = addText(tag, row.title);
-        if (row.page)
+        if (row.place == vr_settings::Place::page)
             pageTitle = const_cast<Text*>(titles[r]);
         if (row.help) {
             sprintf_s(tag, "MILES_VR_%zu_HELP", r);
@@ -316,13 +316,13 @@ uint32_t buildItems() {
                 std::memset(c + choiceClearFrom, 0, choiceClearTo - choiceClearFrom);
             }
         }
-        // The tab's rows, and the one for the first page.
+        // The tab's rows, and the one for the first page; the launcher's own are in neither.
         tabRows = 0;
         pageRow = -1;
         for (size_t r = 0; r < rowCount; ++r)
-            if (vr_settings::rows()[r].page)
+            if (vr_settings::rows()[r].place == vr_settings::Place::page)
                 pageRow = static_cast<int>(r);
-            else
+            else if (vr_settings::rows()[r].place == vr_settings::Place::tab)
                 std::memcpy(tabItems[tabRows++], items[r], itemBytes);
         std::memcpy(tab, reinterpret_cast<const void*>(menu), tabBytes);
         put<uint32_t>(tab, 8, tabId);
@@ -460,6 +460,10 @@ bool __fastcall invokeHook(void* ui, const char* name, GfxValue* args, uint32_t 
     GfxValue worded[16];
     if (game_prompts::rewriteArgs(name, args, count, worded, 16))
         return originalInvoke(ui, name, worded, count, a, b, c, d);
+    // The throw marker over a prop drawn as X in VR play.
+    GfxValue changed[8];
+    if (count <= 8 && game_prompts::rewriteCall(imageBase, name, args, count, changed))
+        return originalInvoke(ui, name, changed, count, a, b, c, d);
     return originalInvoke(ui, name, args, count, a, b, c, d);
 }
 void __fastcall callbackHook(void* ui, uint32_t hash, GfxValue* args, uint32_t count) {
@@ -479,9 +483,9 @@ void __fastcall callbackHook(void* ui, uint32_t hash, GfxValue* args, uint32_t c
     // Y RESET ALL on the MILES VR tab: the game's RESET ALL takes only its own tabs.
     if (built == 1 && args && count >= 1 && (args[0].type & typeMask) == intType &&
         static_cast<uint32_t>(args[0].data) == tabId && hash == get<uint32_t>(imageBase + resetAllHash)) {
-        // The tab's own rows: VR VIEW is on the first page, not in the tab.
+        // The tab's own rows: VR VIEW is on the first page, and the launcher keeps its own.
         for (size_t r = 0; r < rowCount; ++r)
-            if (!vr_settings::rows()[r].page)
+            if (vr_settings::rows()[r].place == vr_settings::Place::tab)
                 change(itemOf(static_cast<int>(r)), vr_settings::defaultChoice(itemOf(static_cast<int>(r))));
         // Built again, every tab shows its values, as after the game's own RESET ALL.
         reinterpret_cast<void(__fastcall*)(void*)>(imageBase + openOptions)(ui);
@@ -546,6 +550,25 @@ const char* __fastcall textHook(uint32_t hash, const char* fallback) {
 bool __fastcall hasTextHook(uint32_t hash) {
     return (buildingTab && textFor(hash)) || originalHasText(hash);
 }
+// The HUD's prompt list: its widget showing a line of `kind` (0-20) with a
+// text, and hiding one - what game_prompts keeps as asked for while it is up
+// (promptShown), and the line it shows in VR play. The show takes eight
+// arguments, four on the stack (7793d0 reads them at rbp+480 to rbp+498),
+// all passed on as they came.
+using PromptShowFn = bool(__fastcall*)(void*, int, const char*, float, uint64_t, uint64_t, uint64_t, uint64_t);
+using PromptHideFn = bool(__fastcall*)(void*, int, const char*, uint64_t);
+PromptShowFn originalPromptShow{};
+PromptHideFn originalPromptHide{};
+bool __fastcall promptShowHook(void* widget, int kind, const char* text, float wait, uint64_t a, uint64_t b,
+                               uint64_t c, uint64_t d) {
+    const char* line = kind >= 0 ? game_prompts::promptShown(static_cast<unsigned>(kind), text) : text;
+    return originalPromptShow(widget, kind, line, wait, a, b, c, d);
+}
+bool __fastcall promptHideHook(void* widget, int kind, const char* text, uint64_t now) {
+    if (kind >= 0)
+        game_prompts::promptHidden(static_cast<unsigned>(kind));
+    return originalPromptHide(widget, kind, text, now);
+}
 
 struct Hook {
     uintptr_t offset;
@@ -580,6 +603,10 @@ const Hook hooks[] = {
      {0x48, 0x83, 0xec, 0x28, 0x8b, 0xd1, 0x48, 0x8b, 0x0d}, 9},
     {addItem, reinterpret_cast<void*>(&addItemHook), reinterpret_cast<void**>(&originalAddItem),
      {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10}, 10},
+    {0x8e5ee0, reinterpret_cast<void*>(&promptShowHook), reinterpret_cast<void**>(&originalPromptShow),
+     {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70}, 10},
+    {0x8e7100, reinterpret_cast<void*>(&promptHideHook), reinterpret_cast<void**>(&originalPromptHide),
+     {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10}, 10},
 };
 bool matches(uintptr_t at, const unsigned char* bytes, size_t count) {
     __try {

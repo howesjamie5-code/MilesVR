@@ -139,12 +139,38 @@ def pending(backup=BACKUP):
     return backup.exists()
 
 
+def _load(backup):
+    """The backup's contents, or None without one. A backup that does not read (empty or cut short: the PC
+    went off as it was written) is set aside as <name>.unreadable.json, and the session goes on as if
+    there were none; until October 27 it ended every start with "Expecting value: line 1 column 1"."""
+    if not backup.exists():
+        return None
+    try:
+        return json.loads(backup.read_text())
+    except (ValueError, UnicodeDecodeError):
+        aside = backup.with_name(backup.stem+'.unreadable.json')
+        backup.replace(aside)
+        print(f'WARNING: the game settings saved before your last VR session could not be read, and are kept '
+              f'in {aside}. If the game keeps a small window or other changed settings, set them again in its '
+              'own menu.', flush=True)
+        return None
+
+
+def _write(backup, saved):
+    """Write the backup whole or not at all: a temporary file, then a rename."""
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    temporary = backup.with_name(backup.name+'.tmp')
+    temporary.write_text(json.dumps(saved, indent=2)+'\n')
+    temporary.replace(backup)
+
+
 def session_changes(backup=BACKUP):
     """The player's own values of the settings a session replaced (SESSION), by name, from the backup a
     launch left; empty without one. None: a value the session made."""
-    if not backup.exists():
+    saved = _load(backup)
+    if saved is None:
         return {}
-    session = json.loads(backup.read_text()).get('session', [])
+    session = saved.get('session', [])
     return {name: value for entry in session for name, value in entry['values'].items()}
 
 
@@ -157,12 +183,12 @@ def _saved(values, names, created=False):
 
 def restore(registry=None, backup=BACKUP):
     """Write back the values saved before VR. Returns False when nothing was saved."""
-    if not backup.exists():
+    saved = _load(backup)
+    if saved is None:
         return False
-    saved = json.loads(backup.read_text())
-    values = saved.get('values') if saved.get('key') == KEY else None
+    values = saved.get('values') if isinstance(saved, dict) and saved.get('key') == KEY else None
     # Backups before October 7's SteamVR fix hold the window's values only.
-    session = saved.get('session', [])
+    session = saved.get('session', []) if isinstance(saved, dict) else None
     allowed = {key: (tuple(wanted), create) for key, wanted, create in SESSION}
     known = isinstance(session, list) and all(
         isinstance(entry, dict) and entry.get('key') in allowed and
@@ -188,8 +214,7 @@ def shrink(registry=None, backup=BACKUP, screen=None):
     if not current:
         return None  # the game has not saved display settings yet
     if not backup.exists():
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        backup.write_text(json.dumps(dict(key=KEY, values=current), indent=2)+'\n')
+        _write(backup, dict(key=KEY, values=current))
     wanted = {name: value for name, value in small_window(*(screen or desktop())).items() if name in current}
     registry.write(wanted)
     return wanted
@@ -201,15 +226,14 @@ def prepare_session(registry=None, backup=BACKUP, keep=()):
     player has them. Returns the values written."""
     registry = registry or Registry()
     kept = {PICTURE[name] for name in keep}
-    saved = json.loads(backup.read_text()) if backup.exists() else dict(key=KEY, values={})
+    saved = _load(backup) or dict(key=KEY, values={})
     if 'session' not in saved:
         saved['session'] = []
         for key, wanted, create in SESSION:
             current = registry.read(tuple(wanted), key)
             saved['session'].append(dict(key=key, values={name: current.get(name) for name in wanted
                                                           if (name in current or create) and name not in kept}))
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        backup.write_text(json.dumps(saved, indent=2)+'\n')
+        _write(backup, saved)
     before = {entry['key']: entry['values'] for entry in saved['session']}
     written = {}
     for key, wanted, _ in SESSION:

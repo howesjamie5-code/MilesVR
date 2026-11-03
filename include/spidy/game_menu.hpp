@@ -5,7 +5,7 @@
 // Spidy's VR settings as a tab of the game's own Settings: pause, Settings,
 // then MILES VR after KEY MAPPING (the list wraps: Up from GAME); and VR VIEW
 // on the pause menu's own first page, under RESUME, which the game builds from
-// the same kind of items (vr_settings::Row::page). The game
+// the same kind of items (vr_settings::Place::page). The game
 // builds the tab's rows with its own option code, from settings items Spidy
 // adds beside the ones its config holds, so they look, move and reset like the
 // game's own: switches ON/OFF, lists stepped with left and right, X RESET and

@@ -42,15 +42,36 @@ class D3D12Renderer {
             return amount > .002f || (ripple >= 0 && ripple < 1 && rippleStrength > 0);
         }
     };
+    // A flat picture shown on a quad in the views: the phone's screen. Its
+    // vertices lie in its own plane - x right and y up in metres from its
+    // middle, halfWidth and halfHeight to its edges, z out of it: a layer
+    // further out covers one further in, and one drawn later one at its own
+    // z. It is drawn once a frame into a texture of its own (pictureWidth x
+    // pictureHeight, about four texels to a pixel of the eye's at arm's
+    // length) and mipmapped, and each view samples that on `corners` (world;
+    // bottom left, bottom right, top right, top left), depth-tested and
+    // depth-writing with the overlay's opaque geometry. One surface, so
+    // nothing on it can fight another for the depth, and no stroke of it
+    // shimmers as the hand moves: the phone's screen was layers a millimetre
+    // apart, lettering and all, before October 24.
+    static constexpr unsigned pictureWidth = 960, pictureHeight = 2048, pictureMips = 6;
+    struct Picture {
+        std::span<const Vertex> vertices;
+        float halfWidth{}, halfHeight{};
+        std::array<Vec3, 4> corners{};
+        Vec3 background{}; // what the texture is cleared to (linear RGB)
+    };
     // One upload, command list, and submission for a complete eye pair. When
     // asynchronous, the next reuse waits for this submission's own fence only.
     // `translucent` is drawn after the other vertices, in its own order, each
     // vertex blended by its opacity: nearer overlay geometry hides it, but it
     // never hides anything itself (it leaves the depth buffer alone). A
-    // visible `grade` recolours each preserved image before the overlay.
+    // visible `grade` recolours each preserved image before the overlay. A
+    // `picture` with vertices is drawn first and shown after the opaque
+    // geometry, before the translucent.
     void renderViews(std::span<const ViewTarget>, std::span<const Vertex>, bool preserveColor,
                      bool waitForCompletion = true, std::span<const Vertex> translucent = {},
-                     const Grade* grade = nullptr);
+                     const Grade* grade = nullptr, const Picture* picture = nullptr);
     // Scales `source` (read as `sourceView`, in PIXEL_SHADER_RESOURCE state)
     // over the whole target, which enters and leaves in RENDER_TARGET state.
     // A display-encoded source reaches an sRGB target with its stored values
@@ -99,6 +120,13 @@ class D3D12Renderer {
     // through the render target view at `rtv`.
     void prepareGrade(DXGI_FORMAT targetFormat);
     void recordGrade(const ViewTarget& target, D3D12_CPU_DESCRIPTOR_HANDLE rtv, const Grade& grade, unsigned view);
+    // The picture's texture, depth, views and pipelines (made once; the
+    // quad's again for another target format), its drawing into list_ (open,
+    // its vertices `first` on in the bound vertex buffer, the texture left
+    // readable), and the quad's draw into a view.
+    void preparePicture(DXGI_FORMAT targetFormat);
+    void recordPicture(const Picture& picture, unsigned first);
+    void recordPictureQuad(const Picture& picture, const Mat4& viewProjection);
     ComPtr<ID3D12Device> device_;
     ComPtr<ID3D12CommandQueue> queue_;
     ComPtr<ID3D12CommandAllocator> allocator_;
@@ -139,6 +167,17 @@ class D3D12Renderer {
     ComPtr<ID3D12Resource> gradeCopy_;
     D3D12_RESOURCE_STATES gradeCopyState_ = D3D12_RESOURCE_STATE_COPY_DEST;
     DXGI_FORMAT gradeViewFormat_ = DXGI_FORMAT_UNKNOWN;
+    // The picture: its sRGB texture with its mips and its depth, a render
+    // target view a mip, a shader view a mip and one of them all, and the
+    // pipelines that draw it, shrink each mip from the one above, and show it.
+    ComPtr<ID3D12Resource> pictureTexture_, pictureDepth_;
+    ComPtr<ID3D12DescriptorHeap> pictureRtv_, pictureDsv_, pictureSrv_;
+    ComPtr<ID3D12RootSignature> pictureRoot_, mipRoot_, pictureQuadRoot_;
+    ComPtr<ID3D12PipelineState> picturePipeline_, mipPipeline_, pictureQuadPipeline_;
+    DXGI_FORMAT pictureQuadFormat_ = DXGI_FORMAT_UNKNOWN;
+    // The quad's own four corners, written fresh each frame (see QuadVertex
+    // in d3d12_renderer.cpp).
+    ComPtr<ID3D12Resource> quadVertices_;
 };
 void addBox(std::vector<Vertex>& out, Vec3 min, Vec3 max, Vec3 color);
 void addBeam(std::vector<Vertex>& out, Vec3 a, Vec3 b, float radius, Vec3 color);

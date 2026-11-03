@@ -204,8 +204,10 @@ room. It says BODY CALIBRATION: stand tall, look ahead, arms straight out to
 the sides, hold both triggers. A line under it says what to change, a bar
 fills while the pose is held, a figure's arms and a ring around each
 controller turn green while that arm is in place, and the rings fill with
-the bar. After 1.5 s held, the panel says CALIBRATED with the eye height and
-arm length for 3.5 s and both controllers buzz. B skips it. From its start
+the bar. After 1.5 s held, the panel says CALIBRATED with the player's
+height (the eye height / 0.936, as HEIGHT counts it; until October 27 it
+showed the eye height, which a 1.88 m player read as a wrong 1.76 m) and arm
+length for 3.5 s and both controllers buzz. B skips it. From its start
 until each is let go after it, the triggers, grips, A and B do nothing in the
 game (no web, web ball, jump or dodge); the sticks, the menu button, X and Y
 work. A pause, a cutscene or the flat screen holds it until play returns.
@@ -219,8 +221,10 @@ fails is what the panel asks for):
 |---|---|
 | Headset and both controllers tracked | KEEP BOTH CONTROLLERS IN VIEW |
 | Eyes at least 1 m up | PLEASE STAND UP |
+| The height they give (eye height / 0.936, HEIGHT's share) within HEIGHT's 1.20 to 2.20 m; outside it the headset's floor is off (October 27) | CHECK YOUR HEADSET'S FLOOR |
 | Each arm, from the hero's shoulder at the player's size to the wrist, within 41 degrees of straight out to its side (crossed arms fail too) | STRETCH YOUR ARMS OUT TO THE SIDES |
 | Each arm at least 72% of the hero's at that size; the two within 12% of the longer | STRAIGHTEN BOTH ARMS |
+| The controllers at most 1.15 times the eye height apart (the user: 0.94; 1.24 under a Quest Pro floor 0.42 m too high, October 27) | CHECK YOUR HEADSET'S FLOOR |
 | The head within 26 degrees of level and 34 degrees of square to the arms | LOOK STRAIGHT AHEAD |
 | Both triggers past 0.6 (then past 0.35) | HOLD BOTH TRIGGERS |
 | The head under 0.3 m/s, each wrist under 0.35 m/s | HOLD STILL |

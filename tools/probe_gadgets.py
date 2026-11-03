@@ -10,6 +10,12 @@ does and checks the game took it, pulls the trigger of a hand 1.2 m above the fe
 game camera, and checks a shot went out and the gadget gave up a charge. Then the web shooter the same way (its own
 web ball). At the end the gadget the player had equipped is equipped again, and the hand's fire set back to the web
 ball. Writes reports/gadget-probe.json with a screenshot after each shot.
+
+First, while the game has its own Web Shooter equipped (the charged web ball its RB fires, which the wheel does not
+list): with the hand's fire set to web balls, a dozen pulls must each fire, the first ones as that gadget's own shots
+(gadget_shots), and once it has no charge left as the web ball (empty_pulls). --only-web-shooter stops there, so the
+gadget the player has equipped is never changed: the game cannot be handed its Web Shooter back by the inventory, as
+it is no item of it.
 """
 import argparse
 import ctypes as c
@@ -43,6 +49,9 @@ def main():
         user32.SetProcessDPIAware()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--output', type=pathlib.Path, default=ROOT/'reports/gadget-probe.json')
+    parser.add_argument('--only-web-shooter', action='store_true',
+                        help="fire the game's own Web Shooter alone, equipping nothing")
+    parser.add_argument('--pulls', type=int, default=12, help="pulls fired with the game's Web Shooter equipped")
     args = parser.parse_args()
     game = Game(find_game())
     process = rays = None
@@ -121,6 +130,35 @@ def main():
         original = listed['equipped']
         print(f"equipped {original}; gadgets: " + ', '.join(f"{g['gadget']} {g['ammo']}/{g['most']}"
                                                            for g in listed['gadgets']), flush=True)
+        # The game's own Web Shooter: an equipped weapon no wheel item names. The hand's fire set to web balls
+        # (as every session starts), each pull must still be answered: by that gadget's own shot while it has a
+        # charge, by the web ball after.
+        if original and all(g['weapon'] != original for g in listed['gadgets']):
+            invoke(rays['SpidyShooterGadgets'], gadget_command(0))
+            hold(0, .7)
+            before = sample()
+            for _ in range(args.pulls):
+                hold(1, .15)
+                hold(0, .3)
+            hold(0, .7)
+            after = sample()
+            entry = dict(gadget='game_web_shooter', weapon=original, pulls=args.pulls,
+                         fired=after['fired']-before['fired'], dropped=after['dropped']-before['dropped'],
+                         gadget_shots=after['gadget_shots']-before['gadget_shots'],
+                         empty=after['empty_pulls']-before['empty_pulls'], equipped=after['equipped'] == original,
+                         origin=after['last_origin'], aim_point=after['last_aim_point'],
+                         swing=swing_health(game, rays['SpidySwingData']), screenshot=shot(game, 'gadget-game-web'))
+            report['web_shooter'] = entry
+            print(f"game web shooter {original}: {args.pulls} pulls, fired {entry['fired']} (its own "
+                  f"{entry['gadget_shots']}, balls {entry['fired']-entry['gadget_shots']}), dropped "
+                  f"{entry['dropped']}, empty {entry['empty']}", flush=True)
+        else:
+            report['web_shooter'] = None
+            print("the game's own Web Shooter is not equipped: its stage skipped", flush=True)
+        if args.only_web_shooter:
+            original = None  # nothing was equipped, so there is nothing to give back
+            return 0 if report['web_shooter'] and report['web_shooter']['gadget_shots'] > 0 and \
+                report['web_shooter']['fired'] == args.pulls else 1
         invoke(rays['SpidyShooterGadgets'], gadget_command(1))
 
         def equip(weapon):

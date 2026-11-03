@@ -1,5 +1,6 @@
 #pragma once
 #include "head_clearance.hpp"
+#include "hand_collision.hpp"
 #include "native_rays.hpp"
 #include "native_view.hpp"
 #include "realistic_flip.hpp"
@@ -15,8 +16,15 @@ namespace spidy {
 // grip) and their grips the reels (Input's trigger), swapped from the default.
 Input trackedSwingInput(const XrFrame& frame, const Rig& rig, bool triggerWebs = false);
 native_rays::Command controllerAimRays(const Input&, uint64_t serial);
+// Keeps both aiming rays and the roof probe. During hand contact, body-to-eye
+// and forward head probes run every frame; side/up probes share one slot.
+void appendTrackingRays(native_rays::Command&, const std::array<HeadClearance::Ray, 5>& head,
+                        const std::array<native_rays::Ray, 2>& hands, native_rays::Ray roof,
+                        unsigned phase);
 struct GameMotionFrame {
     bool active{}, releaseWebs = true;
+    bool controlledFlipControls{}; // A-toggled left-stick mode, separate from basic right-stick flips
+    bool basicFlipControls{}; // airborne basic flips own the right stick, except prioritized zip/aim
     // Why the frame could not be placed (GameTrackingRig::Inactive bits;
     // zero while active).
     uint32_t inactive{};
@@ -30,6 +38,9 @@ struct GameMotionFrame {
     // identity orientation while it is not tracked.
     Pose headPose{};
     std::array<Pose, 2> grips{};
+    // Where the eyes look, in the world (XrFrame::gaze), while tracked.
+    Pose gazePose{};
+    bool gazeValid{};
     std::array<EyeFov, 2> fovs{};
     uint32_t nativeKeys{};
     // The left stick in the stock camera's horizontal axes, -1..1: native
@@ -55,6 +66,7 @@ struct GameMotionFrame {
     bool standing{};
     float wallRoll{};
     bool wallRotate{};
+    bool ventCrawl{};
     float viewTilt{};
     // For the player's body: the up the view stands him along (the world's
     // until it turns onto a surface), the point of that surface under his
@@ -66,10 +78,27 @@ struct GameMotionFrame {
     // How far the eyes, and the hands and the body placed with them, moved
     // out of what the world is built of (HeadClearance), metres in the world.
     Vec3 headPush{};
+    Vec3 handPush{}; // Camera placement from pressing solid building surfaces.
+    unsigned wallTouches{}; // Ray-confirmed palm contact/pressure, independent of grip buttons.
+    bool climbTracking{};
+    std::array<Vec3, 2> climbGrips{}; // tracking metres relative to the head at hold entry
+    std::array<float, 2> climbHold{};
     Quat bodyTilt() const {
         return standing ? flipTilt : swing.tilt;
     }
 };
+// Only wall-climb locomotion/stride cues use the fixed tracking reference.
+// Web, punch and other head-relative gestures keep frame.swing unchanged.
+inline Input wallClimbInput(const GameMotionFrame& frame) {
+    Input result = frame.swing;
+    if (frame.climbTracking)
+        for (unsigned i = 0; i < 2; ++i) {
+            result.hands[i].gripRelativeToHead = frame.climbGrips[i];
+            result.hands[i].wallGrip = frame.climbHold[i];
+            result.hands[i].wallPosition = frame.grips[i].position;
+        }
+    return result;
+}
 // The wall or ceiling that holds the player, as the swing module reports it
 // (game_swing::Data's wall): the swing's own wall, or the game's wall crawl.
 //
@@ -85,6 +114,35 @@ struct SurfaceHold {
     Vec3 anchor{}; // the point of it under the player's body, in the world
     float speed{}; // the player's speed, m/s
     bool crawl{};  // the game's wall crawl: its actor's feet are on the surface
+    bool vent{};   // enclosed native crawl: never switch into wall running
+};
+// A grounded dodge can briefly report the same native pose flags as a duct
+// crawl. Do not let that animation acquire a prone camera or a crawl cap.
+class CrawlCameraGate {
+  public:
+    SurfaceHold update(float seconds, bool enabled, bool dodge, bool grounded, SurfaceHold candidate) {
+        if (!enabled) {
+            *this = {};
+            return candidate;
+        }
+        const float dt = std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        if (dodge && !vent_ && (grounded || groundedBefore_))
+            dodgeSeconds_ = .9f;
+        else
+            dodgeSeconds_ = std::max(0.f, dodgeSeconds_ - dt);
+        groundedBefore_ = grounded && !vent_;
+        if (dodgeSeconds_ > 0 && candidate.crawl)
+            candidate = {};
+        // Unconfirmed native floor flags also occur while turning/running.
+        // They must not start the vent camera or its separate head-height cap.
+        if (candidate.crawl && !candidate.vent && normalized(candidate.normal).y > .866f)
+            candidate = {};
+        vent_ = candidate.vent;
+        return candidate;
+    }
+  private:
+    float dodgeSeconds_{};
+    bool groundedBefore_{}, vent_{};
 };
 // The native collision capsule's centre is clear even when a projecting
 // pillar covers the point half a metre off the facade used by the crawl.
@@ -133,6 +191,41 @@ constexpr float headClearance = .2f, leastHeadroom = .5f, headroomReach = 3.f;
 // part of the first mission's duct has no roof the rays can hit, and the head
 // stood out through it at the player's own eye height (October 14, 19:57).
 constexpr float crawlRoom = 1.2f, crawlSettleSeconds = .4f;
+// That crawl is only a duct under a duct's roof, though. The game sets the
+// same flag (0x8001, standing) for a hero ducking under anything low: in the
+// user's session of October 24 it came on for seconds at a time on a rooftop
+// under a construction frame's beams 1.7 m up, and in bursts on the street,
+// and the cap put the view at a crouch and knelt the body there ("walking
+// around on the street sucks ... constantly getting stuck"). So the cap waits
+// for a roof seen no higher than ductRoof over the feet, and once one has
+// been it holds for the rest of that crawl, through a part of a duct the rays
+// miss. Elsewhere the ray's own roof (headClearance under it) is the only
+// limit, as it is on foot.
+constexpr float ductRoof = 1.5f;
+class FloorCrawlRoof {
+  public:
+    // crawling: the game's crawl on a floor this frame. seconds: since the
+    // last. roof: how far the head's ray found the surface over the feet (0
+    // for none). Returns the height the head may reach in the crawl, 0 for
+    // no cap.
+    float update(bool crawling, float seconds, float roof) {
+        if (!crawling) {
+            *this = {};
+            return 0;
+        }
+        held_ += std::isfinite(seconds) ? std::clamp(seconds, 0.f, .1f) : 0.f;
+        duct_ = duct_ || (std::isfinite(roof) && roof > 0 && roof <= ductRoof);
+        return held_ >= crawlSettleSeconds && duct_ ? crawlRoom : 0.f;
+    }
+    // The crawl has had a duct's roof over it.
+    bool duct() const {
+        return duct_;
+    }
+
+  private:
+    float held_{};
+    bool duct_{};
+};
 // On the game's crawl the stick goes along the game camera's own look laid
 // onto the surface; where less than crawlLook of that look lies along the
 // surface (the camera faces it), along the camera's up laid onto it instead.
@@ -147,93 +240,46 @@ constexpr float surfaceEnterCos = .7071068f, surfaceLeaveCos = .819152f;
 // The stand-off approaches its target by 63% in standOffSeconds; the first
 // surfaceSettleSeconds on a surface are the actor turning onto it.
 constexpr float standOffSeconds = .06f, surfaceSettleSeconds = .5f;
-// A flip: in the air the left stick turns the player head over heels, the
-// tracking space tilting about the head (the eyes stay where they are): ahead
-// pitches forward (a front flip), back a backflip, to a side a cartwheel, as
-// fast as the stick is tilted. Let go, the player turns back level the short
-// way; pushed again on the way, the stick takes the turn over where it is. A
-// stick held into the air (a running jump) moves the player until it is let
-// go once there. A held in the air flips with the stick at once, held or not
-// from the ground, and keeps the angle while the stick rests; let go of A
-// and the stick, the player turns back level. A tap (let go within
-// tapSeconds) is one whole flip the way the stick points, ahead with it at
-// rest; pressed again during it, A takes the flip over where it is. Landing,
-// or the game holding the player on a wall or a ceiling, brings it back level
-// quickly. A press that starts on the ground, a wall or a perch is the game's
-// jump (AirJumpFilter), never a flip.
+// Basic FLIPS: the right stick rotates about the tracked head while airborne.
+// Releasing the stick freezes the angle. A fresh A press returns upright;
+// landing or surface support also returns upright. A ground jump stays a jump.
+// REALISTIC FLIPS use their own controller and retain left-stick steering.
 class FlipMotion {
   public:
-    // Held, the stick turns the player a whole turn in holdTurnSeconds at
-    // full tilt (past stickDeadZone, full from stickFull, as smooth turning
-    // does), the turn reaching 63% of what the stick asks in spinUpSeconds. A
-    // tap's flip takes tapTurnSeconds a turn; let go, the player turns back
-    // level at a turn in returnTurnSeconds, from a landing twice as fast. Over
-    // the last easeAngle radians to level it slows, to no less than `slowest`.
-    // On the ground, a wall or a ceiling for landingSeconds: landed. speed()
-    // makes all three turns as much faster or slower.
-    static constexpr float holdTurnSeconds = 1.5f, tapTurnSeconds = 1, returnTurnSeconds = 1, tapSeconds = .25f,
+    static constexpr float holdTurnSeconds = 1.5f, returnTurnSeconds = 1,
                            spinUpSeconds = .08f, stickDeadZone = .2f, stickFull = .9f, easeAngle = .4f,
                            slowest = .3f, landingSeconds = .08f;
     struct Sample {
-        bool jump{};              // A is held
-        bool airborne{};          // the player is in the air (game_swing::airborne)
-        bool surface{};           // the game holds the player on a wall or a ceiling
-        float stickX{}, stickY{}; // the left stick
-        Quat head{};              // the headset in the tracking space
-        float seconds{};          // since the sample before
+        bool jump{}, airborne{}, surface{};
+        bool controlled{}; // explicit A-toggle mode; false preserves the original basic flips
+        float stickX{}, stickY{}; // the right stick for basic flips
+        Quat head{};
+        float seconds{};
+        bool stickTracked = true;
     };
-    // The tracking space's tilt after this sample (the identity: level).
     Quat update(const Sample&);
-    Quat tilt() const {
-        return tilt_;
-    }
-    bool level() const {
-        return phase_ == Phase::level;
-    }
-    // The left stick (or A held in the air) turns the flip: the stick moves
-    // the player no more.
-    bool steering() const {
-        return phase_ == Phase::holding;
-    }
-    // Radians turned since the press, all ways.
-    float turned() const {
-        return turned_;
-    }
-    // How fast the stick turns the player at full tilt, radians a second (the
-    // FLIP SPEED setting), from a quarter to four times the holdTurnSeconds
-    // turn; a tap's flip and the way back level go as much faster or slower.
-    // A turn in holdTurnSeconds until set; reset() keeps it.
+    Quat tilt() const { return tilt_; }
+    bool level() const { return phase_ == Phase::level; }
+    bool steering() const { return phase_ == Phase::rotating; }
+    bool active() const { return active_; }
+    float turned() const { return turned_; }
+    // FLIP SPEED also supplies the unchanged manual rate for realistic flips.
     void speed(float radiansPerSecond);
-    // The stick's turn at full tilt, radians a second (what speed() set):
-    // REALISTIC FLIPS steer by it.
-    float steeringRate() const {
-        return 6.2831853f / holdTurnSeconds * scale_;
-    }
-    // Level at once (a menu, a recenter, another player). A held A stays held:
-    // it flips again only once let go and pressed in the air; a held stick
-    // flips again only once let go in the air.
+    float steeringRate() const { return 6.2831853f / holdTurnSeconds * scale_; }
+    // Menus/recentering clear the tilt and require a new neutral stick.
+    // Preserve the A latch so a button held across the reset is not a press.
     void reset();
+    void reset(bool jump) { reset(); held_ = jump; }
 
   private:
-    enum class Phase { level, holding, flipping, settling };
-    // Starts the way back to level: flipping (round the way `way` turns, a
-    // whole turn from level) or settling (the short way).
-    void toLevel(Phase, Vec3 way = {});
+    enum class Phase { level, rotating, held, settling };
+    void toLevel();
     Phase phase_ = Phase::level;
     Quat tilt_{}, from_{};
-    Vec3 spin_{};            // the stick's turn in the tracking space, radians a second
-    Vec3 tapWay_{};          // the stick's way during a press (unit; zero: none)
-    Vec3 axis_{-1, 0, 0};    // to level: the axis it turns about (unit)
-    float total_{}, left_{}; // to level: radians in all, and those still to turn
-    // To level, radians a second: a flip's speed before its slowing, the turn
-    // now, and settling's.
-    float speed_{}, rate_{}, returnRate_{};
-    float turned_{}, landed_{}, heldFor_{};
-    float scale_ = 1; // speed(): the turns' speed over the constants'
-    bool held_{}, fromAir_{};
-    // The stick has been at rest in the air since the landing (it flips when
-    // pushed), and this hold began with a press of A (let go soon: a tap).
-    bool stickFree_{}, tap_{};
+    Vec3 spin_{}, axis_{-1, 0, 0};
+    float total_{}, left_{}, returnRate_{}, turned_{}, landed_{};
+    float scale_ = 1;
+    bool held_{}, resetHeld_{}, stickReady_{}, active_{};
 };
 // Converts one complete predicted tracking sample into world-space head, eyes,
 // hand aims, and physical swing input. The game adapter still owns collision and
@@ -243,7 +289,7 @@ class GameTrackingRig {
     // gameForward and gameUp: the game camera's look and its up, as it
     // holds them (its third and second rows). surfaceUp: the up of the
     // player's actor, the world's while it stands. airborne: the player is in
-    // the air, so A or the left stick flips now (FlipMotion). surface: the
+    // the air, so the basic flip can use the right stick. surface: the
     // wall or ceiling that holds the player.
     GameMotionFrame update(const XrFrame&, Vec3 playerFeet, Vec3 gameForward, bool gameplay,
                            Vec3 surfaceUp = {0, 1, 0}, bool airborne = false, const SurfaceHold& surface = {},
@@ -270,14 +316,18 @@ class GameTrackingRig {
     void smoothTurn(float radiansPerSecond) {
         smooth_ = std::isfinite(radiansPerSecond) ? std::clamp(radiansPerSecond, 0.f, 6.2831853f) : 0.f;
     }
-    // Whether A and the left stick in the air flip the player (FlipMotion;
-    // the experimental FLIPS setting); off until set, when A there does
-    // nothing and the stick moves the player. Switched off mid-flip, the
-    // player is level at once. reset() keeps it.
+    // Basic FLIPS use the airborne right stick; release holds the tilt and
+    // A returns upright. Off until set; disabling clears the tilt immediately.
     void flips(bool on) {
         flips_ = on;
     }
-    // How fast a flip turns the player at full tilt of the left stick,
+    // Controlled Flips overrides basic flips; realistic flips retains priority.
+    void controlledFlips(bool on) {
+        if (controlledFlips_ != on)
+            flip_.reset();
+        controlledFlips_ = on;
+    }
+    // How fast a flip turns the player at full tilt of its steering stick,
     // radians a second (FlipMotion::speed; the FLIP SPEED setting). reset()
     // keeps it.
     void flipSpeed(float radiansPerSecond) {
@@ -320,19 +370,34 @@ class GameTrackingRig {
     // After an update: the rays for the next batch, along the head's own
     // look, side and up.
     std::array<HeadClearance::Ray, HeadClearance::rays> clearanceRays(Vec3 look, Vec3 side, Vec3 up) const {
-        const bool closeClimb = handClimb_ && !standing_ && length(climbNormal_) > .5f;
+        const bool closeClimb = handClimb_ && !standing_ &&
+                                (length(climbNormal_) > .5f || ventViewActive_);
         return clearance_.next(look, side, up, closeClimb ? .75f : 0.f);
     }
     const HeadClearance& clearance() const {
         return clearance_;
+    }
+    void handFeedback(const native_rays::Data& data, int64_t now, int64_t frequency) {
+        handCollision_.feedback(data, now, frequency);
+    }
+    std::array<native_rays::Ray, 2> handCollisionRays(Vec3 head) const {
+        return handCollision_.next(head);
     }
     void handClimb(bool on) {
         handClimb_ = on;
         if (!on)
             wallRoll_.reset();
     }
+    // Which hands hold the wall, as the swing last had them (bit 0 the left;
+    // game_swing::ClimbData): the wall roll turns the view only while both
+    // do. Two grips held otherwise are webs, and the roll took both of them,
+    // the second web's press and the first web with it (October 22). Zero
+    // until set; reset() clears it.
+    void wallHands(unsigned hands) {
+        wallHands_ = hands;
+    }
     void wallDistance(float metres) {
-        wallDistance_ = std::isfinite(metres) ? std::clamp(metres, HeadClearance::margin, 1.f) : .4f;
+        wallDistance_ = std::isfinite(metres) ? std::clamp(metres, .1f, 1.f) : .4f;
     }
     // REALISTIC FLIPS (RealisticFlip), from the VR settings; off, the flips
     // are FlipMotion's. reset() keeps them.
@@ -342,6 +407,24 @@ class GameTrackingRig {
     // The swing's flight for the next update: its velocity and its webs' pull.
     void flight(RealisticFlight sample) {
         flight_ = sample;
+    }
+    void momentumWallRun(float distance, float tilt, float bank, float lean) {
+        momentumView_.distance = std::isfinite(distance) ? std::clamp(distance, .4f, 1.6f) : .95f;
+        momentumView_.tilt = std::isfinite(tilt) ? std::clamp(tilt, -.523599f, .523599f) : .17453293f;
+        momentumView_.bank = std::isfinite(bank) ? std::clamp(bank, 0.f, 2.747478f) : .85f;
+        momentumView_.lean = std::isfinite(lean) ? std::clamp(lean, 0.f, 1.047198f) : .5f;
+    }
+    void wallRunCameraDistance(float metres) {
+        runCameraDistance_ = std::isfinite(metres) ? std::clamp(metres, .4f, 1.6f) : .9f;
+    }
+    void wallRunCameraTilt(bool enabled) { runCameraTilt_ = enabled; }
+    // Actual solved body stance, not the player's momentary look direction.
+    void outwardCrawl(float weight) {
+        outwardCrawl_ = std::isfinite(weight) ? std::clamp(weight, 0.f, 1.f) : 0.f;
+    }
+    // The running avatar needs a separate camera clearance from close hand crawling.
+    void wallRunBody(bool enabled, unsigned supports, Vec3 velocity) {
+        runViewEnabled_ = enabled; runViewSupports_ = supports; runViewVelocity_ = velocity;
     }
     void reset();
 
@@ -357,6 +440,7 @@ class GameTrackingRig {
     Vec3 lastFeet_{}, standOff_{}, lastGameForward_{0, 0, -1};
     std::int64_t lastTime_{};
     bool initialized_{}, wasActive_{}, turnHeld_{}, pendingRecenter_{}, onSurface_{}, flips_{};
+    bool controlledFlips_{};
     // The trigger webs, and the web button changed since the last frame of play.
     bool triggerWebs_{}, buttonsChanged_{};
     float snap_ = .5235988f, smooth_{};
@@ -369,16 +453,34 @@ class GameTrackingRig {
     Vec3 surfaceShift_{};
     bool standing_{}, standOnWalls_ = true;
     bool handClimb_{};
+    unsigned wallHands_{};
+    float runCameraDistance_ = .9f;
+    struct MomentumView { float distance = .95f, tilt = .17453293f, bank = .85f, lean = .5f; } momentumView_;
+
     float wallDistance_ = .4f;
+    float outwardCrawl_{};
+    float outwardOffset_{};
     WallRollGesture wallRoll_;
     Vec3 climbNormal_{}, runNormal_{}, runAhead_{};
     Quat climbView_{};
+    // Prone vent frame: neutral headset looks into native support. Its
+    // orientation follows floor/wall/ceiling changes, about the placed eyes.
+    Quat ventTurn_{};
+    Vec3 ventForward_{0, 0, -1};
+    bool ventViewActive_{};
     float runYaw_{}, runHeadYaw_{};
     bool wallRunning_{};
+    bool runViewEnabled_{}, runViewActive_{}, runCameraTilt_{};
+    float runCameraBank_{};
+    unsigned runViewSupports_{};
+    Vec3 runViewVelocity_{}, runViewOffset_{};
+    bool climbTrackingSet_{};
+    Vec3 climbTrackingHead_{};
     float runIdleSeconds_{};
     float headroom_{};
     Vec3 headDrop_{};
     HeadClearance clearance_{};
+    HandCollision handCollision_{};
     Vec3 bodyCentre_{std::numeric_limits<float>::quiet_NaN(), 0, 0};
 };
 } // namespace spidy

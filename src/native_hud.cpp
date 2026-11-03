@@ -341,13 +341,17 @@ uint32_t native_hud::start(uintptr_t imageBase) {
         }
         stopping = false;
         enabled = true;
+        // Under one freeze of the game's threads (stereo_probe.cpp says why).
         for (auto hook : {streamHook, renderHook, projectXYHook, projectHook})
-            if (const auto s = MH_EnableHook(hook); s != MH_OK && !result)
+            if (const auto s = MH_QueueEnableHook(hook); s != MH_OK && !result)
                 result = 9800 + s;
+        if (const auto s = result ? MH_OK : MH_ApplyQueued(); s != MH_OK)
+            result = 9800 + s;
         if (result) {
             enabled = false;
             for (auto hook : {streamHook, renderHook, projectXYHook, projectHook})
-                MH_DisableHook(hook);
+                MH_QueueDisableHook(hook);
+            MH_ApplyQueued();
         }
     } while (false);
     publish([&](Data& d) { d.layerStatus = result; });

@@ -150,6 +150,7 @@ def main():
     p.add_argument('--left', type=float, nargs=2, default=(0, 0), metavar=('X', 'Y'),
                    help='left stick, -1..1 (Quest controllers have no D-pad: menus are played with this)')
     p.add_argument('--right', type=float, nargs=2, default=(0, 0), metavar=('X', 'Y'))
+    p.add_argument('--triggers', type=float, nargs=2, default=(0, 0), metavar=('LT', 'RT'), help='each trigger, 0..1')
     p.add_argument('--until-player', action='store_true', help='repeat the press every 2 s until a player exists')
     p.add_argument('--follow', action='store_true', help='hand the player to the input bridge and sample the gate')
     a = p.parse_args()
@@ -183,8 +184,9 @@ def main():
                 buttons |= BUTTONS[name]
             started = time.monotonic()
             sticks = [round(max(-1, min(1, v))*32767) for v in (*a.left, *a.right)]
+            triggers = [round(max(0, min(1, v))*255) for v in a.triggers]
             while True:
-                pad(process, xr, buttons, a.hold, sticks)
+                pad(process, xr, buttons, a.hold, sticks, triggers)
                 if not a.until_player:
                     break
                 player, _ = find_player(game, process, xr)

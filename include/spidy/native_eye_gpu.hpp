@@ -73,6 +73,10 @@ uint32_t mirrored();
 // presents that drew such a copy (diagnostic).
 void keepShownEye(ID3D12Resource* left);
 uint32_t mirroredShown();
+// The game's adapter's local memory as DXGI gives it to the game: its budget
+// and the game's use of it, bytes. False before start() or where DXGI cannot
+// say. The game's main thread only.
+bool videoMemory(uint64_t& budget, uint64_t& usage);
 // The newest copied frame, if one was copied within maxAgeMs.
 bool latestScreen(Screen& out, uint64_t maxAgeMs);
 // How the copy is read: the encoded format of the back buffer's family, or

@@ -323,7 +323,7 @@ void D3D12Renderer::render(ID3D12Resource* target, DXGI_FORMAT format, unsigned 
 }
 void D3D12Renderer::renderViews(std::span<const ViewTarget> views, std::span<const Vertex> vertices,
                                 bool preserveColor, bool waitForCompletion,
-                                std::span<const Vertex> translucent, const Grade* grade) {
+                                std::span<const Vertex> translucent, const Grade* grade, const Picture* picture) {
     if (views.empty() || views.size() > 2)
         throw std::runtime_error("Overlay requires one or two views");
     const auto format = views[0].format;
@@ -338,6 +338,10 @@ void D3D12Renderer::renderViews(std::span<const ViewTarget> views, std::span<con
     const bool grading = grade && preserveColor && grade->visible();
     if (grading)
         prepareGrade(format);
+    const bool painting = picture && !picture->vertices.empty() && picture->halfWidth > 0 &&
+                          picture->halfHeight > 0;
+    if (painting)
+        preparePicture(format);
     if (!depth_ || width != width_ || height != height_) {
         depth_.Reset();
         width_ = width;
@@ -360,8 +364,10 @@ void D3D12Renderer::renderViews(std::span<const ViewTarget> views, std::span<con
            "Create depth target");
         device_->CreateDepthStencilView(depth_.Get(), nullptr, dsv_->GetCPUDescriptorHandleForHeapStart());
     }
-    // One buffer: the depth-writing vertices, then the translucent ones.
-    const auto bytes = vertices.size_bytes() + translucent.size_bytes();
+    // One buffer: the depth-writing vertices, then the translucent ones, then
+    // the picture's.
+    const auto pictureBytes = painting ? picture->vertices.size_bytes() : 0;
+    const auto bytes = vertices.size_bytes() + translucent.size_bytes() + pictureBytes;
     if (bytes > capacity_) {
         vertices_.Reset();
         // Room from the start for a fight's printed marks (some 80,000
@@ -389,10 +395,19 @@ void D3D12Renderer::renderViews(std::span<const ViewTarget> views, std::span<con
         if (!translucent.empty())
             std::memcpy(static_cast<char*>(data) + vertices.size_bytes(), translucent.data(),
                         translucent.size_bytes());
+        if (pictureBytes)
+            std::memcpy(static_cast<char*>(data) + vertices.size_bytes() + translucent.size_bytes(),
+                        picture->vertices.data(), pictureBytes);
         vertices_->Unmap(0, nullptr);
     }
     hr(allocator_->Reset(), "Reset allocator");
     hr(list_->Reset(allocator_.Get(), pipeline_.Get()), "Reset list");
+    // The picture first, into its own texture, which every view then samples.
+    if (painting) {
+        D3D12_VERTEX_BUFFER_VIEW buffer{vertices_->GetGPUVirtualAddress(), static_cast<UINT>(bytes), sizeof(Vertex)};
+        list_->IASetVertexBuffers(0, 1, &buffer);
+        recordPicture(*picture, static_cast<unsigned>(vertices.size() + translucent.size()));
+    }
     D3D12_RENDER_TARGET_VIEW_DESC rv{};
     rv.Format = format;
     rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
@@ -426,6 +441,17 @@ void D3D12Renderer::renderViews(std::span<const ViewTarget> views, std::span<con
         if (!vertices.empty()) {
             list_->SetPipelineState(pipeline_.Get());
             list_->DrawInstanced(static_cast<UINT>(vertices.size()), 1, 0, 0);
+        }
+        if (painting) {
+            recordPictureQuad(*picture, views[eye].viewProjection);
+            // The overlay's own signature, vertex buffer and constants again, for what follows.
+            list_->SetGraphicsRootSignature(root_.Get());
+            list_->SetGraphicsRoot32BitConstants(0, 16, views[eye].viewProjection.data(), 0);
+            if (bytes) {
+                D3D12_VERTEX_BUFFER_VIEW buffer{vertices_->GetGPUVirtualAddress(), static_cast<UINT>(bytes),
+                                                sizeof(Vertex)};
+                list_->IASetVertexBuffers(0, 1, &buffer);
+            }
         }
         if (!translucent.empty()) {
             list_->SetPipelineState(translucent_.Get());
@@ -932,6 +958,327 @@ void D3D12Renderer::recordGrade(const ViewTarget& target, D3D12_CPU_DESCRIPTOR_H
     list_->RSSetScissorRects(1, &rect);
     list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     list_->DrawInstanced(3, 1, 0, 0);
+}
+namespace {
+ComPtr<ID3DBlob> compile(const char* source, const char* entry, const char* target, const char* what) {
+    ComPtr<ID3DBlob> blob, error;
+    if (FAILED(D3DCompile(source, std::strlen(source), "spidy_picture", nullptr, nullptr, entry, target,
+                          D3DCOMPILE_ENABLE_STRICTNESS, 0, &blob, &error)))
+        throw std::runtime_error(std::string(what) + ": " +
+                                 (error ? std::string(static_cast<const char*>(error->GetBufferPointer()),
+                                                      error->GetBufferSize())
+                                        : std::string("no message")));
+    return blob;
+}
+ComPtr<ID3D12RootSignature> signature(ID3D12Device* device, const D3D12_ROOT_SIGNATURE_DESC& desc, const char* what) {
+    ComPtr<ID3DBlob> blob, error;
+    hr(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &error), what);
+    ComPtr<ID3D12RootSignature> out;
+    hr(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&out)), what);
+    return out;
+}
+// A pipeline's fixed parts: one render target, no culling, no blending.
+D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePipeline(ID3D12RootSignature* root, ID3DBlob* vs, ID3DBlob* ps,
+                                                  DXGI_FORMAT target) {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC p{};
+    p.pRootSignature = root;
+    p.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    p.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+    p.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    p.NumRenderTargets = 1;
+    p.RTVFormats[0] = target;
+    p.SampleDesc.Count = 1;
+    p.SampleMask = UINT_MAX;
+    p.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    p.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    p.RasterizerState.DepthClipEnable = TRUE;
+    auto& blend = p.BlendState.RenderTarget[0];
+    blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.LogicOp = D3D12_LOGIC_OP_NOOP;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    return p;
+}
+constexpr DXGI_FORMAT pictureFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+// The picture quad's own corners, as an actual vertex buffer: vkd3d-proton
+// does not correctly read a root-constants array indexed per vertex (the
+// Linux black-screen report), so the corners travel this way instead.
+struct QuadVertex {
+    float x, y, z, u, v;
+};
+} // namespace
+void D3D12Renderer::preparePicture(DXGI_FORMAT targetFormat) {
+    if (!pictureTexture_) {
+        D3D12_RESOURCE_DESC d{};
+        d.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        d.Width = pictureWidth;
+        d.Height = pictureHeight;
+        d.DepthOrArraySize = 1;
+        d.MipLevels = pictureMips;
+        d.Format = pictureFormat;
+        d.SampleDesc.Count = 1;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        auto h = heap(D3D12_HEAP_TYPE_DEFAULT);
+        hr(device_->CreateCommittedResource(&h, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                            nullptr, IID_PPV_ARGS(&pictureTexture_)),
+           "Create picture texture");
+        d.MipLevels = 1;
+        d.Format = DXGI_FORMAT_D32_FLOAT;
+        d.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+        D3D12_CLEAR_VALUE clear{};
+        clear.Format = d.Format;
+        clear.DepthStencil.Depth = 1;
+        hr(device_->CreateCommittedResource(&h, D3D12_HEAP_FLAG_NONE, &d, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear,
+                                            IID_PPV_ARGS(&pictureDepth_)),
+           "Create picture depth");
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hd.NumDescriptors = pictureMips;
+        hr(device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&pictureRtv_)), "Create picture RTV heap");
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        hd.NumDescriptors = 1;
+        hr(device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&pictureDsv_)), "Create picture DSV heap");
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = pictureMips + 1;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        hr(device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&pictureSrv_)), "Create picture SRV heap");
+        const UINT rtvStep = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+        const UINT srvStep = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        // A render target view and a shader view a mip, and one shader view of them all last.
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = pictureFormat;
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        for (UINT m = 0; m <= pictureMips; ++m) {
+            auto srv = pictureSrv_->GetCPUDescriptorHandleForHeapStart();
+            srv.ptr += m * srvStep;
+            sv.Texture2D.MostDetailedMip = m < pictureMips ? m : 0;
+            sv.Texture2D.MipLevels = m < pictureMips ? 1 : pictureMips;
+            device_->CreateShaderResourceView(pictureTexture_.Get(), &sv, srv);
+            if (m == pictureMips)
+                break;
+            D3D12_RENDER_TARGET_VIEW_DESC rv{};
+            rv.Format = pictureFormat;
+            rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+            rv.Texture2D.MipSlice = m;
+            auto rtv = pictureRtv_->GetCPUDescriptorHandleForHeapStart();
+            rtv.ptr += m * rtvStep;
+            device_->CreateRenderTargetView(pictureTexture_.Get(), &rv, rtv);
+        }
+        device_->CreateDepthStencilView(pictureDepth_.Get(), nullptr, pictureDsv_->GetCPUDescriptorHandleForHeapStart());
+        // The picture drawn as the overlay's own geometry is, into its plane;
+        // z decides, and at a z of its own the later of two.
+        const char* overlay = R"(
+cbuffer Plane : register(b0) { row_major float4x4 vp; };
+struct In { float3 position:POSITION; float4 color:COLOR; };
+struct Out { float4 position:SV_POSITION; float4 color:COLOR; };
+Out vs(In i) { Out o; o.position=mul(vp,float4(i.position,1)); o.color=i.color; return o; }
+float4 ps(Out i):SV_TARGET { return i.color; }
+)";
+        D3D12_ROOT_PARAMETER plane{};
+        plane.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        plane.Constants.Num32BitValues = 16;
+        plane.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+        const D3D12_ROOT_SIGNATURE_DESC pictureSig{1, &plane, 0, nullptr,
+                                                   D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
+        pictureRoot_ = signature(device_.Get(), pictureSig, "Create picture root signature");
+        const auto vs = compile(overlay, "vs", "vs_5_0", "Compile picture vertex shader");
+        const auto ps = compile(overlay, "ps", "ps_5_0", "Compile picture pixel shader");
+        D3D12_INPUT_ELEMENT_DESC layout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+        auto p = opaquePipeline(pictureRoot_.Get(), vs.Get(), ps.Get(), pictureFormat);
+        p.InputLayout = {layout, 2};
+        p.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        p.DepthStencilState.DepthEnable = TRUE;
+        p.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        p.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        auto& blend = p.BlendState.RenderTarget[0];
+        blend.BlendEnable = TRUE;
+        blend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        hr(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&picturePipeline_)), "Create picture pipeline");
+        // Each mip the average of the four texels of the one above: a
+        // bilinear sample at the corner they share. The views decode and
+        // encode sRGB, so the average is of light, not of stored values.
+        const char* shrink = R"(
+Texture2D above : register(t0);
+SamplerState between : register(s0);
+cbuffer Level : register(b0) { float2 texel; };
+float4 vs(uint id : SV_VertexID) : SV_POSITION {
+    const float2 corner = float2((id << 1) & 2, id & 2);
+    return float4(corner * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 ps(float4 position : SV_POSITION) : SV_TARGET {
+    return float4(above.SampleLevel(between, position.xy * texel, 0).rgb, 1);
+}
+)";
+        D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+        D3D12_ROOT_PARAMETER mip[2]{};
+        mip[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        mip[0].DescriptorTable = {1, &range};
+        mip[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        mip[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        mip[1].Constants.Num32BitValues = 2;
+        mip[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        D3D12_STATIC_SAMPLER_DESC linear{};
+        linear.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        linear.AddressU = linear.AddressV = linear.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        linear.MaxLOD = D3D12_FLOAT32_MAX;
+        linear.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        const D3D12_ROOT_SIGNATURE_DESC mipSig{2, mip, 1, &linear, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        mipRoot_ = signature(device_.Get(), mipSig, "Create mip root signature");
+        const auto mvs = compile(shrink, "vs", "vs_5_0", "Compile mip vertex shader");
+        const auto mps = compile(shrink, "ps", "ps_5_0", "Compile mip pixel shader");
+        const auto m = opaquePipeline(mipRoot_.Get(), mvs.Get(), mps.Get(), pictureFormat);
+        hr(device_->CreateGraphicsPipelineState(&m, IID_PPV_ARGS(&mipPipeline_)), "Create mip pipeline");
+        // The quad: the view's projection as a constant, its four corners as
+        // an actual vertex buffer (vkd3d-proton under Proton/Linux does not
+        // correctly read a root-constants array indexed per vertex - see the
+        // Linux black-screen report), the picture sampled with its mips and
+        // at a slant as sharp as it lets.
+        D3D12_ROOT_PARAMETER quad[2]{};
+        quad[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        quad[0].Constants.Num32BitValues = 16;
+        quad[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+        quad[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        quad[1].DescriptorTable = {1, &range};
+        quad[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        D3D12_STATIC_SAMPLER_DESC sharp = linear;
+        sharp.Filter = D3D12_FILTER_ANISOTROPIC;
+        sharp.MaxAnisotropy = 8;
+        const D3D12_ROOT_SIGNATURE_DESC quadSig{2, quad, 1, &sharp,
+                                                D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT};
+        pictureQuadRoot_ = signature(device_.Get(), quadSig, "Create picture quad root signature");
+        D3D12_RESOURCE_DESC quadVertexDesc{};
+        quadVertexDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        quadVertexDesc.Width = 6 * sizeof(QuadVertex);
+        quadVertexDesc.Height = 1;
+        quadVertexDesc.DepthOrArraySize = 1;
+        quadVertexDesc.MipLevels = 1;
+        quadVertexDesc.SampleDesc.Count = 1;
+        quadVertexDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        auto uploadHeap = heap(D3D12_HEAP_TYPE_UPLOAD);
+        hr(device_->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &quadVertexDesc,
+                                            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&quadVertices_)),
+           "Create picture quad vertex buffer");
+    }
+    if (!pictureQuadPipeline_ || pictureQuadFormat_ != targetFormat) {
+        const char* quad = R"(
+cbuffer Vp : register(b0) { row_major float4x4 vp; };
+Texture2D picture : register(t0);
+SamplerState sharp : register(s0);
+struct In { float3 position : POSITION; float2 uv : TEXCOORD; };
+struct Out { float4 position : SV_POSITION; float2 uv : TEXCOORD; };
+Out vs(In i) {
+    Out o;
+    o.position = mul(vp, float4(i.position, 1));
+    o.uv = i.uv;
+    return o;
+}
+float4 ps(Out i) : SV_TARGET { return float4(picture.Sample(sharp, i.uv).rgb, 1); }
+)";
+        const auto vs = compile(quad, "vs", "vs_5_0", "Compile picture quad vertex shader");
+        const auto ps = compile(quad, "ps", "ps_5_0", "Compile picture quad pixel shader");
+        auto p = opaquePipeline(pictureQuadRoot_.Get(), vs.Get(), ps.Get(), targetFormat);
+        D3D12_INPUT_ELEMENT_DESC quadLayout[] = {
+            {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+            {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}};
+        p.InputLayout = {quadLayout, 2};
+        p.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        p.DepthStencilState.DepthEnable = TRUE;
+        p.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        p.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS;
+        pictureQuadPipeline_.Reset();
+        hr(device_->CreateGraphicsPipelineState(&p, IID_PPV_ARGS(&pictureQuadPipeline_)), "Create picture quad pipeline");
+        pictureQuadFormat_ = targetFormat;
+    }
+}
+void D3D12Renderer::recordPicture(const Picture& picture, unsigned first) {
+    const UINT rtvStep = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    const UINT srvStep = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    auto writable = transition(pictureTexture_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               D3D12_RESOURCE_STATE_RENDER_TARGET);
+    list_->ResourceBarrier(1, &writable);
+    const auto rtv = pictureRtv_->GetCPUDescriptorHandleForHeapStart();
+    const auto dsv = pictureDsv_->GetCPUDescriptorHandleForHeapStart();
+    const Vec3 back = finite(picture.background) ? picture.background : Vec3{};
+    const float clear[] = {back.x, back.y, back.z, 1};
+    list_->ClearRenderTargetView(rtv, clear, 0, nullptr);
+    list_->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1, 0, 0, nullptr);
+    list_->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
+    const auto size = [&](UINT mip, unsigned full) { return std::max(1u, full >> mip); };
+    const auto area = [&](UINT mip) {
+        const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(size(mip, pictureWidth)),
+                                      static_cast<float>(size(mip, pictureHeight)), 0, 1};
+        const D3D12_RECT rect{0, 0, static_cast<LONG>(size(mip, pictureWidth)),
+                              static_cast<LONG>(size(mip, pictureHeight))};
+        list_->RSSetViewports(1, &viewport);
+        list_->RSSetScissorRects(1, &rect);
+    };
+    area(0);
+    list_->SetPipelineState(picturePipeline_.Get());
+    list_->SetGraphicsRootSignature(pictureRoot_.Get());
+    list_->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // The plane onto the texture, its edges to the texture's, and z onto the
+    // depth: 2 cm either side of the plane, further out nearer.
+    const Mat4 flat{1 / picture.halfWidth, 0, 0, 0, 0, 1 / picture.halfHeight, 0, 0, 0, 0, -25, .5f, 0, 0, 0, 1};
+    list_->SetGraphicsRoot32BitConstants(0, 16, flat.data(), 0);
+    list_->DrawInstanced(static_cast<UINT>(picture.vertices.size()), 1, first, 0);
+    // Each mip from the one above, which is readable from then on.
+    list_->SetPipelineState(mipPipeline_.Get());
+    list_->SetGraphicsRootSignature(mipRoot_.Get());
+    ID3D12DescriptorHeap* heaps[] = {pictureSrv_.Get()};
+    list_->SetDescriptorHeaps(1, heaps);
+    for (UINT m = 1; m <= pictureMips; ++m) {
+        auto readable = transition(pictureTexture_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        readable.Transition.Subresource = m - 1;
+        list_->ResourceBarrier(1, &readable);
+        if (m == pictureMips)
+            break;
+        auto target = rtv;
+        target.ptr += m * rtvStep;
+        list_->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        area(m);
+        auto above = pictureSrv_->GetGPUDescriptorHandleForHeapStart();
+        above.ptr += (m - 1) * srvStep;
+        list_->SetGraphicsRootDescriptorTable(0, above);
+        const float texel[] = {1.f / static_cast<float>(size(m, pictureWidth)),
+                               1.f / static_cast<float>(size(m, pictureHeight))};
+        list_->SetGraphicsRoot32BitConstants(1, 2, texel, 0);
+        list_->DrawInstanced(3, 1, 0, 0);
+    }
+}
+void D3D12Renderer::recordPictureQuad(const Picture& picture, const Mat4& viewProjection) {
+    const UINT srvStep = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const unsigned at[6] = {0, 1, 2, 0, 2, 3};
+    const float uvs[4][2] = {{0, 1}, {1, 1}, {1, 0}, {0, 0}};
+    QuadVertex quadVertices[6];
+    for (unsigned i = 0; i < 6; ++i) {
+        const unsigned c = at[i];
+        quadVertices[i] = {picture.corners[c].x, picture.corners[c].y, picture.corners[c].z, uvs[c][0], uvs[c][1]};
+    }
+    void* mapped{};
+    D3D12_RANGE noRead{0, 0};
+    hr(quadVertices_->Map(0, &noRead, &mapped), "Map picture quad vertices");
+    std::memcpy(mapped, quadVertices, sizeof(quadVertices));
+    quadVertices_->Unmap(0, nullptr);
+    list_->SetPipelineState(pictureQuadPipeline_.Get());
+    list_->SetGraphicsRootSignature(pictureQuadRoot_.Get());
+    ID3D12DescriptorHeap* heaps[] = {pictureSrv_.Get()};
+    list_->SetDescriptorHeaps(1, heaps);
+    list_->SetGraphicsRoot32BitConstants(0, 16, viewProjection.data(), 0);
+    auto all = pictureSrv_->GetGPUDescriptorHandleForHeapStart();
+    all.ptr += pictureMips * srvStep;
+    list_->SetGraphicsRootDescriptorTable(1, all);
+    D3D12_VERTEX_BUFFER_VIEW quadBuffer{quadVertices_->GetGPUVirtualAddress(), sizeof(quadVertices),
+                                        sizeof(QuadVertex)};
+    list_->IASetVertexBuffers(0, 1, &quadBuffer);
+    list_->DrawInstanced(6, 1, 0, 0);
 }
 void addBox(std::vector<Vertex>& out, Vec3 lo, Vec3 hi, Vec3 color) {
     Vec3 p[] = {{lo.x, lo.y, lo.z}, {hi.x, lo.y, lo.z}, {hi.x, hi.y, lo.z}, {lo.x, hi.y, lo.z},

@@ -65,6 +65,17 @@ class XrRuntime {
     uint32_t layoutsTaken() const {
         return layouts_;
     }
+    // Eye tracking (XR_EXT_eye_gaze_interaction): none, the runtime does not
+    // offer it; noTracker, it does, but not for this headset (a Quest 3, say),
+    // or it took no binding for the eyes; tracker, the headset has one. Gaze
+    // is read only while wanted (EYE AIM on): XrFrame::gaze.
+    enum class EyeTracking : uint32_t { none, noTracker, tracker };
+    EyeTracking eyeTracking() const {
+        return eyeTracking_;
+    }
+    void wantGaze(bool on) {
+        gazeWanted_ = on;
+    }
     // width: the screen's width in metres. stereo: the screen shows the left
     // eye's image to the left eye and the right one's to the right; without
     // it both eyes see the left one's.
@@ -86,6 +97,7 @@ class XrRuntime {
                     bool probeOnly, bool copyDestination, unsigned eyeSize = 0, unsigned renderScale = 100);
     void actions();
     void createActions();
+    void createGaze();
     bool offered(const ControllerLayout& layout) const;
     void suggest(const ControllerLayout& layout);
     XrAction actionFor(ControllerInput input) const;
@@ -94,6 +106,7 @@ class XrRuntime {
     XrAction action(const char* name, const char* label, XrActionType type, bool perHand = true);
     void poll();
     XrFrame input(XrTime predicted);
+    bool sharedGaze(const Pose& head, Pose& out);
     bool locate(XrSpace space, XrTime time, Pose& out);
     XrInstance instance_{};
     XrSystemId system_{};
@@ -108,6 +121,18 @@ class XrRuntime {
     // right). None where the runtime does not know that controller.
     XrAction view_{};
     std::array<XrAction, 4> dpad_{};
+    // The eyes' gaze, in an action set of its own that is synced only while
+    // gaze is wanted: with EYE AIM off the runtime is never asked for it.
+    XrActionSet gazeSet_{};
+    XrAction gazeAction_{};
+    XrSpace gazeSpace_{};
+    EyeTracking eyeTracking_{};
+    bool gazeOffered_{}, gazeWanted_{};
+    // Virtual Desktop's runtime: its Streamer's shared eyes where it gives
+    // no gaze (vd_eyes.hpp), mapped the first time they are wanted.
+    bool virtualDesktop_{};
+    void* vdMapping_{};
+    const uint8_t* vdState_{};
     // The extensions this instance has on, the profiles of the layouts the
     // runtime took, and what controllers() and layoutsTaken() give.
     std::vector<const char*> extensions_;

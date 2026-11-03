@@ -338,14 +338,162 @@ def roles_payload(roles, joints):
     return struct.pack('<4I4h2h8h8h12h6h', 0x53424452, 1, 96, joints, *values)
 
 
-def command(serial, flags, eyes, facing, hands, height=0., lease=250, arm_length=0., shoots=None):
+def command(serial, flags, eyes, facing, hands, height=0., lease=250, arm_length=0., shoots=None,
+            crawl=None, floor=(0., 0., 0.), crawl_motion=None, crawl_origin=None, crawl_strokes=None,
+            crawl_distance=None, crawl_hands=None, crawl_touches=None, crawl_turn_away=False,
+            vent_surface=None, wall_run=False, run_surface=None, run_phase=0., run_speed=8., run_torso_angle=None,
+            run_bank=None, run_lean=None, run_stride=None):
     """A native_body::Command; `arm_length` (m) is a T-pose calibration's, 0 the hero's own arms. With `shoots`
-    (how far each hand is in the web-shooting pose, 0 to 1) it is a version 3 command, level; without, version 1."""
-    raw = struct.pack('<4IQ2I3f4f', 0x53424443, 3 if shoots else 1, 168 if shoots else 144, flags, serial, lease, 0,
+    (how far each hand is in the web-shooting pose, 0 to 1) it is a version 3 command, level; without, version 1.
+    `wall_run=True` and `run_surface=(normal,ahead)` select version 16, a moving wall-run cycle.
+    `run_torso_angle` sets joystick torso tuning (0..80 degrees, supplied in radians).
+    `run_bank`, `run_lean` and `run_stride` set momentum tuning: tangent bank strength,
+    forward angle in radians, and stride multiplier; earlier command sizes remain available.
+    `crawl=(normal, ahead, step, phase)` selects version 5, with its support plane in `floor`.
+    `crawl_motion=0..1` selects version 6 and blends the compact pose into a wider, lower moving stance.
+    `crawl_origin=(x,y,z)` selects version 7's persistent world-space foot contacts.
+    `crawl_strokes=(left,right)` selects version 8's opposite-hand steps and stable pelvis.
+    `crawl_distance=0.1..1` selects version 9's saved camera/pelvis clearance, in metres.
+    `crawl_hands=0..3` sets version 9's confirmed left/right grip attachments.
+    `crawl_touches=0..3` reports solid hand contact; `crawl_turn_away` enables the feet-supported turn."""
+    tuning = any(v is not None for v in (run_bank, run_lean, run_stride))
+    if tuning and (not wall_run or
+                   (run_bank is not None and (not math.isfinite(run_bank) or not 0 <= run_bank <= math.tan(math.radians(70)))) or
+                   (run_lean is not None and (not math.isfinite(run_lean) or not 0 <= run_lean <= math.radians(60))) or
+                   (run_stride is not None and (not math.isfinite(run_stride) or not .5 <= run_stride <= 1.5))):
+        raise ValueError('Invalid momentum body tuning or missing wall_run mode')
+    if flags & ~0x3ffff:
+        raise ValueError('Unsupported body flags')
+    if run_torso_angle is not None and (not wall_run or not math.isfinite(run_torso_angle) or
+                                       not 0 <= run_torso_angle <= math.radians(80)):
+        raise ValueError('Wall-run torso angle requires wall_run and 0..80 degrees in radians')
+    if wall_run:
+        if run_surface is None:
+            raise ValueError('Wall running requires its wall normal and travel direction')
+        normal, ahead = run_surface
+        vectors = (normal, ahead)
+        if (any(len(v) != 3 or any(not math.isfinite(x) for x in v) or
+                abs(sum(x*x for x in v) - 1) > .015 for v in vectors) or
+                abs(sum(a*b for a, b in zip(normal, ahead))) > .01 or
+                not math.isfinite(run_phase) or not 0 <= run_phase <= 2*math.pi or
+                not math.isfinite(run_speed) or not .25 <= run_speed <= 80):
+            raise ValueError('Invalid wall-run frame, phase or speed')
+        if (vent_surface is not None or crawl is not None or crawl_origin is not None or
+                crawl_strokes is not None or crawl_motion is not None or crawl_distance is not None or
+                crawl_hands is not None or crawl_touches is not None or crawl_turn_away or
+                flags & (32 | 64 | 128 | 256 | 512 | 3072 | 12288 | 16384 | 32768 | 65536)):
+            raise ValueError('Native wall running cannot combine with planted or crawling poses')
+        raw = bytearray(command(serial, flags & ~131072, eyes, facing, hands, height, lease,
+                                arm_length, shoots))
+        raw.extend(bytes(304 - len(raw)))
+        struct.pack_into('<4f', raw, 144, 0, 0, 0, 1)
+        struct.pack_into('<3I', raw, 4, 16, 304, flags | 131072 | 8)
+        struct.pack_into('<3f', raw, 180, *floor)
+        struct.pack_into('<3f3f', raw, 192, *normal, *ahead)
+        struct.pack_into('<2f', raw, 228, run_phase, run_speed)
+        if run_torso_angle is not None:
+            struct.pack_into('<f', raw, 264, run_torso_angle)
+        struct.pack_into('<f', raw, 264, .85 if run_torso_angle is None else run_torso_angle)
+        struct.pack_into('<3fI', raw, 288, .85 if run_bank is None else run_bank,
+                         .5 if run_lean is None else run_lean, 1. if run_stride is None else run_stride, 0)
+        return bytes(raw)
+    if run_surface is not None:
+        raise ValueError('Run surface requires wall_run=True')
+    if flags & 131072:
+        raise ValueError('Native wall running requires its explicit pose option')
+    if vent_surface is not None:
+        if (crawl is not None or crawl_origin is not None or crawl_strokes is not None or
+                crawl_motion is not None or crawl_distance is not None or crawl_turn_away or
+                flags & (128 | 256 | 512 | 16384 | 32768)):
+            raise ValueError('Vent upper-body contact cannot enable outdoor legs or back rotation')
+        normal, ahead = vent_surface
+        raw = bytearray(command(serial, flags, eyes, facing, hands, height, lease, arm_length, shoots,
+                                crawl=(normal, ahead, ahead, 0.), floor=floor, crawl_origin=(0., 0., 0.),
+                                crawl_strokes=(0, 0), crawl_distance=.25, crawl_hands=crawl_hands,
+                                crawl_touches=crawl_touches))
+        old_flags = struct.unpack_from('<I', raw, 12)[0]
+        struct.pack_into('<I', raw, 4, 10)
+        struct.pack_into('<I', raw, 12, (old_flags & ~(128 | 256 | 512)) | 32768)
+        return bytes(raw)
+    if flags & 32768:
+        raise ValueError('Vent upper-body contact requires its explicit surface')
+    if crawl_touches is not None:
+        if not isinstance(crawl_touches, int) or not 0 <= crawl_touches <= 3 or crawl_distance is None:
+            raise ValueError('Solid wall touches require a version 9 crawl pose')
+        flags = (flags & ~12288) | (crawl_touches << 12)
+    elif flags & 12288:
+        raise ValueError('Solid wall touches require an explicit contact mask')
+    if not isinstance(crawl_turn_away, bool) or (crawl_turn_away and crawl_distance is None):
+        raise ValueError('Turning away requires a version 9 crawl pose')
+    if crawl_turn_away:
+        flags |= 16384
+    elif flags & 16384:
+        raise ValueError('Turning away requires its explicit pose option')
+    if crawl_hands is not None:
+        if not isinstance(crawl_hands, int) or not 0 <= crawl_hands <= 3 or crawl_distance is None:
+            raise ValueError('Confirmed wall hands require a version 9 crawl pose')
+        flags = (flags & ~3072) | (crawl_hands << 10)
+    elif flags & 3072:
+        raise ValueError('Confirmed wall hands require an explicit hand mask')
+    if crawl_distance is not None and (crawl_strokes is None or not math.isfinite(crawl_distance) or
+                                       not .1 <= crawl_distance <= 1):
+        raise ValueError('Invalid shared camera/pelvis distance')
+    if crawl_strokes is not None:
+        if (crawl_origin is None or len(crawl_strokes) != 2 or
+                any(not isinstance(v, int) or not 0 <= v <= 0xffffffff for v in crawl_strokes)):
+            raise ValueError('Invalid crawl hand strokes')
+        flags |= 512
+    elif flags & 512:
+        raise ValueError('Hand-synced crawling needs stroke counters')
+    if crawl_origin is not None:
+        if (crawl is None or len(crawl_origin) != 3 or not all(math.isfinite(x) for x in crawl_origin)):
+            raise ValueError('Invalid outdoor crawl origin')
+        crawl_motion = 0 if crawl_motion is None else crawl_motion
+        flags |= 256
+    elif flags & 256:
+        raise ValueError('Planted crawling needs a world origin')
+    if crawl_motion is not None and (crawl is None or not math.isfinite(crawl_motion) or
+                                     not 0 <= crawl_motion <= 1):
+        raise ValueError('Invalid outdoor crawl motion')
+    if crawl is not None:
+        normal, ahead, step, phase = crawl
+        vectors = (normal, ahead, step)
+        if (any(len(v) != 3 or not all(math.isfinite(x) for x in v) or
+                abs(math.sqrt(sum(x*x for x in v)) - 1) >= .01 for v in vectors) or
+                any(abs(sum(a*b for a, b in zip(normal, v))) >= .01 for v in (ahead, step)) or
+                not math.isfinite(phase) or not 0 <= phase <= 2*math.pi or
+                len(floor) != 3 or not all(math.isfinite(x) for x in floor)):
+            raise ValueError('Invalid outdoor crawl pose')
+        flags |= 128
+    elif flags & 128:
+        raise ValueError('Outdoor crawl needs its version 5 surface and stride')
+    if crawl_distance is not None:
+        version, size = 9, 272
+    elif crawl_strokes is not None:
+        version, size = 8, 264
+    elif crawl_origin is not None:
+        version, size = 7, 256
+    elif crawl_motion is not None:
+        version, size = 6, 240
+    else:
+        version, size = (5, 232) if crawl is not None else (3, 168) if shoots else (1, 144)
+    raw = struct.pack('<4IQ2I3f4f', 0x53424443, version, size, flags, serial, lease, 0,
                       *eyes, *facing)
     for grip, orientation, tracked, fist in hands:
         raw += struct.pack('<3f4fIf', *grip, *orientation, tracked, fist)
     raw += struct.pack('<3f', height, 0, arm_length)
+    if crawl is not None:
+        raw += struct.pack('<4f2f6f3f3f3ff', 0, 0, 0, 1, *(shoots or (0, 0)),
+                           0, 1, 0, *floor, *normal, *ahead, *step, phase)
+        if crawl_motion is not None:
+            raw += struct.pack('<f4x', crawl_motion)
+        if crawl_origin is not None:
+            raw += struct.pack('<3f4x', *crawl_origin)
+        if crawl_strokes is not None:
+            raw += struct.pack('<2I', *crawl_strokes)
+        if crawl_distance is not None:
+            raw += struct.pack('<f4x', crawl_distance)
+        return raw
     return raw+struct.pack('<4f2f', 0, 0, 0, 1, *shoots) if shoots else raw
 
 

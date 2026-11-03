@@ -73,6 +73,8 @@ struct StrikeWish {
     // enemy opens the strike too: a hook, an uppercut or a blow down, which
     // go across and not out at him.
     Vec3 called{};
+    // With combat visuals off, an upward/downward swing needs no cue.
+    bool freeDirections{};
 };
 struct WebStrikeConfig {
     // A strike opens with a fist at least this fast relative to the player
@@ -134,6 +136,14 @@ struct WebStrikeConfig {
     float minStrength = .5f;
     // From a flight's end to the next one opening.
     float pause = .08f;
+    // The dive (dive()): the player's own flight - a swing, a zip, a jump, a
+    // fall - takes him at the marked enemy, off the ground, at diveSpeed (real
+    // m/s) or faster. It opens once his line passes within diveMiss of the
+    // enemy's middle (more for a wider enemy) and gets there within diveTime,
+    // diveReach at most. The strike flies him the rest of the way feet first,
+    // as fast as he came (diveFlight at the least), and its blow is his
+    // speed's: a heavy one from diveSpeed, the hardest from diveFull.
+    float diveSpeed = 9, diveMiss = 1.1f, diveTime = .35f, diveReach = 7, diveFlight = 12, diveFull = 20;
 };
 class WebStrike {
   public:
@@ -163,6 +173,21 @@ class WebStrike {
     std::uint64_t passedOver() const {
         return passedOver_;
     }
+    // The player's own flight into the marked enemy: a dive (WebStrikeConfig
+    // above) opens a strike whose hand is diveHand, its flight starting with
+    // the next step(). velocity: the player's, real m/s, in the world; marked:
+    // the enemy his next punch goes to (0: nobody, no dive). Call after open()
+    // in the same sample. Its blow is as strong as `punch`'s fist speed.
+    std::optional<Opening> dive(Vec3 velocity, bool grounded, Vec3 head, Vec3 feet,
+                                std::span<const FightTarget> targets, const WorldQueries& world,
+                                std::uint64_t marked, const PunchConfig& punch);
+    static constexpr int diveHand = 2;
+    // The flight in progress is a dive.
+    bool diving() const {
+        return phase_ == Phase::Flying && hand_ == diveHand;
+    }
+    // The strength of a dive at this speed (real m/s): 0 below diveSpeed.
+    float diveStrength(float speed) const;
     // One step of the player's body, `seconds` (real) long, from `feet`;
     // target: the strike's, where he is now (nullptr: gone).
     Step step(float seconds, Vec3 feet, bool grounded, const FightTarget* target);
@@ -424,12 +449,18 @@ struct Delivery {
     bool fly{};
     Vec3 velocity{};
 };
+// The freely chosen vertical move, using the same strength and pitch gates
+// as ordinary uppercuts and downward punches.
+CueWay verticalBlow(const PunchEvent& blow, bool targetAirborne, const DeliveryConfig& config = {});
+
 // How the blow `blow` goes to the game: the `count`th of its flow, at a
 // target on his feet or in the air. called: the way it was called and went
 // (Cues::answers), None for an ordinary blow; calledDamage: such a blow's
-// damage, times.
+// damage, times. freeDirections ignores calls and lets vertical moves take
+// priority over an automatic finisher.
 Delivery deliver(const PunchEvent& blow, bool targetAirborne, int count, const Flow& flow,
-                 const DeliveryConfig& config = {}, CueWay called = CueWay::None, float calledDamage = 1.5f);
+                 const DeliveryConfig& config = {}, CueWay called = CueWay::None, float calledDamage = 1.5f,
+                 bool freeDirections = false);
 
 // The game's time around a landed blow: it all but stops for a moment, then
 // eases back, as fighting games freeze on a hit. The head and the hands keep

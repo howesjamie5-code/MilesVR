@@ -63,7 +63,9 @@ PLAY
    both triggers until the bar fills, about a second and a half. Spider-Man
    then has your height and arm length, so his hands sit on your
    controllers. B skips it. The launcher remembers it; "Redo" on its Options
-   tab, or CALIBRATE BODY in SPIDY VR (below), does it again.
+   tab, or CALIBRATE BODY in SPIDY VR (below), does it again. Rather enter
+   your height? Set HEIGHT (SPIDY VR, or "Height" in the launcher's options).
+   Playing seated? Switch SEATED on first (below), then calibrate sitting up.
 
 Keep the game window in front on the desktop: the game pauses while another
 window is in front of it, the launcher included. If the headset shows a still
@@ -71,6 +73,11 @@ picture, click the game window once.
 
 Press STOP VR, or close the game, to end the session. Each session leaves a
 report in the "reports" folder; send it along when you report a problem.
+Asking for help on Spidy's Discord (https://discord.gg/x27ZXDpdNt)? Press
+"Copy for Discord" above the launcher's session log and paste what it copied
+into your post: a few lines with your Spidy version, VR runtime, headset,
+game version, graphics card, memory, options and how the last session ended.
+Your Windows user name is not in them.
 VR starts once per game launch: to play in VR again after STOP VR, or after
 VR ended by itself, close the game first, then press START VR.
 
@@ -108,9 +115,10 @@ frame rate" in the launcher's options chooses Every frame, 60, 30, 15 or 5 a
 second; 60 makes a smoother recording of the window. On menus, cutscenes
 and the flat screen the window shows the game as usual. For a wider view
 to record, pick an angle for RECORDING FOV (the SPIDY VR tab, DISPLAY): the
-window then shows the game's own view, at least that wide across, with none
-of Spidy's marks, every frame whatever the monitor frame rate, and it costs
-frame rate in the headset.
+window then shows the game's own view, that wide across, with none of
+Spidy's marks, every frame whatever the monitor frame rate, and it costs
+frame rate in the headset. RECORDING SMOOTHING softens how that view turns
+with your head; the headset's own view is never smoothed.
 
 The picture in each eye is anti-aliased and upscaled by the game itself:
 the scene is rendered smaller and built up to the eye's full size from the
@@ -186,6 +194,13 @@ Web shooter
                            first thing in its way. One ball per pull; the
                            other hand can shoot while one hand swings.
                            Three quick hits web a thug up.
+                           It is the game's Web Shooter's shot, as its RB
+                           fires it, while that gadget is the one equipped
+                           and has a charge: it seals a research station's
+                           leaks and vents and webs up turrets and thugs as
+                           the game made them. Out of charges, the ball
+                           still flies but does nothing to those until the
+                           charges come back.
 
 Aim markers (where each hand's web would go if you pressed its web button
 now; the left hand's are blue, the right hand's orange)
@@ -198,7 +213,7 @@ now; the left hand's are blue, the right hand's orange)
   AIM MARKERS .......... hides or shows the markers: Settings > SPIDY VR, or
                          "Aim markers" in the launcher's options (the next
                          session starts as you left it). X no longer
-                         switches them: it opens the game menu
+                         switches them: held, it opens the gadget wheel
 
 Your body and fists
   Look down ............ you are Spider-Man: his body under you, his arms
@@ -224,10 +239,12 @@ Your body and fists
 
 Fighting (web strikes: punching across the room, as in Batman: Arkham Shadow)
   Punch a thug ......... a fist that meets him fast lands a blow, as hard as
-                         it moved. Every blow kicks in your hand, sounds,
-                         bursts where it landed (a comic's star: yellow for
-                         a jab, red for a harder blow) and stops time for a
-                         moment
+                         it moved. Every blow kicks in your hand, sounds as
+                         the game's own blows do (its hit on him, as hard as
+                         yours was; BLOW SOUNDS in Settings > SPIDY VR picks
+                         Spidy's own tones or none instead), bursts where it
+                         landed (a comic's star: yellow for a jab, red for a
+                         harder blow) and stops time for a moment
   Punch at a thug ...... web strike: you fly to him and the blow lands as
   out of reach           you arrive. He can be 10 m away, anywhere you can
                          see him: across the street, below you, in the air.
@@ -237,6 +254,15 @@ Fighting (web strikes: punching across the room, as in Batman: Arkham Shadow)
   Punch along your ..... the same: you go to him, and the web lets go. A
   web at the thug        sharp pull still yanks him to you instead
   it holds
+  Swing, zip or fall ... a dive: come at the thug the ring marks fast (9 m/s
+  into a thug            or more) off the ground - a swing, a zip, a jump, a
+                         fall - and a third of a second from him you go the
+                         rest of the way feet first, time slowing, and kick
+                         him: a heavy blow as hard as you were fast, that
+                         sends him flying the way you came. Your webs let go,
+                         and in the air you hang beside him for the next
+                         blow. Only at the ringed one, and only on course for
+                         him: a swing past a crowd kicks nobody
   A hard punch ......... sends him flying, the harder the farther
   Uppercut ............. lifts him into the air. Strike up after him: you
                          hang beside him for a moment after every blow you
@@ -312,6 +338,18 @@ Fighting (web strikes: punching across the room, as in Batman: Arkham Shadow)
                          lands on him while his lines show counts too
   Red lines ............ dodge: B. The game says nothing breaks this attack
                          (a heavy's charge, a blow from too far to counter)
+  Out of the way ....... while red or blue lines show, step or lean quickly
+                         to a side (17 cm), step back (20 cm) or duck (15
+                         cm): that is the game's dodge, the way you moved (a
+                         duck: the way the game picks), its perfect dodge and
+                         its slowed time too. A lean toward him is none (a
+                         counter leans in). Not while a web carries you
+  On a web ............. swinging, zipping or pulled along a web, faster than
+                         a jog (3 m/s), red and blue lines' blows are
+                         dodged for you just before they land: the game's
+                         own dodge on the move, its Focus and its sound, a
+                         whoosh across the vest. Its perfect dodge does not
+                         slow time there: the swing goes on
   Yellow lines ......... under a white chevron: jump over it, A
   Out of view .......... an enemy behind you or to the side: his mark shows
                          small near the middle of your view on his side,
@@ -331,14 +369,15 @@ Fighting (web strikes: punching across the room, as in Batman: Arkham Shadow)
   stand does both: clench your fists as you like.
 
 Moving
-  Left stick ........... walk and run (with FLIPS on, in the air it flips
-                         you, below)
+  Left stick ........... walk and run (with REALISTIC FLIPS and FLIPS on,
+                         in the air it steers rotation, below)
   Right stick .......... flick left or right to turn (30 degrees; SPIDY VR
                          in Settings sets how far, or turns it off). With
                          SMOOTH TURN on, hold it to turn steadily instead:
-                         the further you tilt it, the faster
+                         the further you tilt it, the faster. Basic FLIPS
+                         uses it to rotate while airborne, below
   A .................... jump (from the ground, a wall or a perch; in the
-                         air it flips you, below: no web zip from the wrist).
+                         air it returns a basic flip upright, below).
                          On the ground the jump is made as you let A go
   Hold A ............... a charged leap: hold A on the ground (your hands
                          buzz as it builds, for most of a second) and let
@@ -348,7 +387,8 @@ Moving
                          save may not have
   B .................... dodge: the game's B. You dodge the way the left
                          stick points; with the stick at rest the game
-                         chooses the way. Not while a web carries you
+                         chooses the way. Not while a web carries you: the
+                         web dodges for you then
   Y .................... interact: the game's Y (backpacks, doors, prompts;
                          web strike in a fight). Look at the thing and
                          press Y, within about a metre of it: you turn to
@@ -359,15 +399,15 @@ Moving
                          takes it (2 seconds at most; let go to stop). At a
                          door or a console: look at it and hold Y. Not in a
                          fight
-  Right stick click .... the game's LB + RB: its web pull. Where the game
-                         shows LB + RB (a door or a grate to tear off),
-                         click the right stick, or hold it for as long as
-                         the game wants the two held. Not while a web
-                         carries you
   Right stick down ..... heal: the game's D-pad down. Push the stick
                          straight down and hold it a moment; the right
                          controller ticks when the game gets it. In the air
-                         too
+                         too. It spends the game's Focus, which your
+                         punches, web strikes, yanks and throws fill as
+                         the game's own do (since October 22; before,
+                         none of them filled it).
+                         An air blow or a yank fills about three times
+                         what a punch on the ground does
   Right stick up ....... the game's LT + RT: its zip to a point. Where the
                          game shows LT + RT (a perch, a vent to enter),
                          look at it, push the stick straight up and hold
@@ -381,13 +421,27 @@ Moving
   trigger                hand beside your head and pull its trigger there;
                          it holds for as long as you hold the trigger. No
                          web ball from that pull
+  Both hands at your ... the game's suit power (its L3 + R3, which nothing
+  chest, both triggers   sent in VR before): both hands before your chest,
+                         pull both triggers together (within half a second
+                         or so). No web balls from those pulls. The game uses
+                         its power when its meter is full, as in the flat game.
+                         Both hands buzz as it goes out. Builds before
+                         October 23 buzzed but sent the game nothing
   Menu button .......... pause
   Hold both sticks in .. pause too, after a moment (both hands buzz). Under
                          SteamVR the Quest's menu button is SteamVR's own:
                          it opens SteamVR's dashboard, not the game's pause
-  X .................... game menu (map, suits, skills); while the game asks
-                         for its X, that X (WHEN THE GAME ASKS FOR A
-                         BUTTON, below)
+  X .................... while the game asks for its X, that X (WHEN THE
+                         GAME ASKS FOR A BUTTON, below). Where it shows
+                         LB + RB (a prop to throw, a door or a grate to
+                         tear off), X is both: press it, or hold it for as
+                         long as the game wants the two held; its prompt
+                         and the marker over the thing show X there. A
+                         prop thrown that way goes where your other hand
+                         points: at the enemy its aim marker is on, or
+                         that way. Otherwise a tap of it does nothing.
+                         The game menu is your phone's MENU since October 23
   Hold X ............... the gadget wheel, in front of that hand (the
                          right one on a Steam Frame): move the hand toward
                          a gadget to light it (it turns red, its name in
@@ -398,31 +452,52 @@ Moving
                          left, and one with none is grey. The yellow
                          gadget is the one you have now. The web shooter
                          at the top gives you web balls again. Back in
-                         the middle and let go: nothing changes
+                         the middle and let go: nothing changes. Early in
+                         a new game, before the game gives you a gadget,
+                         the wheel has the web shooter alone and says NO
+                         GADGETS YET
+  Phone ................ squeeze a grip with that hand behind your hip and
+                         bring it up in front, still squeezed: your phone
+                         opens in that hand. Reach for your back pocket,
+                         not the side of your hip, squeeze once you are
+                         there (not on the way), and bring the hand up
+                         within 1.5 s. You can look at the pocket; a look
+                         back past about 70 degrees turns it with you.
+                         Still nothing? The session's report says why
+                         (`pocket`). The stick picks an app, A
+                         opens it, B goes back or puts the phone away.
+                         MENU puts it away and opens the game menu (map,
+                         suits, skills; B closes it). CAMERA puts it away
+                         and takes the game's camera out (THE GAME'S
+                         CAMERA, below)
   Click both sticks .... the pad layer, as you let go: your controllers
                          become the whole Xbox controller for a moment
                          (held on, both sticks pause instead). Your grips
                          are the game's LB and RB, your triggers its LT
                          and RT, X is its X and the right stick its D-pad
-                         (the gadget wheel). Click both again to leave it,
-                         or just stop pressing anything for 20 seconds.
-                         Your webs are off while it is on, so it does not
-                         latch while a web is carrying you
+                         (the gadget wheel). PAD LAYER shows over your
+                         right wrist while it is on. Click both again to
+                         leave it, draw the phone, or just stop pressing
+                         anything for 20 seconds. Your webs are off while
+                         it is on, so it does not latch while a web is
+                         carrying you
   A, B and Y are the game's own A, B and Y, and X too while the game shows
   it: where the game shows one of them on screen, press that button. Your
-  grips shoot webs, so they are not the game's LB and RB in VR: the right
-  stick's click is both, and where the game shows a bumper or a trigger on
-  its own, your triggers are those (below). The controllers have no D-pad:
-  the right stick pushed down is the game's D-pad down, pushed up its
-  LT + RT. A push counts from the stick at rest, straight down or up:
-  turning, a diagonal and a quick flick do neither.
+  grips shoot webs, so they are not the game's LB and RB in VR: where the
+  game shows LB + RB, X is both (its prompt says X), and where it shows a
+  bumper or a trigger on its own, your triggers are those (below). The
+  controllers have no D-pad: the right stick pushed down is the game's
+  D-pad down, pushed up its LT + RT. A push counts from the stick at rest,
+  straight down or up: turning, a diagonal and a quick flick do neither.
 
   WHEN THE GAME ASKS FOR A BUTTON
   Press the button of the name it shows. The game's prompts name an Xbox
   controller's buttons, and while one is on screen your controllers send
   them under those names:
     A, B, X, Y ......... the button of that letter. X is then the game's
-                         X, not the menu or the wheel
+                         X, not the gadget wheel
+    LB + RB ............ X (the prompt and the marker show X for them)
+    Back or View ....... your phone's MENU
     LT or LB ........... your left trigger
     RT or RB ........... your right trigger
     L3, R3 ............. a click of the left or the right stick
@@ -437,6 +512,19 @@ Moving
   fist thrown down is both: the Ground Strike. A button you were already
   holding as the prompt came up goes on doing what it did, and the grips
   stay your webs, so you can still swing.
+  The Ground Strike also needs no prompt: in a fight, in the air, throw both
+  fists down together, hard (no web in either hand, and none let go of in
+  the moment before). That is the game's X and A held, and it takes you from
+  your webs for its move. One fist alone stays a punch. Not with no enemy
+  near (a hard pull down on both webs while swinging is no Ground Strike),
+  and not with REALISTIC FLIPS on, where both arms swung down flip you.
+
+  THE GAME'S CAMERA (the research stations' photos)
+  Phone, CAMERA ........ takes the game's camera out, as its D-pad up does
+  Left trigger, held ... its viewfinder
+  Right trigger ........ takes the photo
+  Right stick up ....... puts the camera away
+  While the camera is out your triggers are its own, not web balls.
 
   The pad layer above is the way out if a moment still asks for something
   none of this reaches.
@@ -451,9 +539,10 @@ Steam Frame controllers (they have a gamepad's buttons, split between the
 hands; everything above is the same, with these buttons)
   A, B, X, Y ........... all four are on the right controller, and each is
                          the button of that name above: A jumps, B dodges,
-                         X opens the game menu, Y interacts
+                         X held opens the gadget wheel, Y interacts
   Menu ................. pause (right controller)
-  View ................. the game menu, as X (left controller)
+  View ................. the game menu, as the phone's MENU (left
+                         controller)
   D-pad ................ the game's own D-pad: down heals. The right stick
                          pushed down and up still does what it does above
   Bumpers .............. nothing: the triggers and grips are your webs
@@ -461,9 +550,35 @@ hands; everything above is the same, with these buttons)
   when these are in use. Versions up to 0.3.2 had no layout for them:
   SteamVR translated the Quest one, and B, X and Y all dodged.
 
+Valve Index controllers (Spidy has a layout for them; everything above is the
+same, with these buttons)
+  A, right ............. A: jump
+  B, right ............. B: dodge
+  A, left .............. X: held, the gadget wheel; the game's LB + RB
+  B, left .............. Y: interact
+  Squeeze the handle ... the grip: your web
+  System button ........ SteamVR's own. Pause by holding both sticks in
+  Trackpads ............ nothing
+  The session log says "the Index layout" when these are in use.
+
+PS VR2 Sense controllers (under SteamVR, which plays them as Quest
+controllers: Spidy has no layout of its own for them, and no player has
+reported on them yet)
+  Cross, right ......... A: jump
+  Circle, right ........ B: dodge
+  Square, left ......... X: held, the gadget wheel; the game's LB + RB
+  Triangle, left ....... Y: interact
+  L1, R1 ............... the grips: your webs
+  L2, R2 ............... the triggers
+  Pause ................ hold both sticks in: SteamVR's translation carries
+                         no menu button over
+  The session log says "the Touch layout" when these are in use.
+
 Walls (every wall is Spidy's own; the game's crawl only takes you for a
 vent or a door you ask for, and inside vents and ducts)
-  Walk onto one ........ walk at a wall from the ground and you go up onto it
+  Walk onto one ........ walk at a wall from the ground and you go up onto it.
+                         What the game lets you walk through - a broken glass
+                         pane - is no wall: you walk on through it
   Swing or fly into one  you stay on it, an arm's length off. At speed you run
                          along it with the speed you had, and nothing pulls
                          you down it; without the left stick or a web you
@@ -471,7 +586,8 @@ vent or a door you ask for, and inside vents and ducts)
   Left stick ........... walks the wall where you look along it, and steers a
                          run
   A .................... jumps off the wall, out and up
-  A web ................ pulls you off the wall, or along it
+  A web ................ out from the wall swings you off it; one up the
+                         wall holds you there for a zip or the reel up it
   The wall's top ....... go up over it and you hop onto the roof; at a walk
                          you step round a corner onto the next wall
   A vent or a door ..... point a hand at it. A turning ring round it, in that
@@ -516,59 +632,100 @@ Slow motion (as in Blade & Sorcery)
 
 Flips (experimental, off until you switch FLIPS on in Settings > SPIDY VR or
 in the launcher's options)
-  Left stick in the air  turns you head over heels about your head, as
-                         fast as you tilt it (ahead a front flip, back a
-                         backflip, to a side a cartwheel); it does not move
-                         you meanwhile. A stick held from a running jump
-                         still steers you until you let it go once
-  Let go of the stick .. you turn back level
-  Tap A in the air ..... one flip, about a second and a half, toward where
-                         the left stick points (at rest a front flip)
-  Hold A in the air .... the left stick turns you, and at rest you stay
-                         turned; let go of A and the stick to come back level.
-                         Landing or a wall levels you too
+  Right stick in the air turns you head over heels about your head, as
+                         fast as you tilt it (back a backflip, to a side
+                         a cartwheel). Straight up prioritizes zip/aim,
+                         holding the flip angle while the game aims at a
+                         zip point. The left stick
+                         still moves you. Let the right stick rest once
+                         after takeoff before starting a rotation
+  Let go of the stick .. rotation stops and your chosen angle stays
+  A in the air ......... returns you upright by the short path. A no longer
+                         starts a single flip. Release A and let the stick
+                         rest before choosing another rotation
+  Landing or a wall .... returns you upright too
+  Right-stick shortcuts  straight up retains zip/aim during basic flips,
+                         including the aimed zip on release. Snap/smooth
+                         turn and healing remain suspended in the air.
+                         Other ground controls resume after stick release
   FLIP SPEED ........... how fast all of it turns you: 180 degrees a second
                          at full tilt unless you change it (90 to 480;
                          Settings > SPIDY VR or "Flip speed" in the launcher)
 
+Controlled flips (separate option, off until CONTROLLED FLIPS is enabled
+in the launcher or Settings > SPIDY VR)
+  A in the air ......... enables left-stick flip mode; A must be a new press,
+                         not held from a jump or menu
+  Left stick in mode .. turns you about the tracked head. Let it rest once
+                         if already tilted when entering the mode
+  Release the stick ... stops rotation and holds the exact angle
+  A again .............. returns upright by the short path and exits mode;
+                         normal left-stick travel resumes
+  Right stick .......... retains turning, zip/aim/release and healing
+  Landing or a wall .... exits mode and restores the normal view
+  Menus or recenter .... clear the mode; another airborne A press is needed
+  Other flip settings .. works independently of basic FLIPS and overrides
+                         that right-stick mode when both are enabled.
+                         REALISTIC FLIPS keeps priority and its own controls
+  FLIP SPEED ........... adjusts this mode too
+
 Realistic flips (experimental, off until you switch REALISTIC FLIPS on in
 Settings > SPIDY VR or "Realistic flips" in the launcher's options, where
-its nine settings show under it; while it is on it takes the place of the
-flips above)
+its ten settings show under it; SPIDY VR has six of them, and MINIMUM
+FLIGHT SPEED, ROTATION RESPONSE, ANGULAR DRAG and MINIMUM HAND SPEED are
+the launcher's alone; while it is on it takes the place of the flips above)
   On a web ............. moving faster than MINIMUM FLIGHT SPEED (3 m/s), your
                          body turns toward the web's pull, as hard as
                          ROTATION STRENGTH says; where you face stays yours
   Let go of the web .... the swing's spin goes on (SWING MOMENTUM) and dies
                          away as ANGULAR DRAG says
   Swing your arms ...... in the air, faster than MINIMUM HAND SPEED, and you
-                         turn with them, as much as HAND MOMENTUM says; swing
-                         them back the other way to slow down. A spin can go
-                         past a whole turn
+                         turn with them, as much as HAND MOMENTUM says (0%:
+                         not at all); swing them back the other way to slow
+                         down. A spin can go past a whole turn
   A in the air ......... stops the spin and brings you upright (AIR ROTATION
                          BRAKE); landing does too
   Left stick in the air  with FLIPS on as well: let go of it once in the air,
                          then it steers the turn
+  In a fight ........... switch FLIPS IN COMBAT off, and with enemies near
+                         (and for 3 s after) nothing turns you and you come
+                         upright; the stick steers your flight and both
+                         fists thrown down are a Ground Strike again
   MAX ROTATION SPEED and ROTATION RESPONSE set how fast you can turn and how
   soon a turn gets there.
 
 Hand wall climbing (experimental, off until you switch HAND WALL CLIMBING on
 in Settings > SPIDY VR or "Hand wall climbing" in the launcher's options)
   On a wall ............ with the left stick at rest you stay upright beside
-                         the wall, a little crouched, your eyes 40 cm from
-                         it (WALL CAMERA DISTANCE: 20 to 100 cm)
-  Squeeze a grip ....... with that hand within about 18 cm of the wall: the
-                         palm holds on, open, with a short buzz. Pull it down
-                         to climb, sideways to go along, up to go down; two
-                         hands share the pull. Let go and squeeze again for
-                         a new hold. The grips do this whichever WEB BUTTON
-                         you chose
-  Both grips held ...... roll both controllers the same way to turn your
-                         view along the wall, up to 90 degrees a second; they
-                         shoot no webs until you let go
+                         the wall, a little crouched, your eyes 25 cm from
+                         it. Your body crawls on it, its feet planted,
+                         stepping in turn as your hands pull
+  Squeeze a grip ....... with that hand within about 18 cm of the wall and
+                         pointed at it: the palm holds on, open, with a
+                         short buzz. Pull it down to climb, sideways to go
+                         along, up to go down; two hands share the pull. Let
+                         go and squeeze again for a new hold. The grips do
+                         this whichever WEB BUTTON you chose. Pointed away
+                         from the wall, along it or up it, the web button
+                         shoots a web as anywhere else, and a web out from
+                         the wall swings you off it
+  Both hands holding ... roll both controllers the same way to turn your
+                         view along the wall, up to 90 degrees a second
   Left stick ........... runs along the wall, steered by turning your head
                          left or right; let go to climb again
   A .................... jumps off the wall
   Round a corner ....... your view turns onto the building's next side
+  Press a palm ......... into the wall and your hand stops at it; press
+                         harder and your view and body push off it, up to
+                         45 cm
+  Turn away ............ take one hand off the wall, turn your head the other
+                         way and touch the wall with that hand again: your
+                         body turns its back to the wall, its feet still on
+                         it, your eyes 40 cm out. The same turns you back.
+                         Looking around alone turns nothing, and the two
+                         hands' roll waits until you face the wall again
+  In a vent ............ the left stick crawls you through it, as with hand
+                         climbing off (hand crawling in vents is off for now)
 
 Menus and cutscenes show on a screen in the headset. There the controllers act
 as an Xbox controller: left stick moves, A selects, B goes back, grips switch
@@ -602,12 +759,49 @@ VR settings
                    (GRIP or TRIGGER: the one that shoots and holds a web;
                    the other reels in and shoots web balls); AIM MARKERS;
                    webs holding in open air (a web that meets nothing
-                   within 100 m holds there; off, it misses).
-  SWINGING ....... the swing speed limit and your weight.
+                   within WEB RANGE holds there; off, it misses); SMART
+                   ANCHOR (off until you switch it on): with open-air
+                   webs off, a web that just misses, by up to 8
+                   degrees, catches the real surface nearest it. WEB
+                   RANGE (100 m unless you pick 10 to 1000 m): how far a
+                   web reaches, and how far out an open-air web holds.
+                   WEB SPEED (OFF unless you pick SLOW, MEDIUM or FAST):
+                   a web flies to where it sticks, and you see it go;
+                   it pulls only once it has arrived, and catches you
+                   softly then. OFF, it sticks at once, as before.
+  SWINGING ....... the swing speed limit and your weight. ELASTIC WEB (OFF
+                   unless you pick LOW, MEDIUM or HIGH): webs stretch
+                   under your weight and catch you more softly, softest
+                   on HIGH. SOFT RELEASE (OFF unless you pick LOW,
+                   MEDIUM or HIGH): a web you let go of keeps pulling
+                   for a moment, fading out (120, 180 or 240 ms).
+                   SLINGSHOT SPEED (with WEB SLINGSHOT on): how fast a
+                   full draw launches you. SWING LIMIT, the launch as
+                   before, under the swing speed limit; or 20 to 300 m/s
+                   of its own until you land. The game cannot load the
+                   city as fast as the fastest launches cross it.
+                   BETTER CLIMBING (off until you switch it on): take a
+                   web in both hands and pull hand over hand to climb
+                   it, an open-air web too; standing, a pull down it
+                   takes you off the ground, no jump needed. TWO HAND
+                   WEB ZIP (off until you switch it on): with both webs
+                   on one spot, pull both arms back fast toward it and
+                   you launch at it, harder the faster you pull. HAND
+                   ROPE STEERING (off until you switch it on): hold your
+                   web with the free hand too and pull it sideways to
+                   turn your swing; it makes you no faster.
+                   SWING ASSIST (off until you switch it on): flying at
+                   a wall on a web, or just after, you slow down in time
+                   instead of slamming into it; nothing turns you or
+                   lifts you, and a late or very fast approach can
+                   still hit.
   COMFORT ........ snap turn and smooth turn.
-  HAPTICS ........ controller vibration; BODY HAPTICS (a bHaptics vest,
-                   sleeves and visor, below) and its four switches: WEB,
-                   WIND, COMBAT and MOVEMENT HAPTICS.
+  HAPTICS ........ controller vibration; BLOW SOUNDS (GAME: your blows
+                   sound as the game's own do, its hits on the one you
+                   struck; SPIDY: Spidy's own tones, as before October 22;
+                   OFF: none, nor a web strike's rush); BODY HAPTICS (a bHaptics vest, sleeves and
+                   visor, below) and its four switches: WEB, WIND, COMBAT
+                   and MOVEMENT HAPTICS.
   DISPLAY ........ the game screen's size, its 3D depth and the HUD's size
                    (OFF hides it in VR). UI STYLE: how Spidy's own marks,
                    gadget wheel and meters look: COMIC, printed as Spidy's
@@ -616,25 +810,76 @@ VR settings
                    your eyes things still show, 2 cm unless you change it
                    (1 to 10 cm; the game's own camera keeps 10 cm, which
                    hid hands held up before your face). RECORDING FOV (OFF
-                   unless you pick 130, 140 or 150 degrees): the game window
-                   on your monitor shows a wider view to record, at least
+                   unless you pick 70 to 160 degrees): the game window
+                   on your monitor shows a view of its own to record,
                    that wide across, instead of your left eye. It costs
                    frame rate (about 3 ms a frame on its author's PC), and
                    what Spidy draws itself (its gloves and webs, the aim
                    markers, the combat marks) is only in the headset then.
+                   RECORDING SMOOTHING (OFF unless you pick 10 to 100):
+                   that view turns with your head more and more softly;
+                   the headset's view never does.
   BODY ........... CALIBRATE BODY: set it to ON RESUME and resume, and the
-                   T-pose panel asks for your measurements again.
-  EXPERIMENTAL ... FLIPS (off until you switch it on) lets the left stick
-                   and A in the air flip you, and FLIP SPEED sets how fast.
+                   T-pose panel asks for your measurements again. HEIGHT
+                   (AUTO unless you pick one, 150 to 190 cm): your height.
+                   Set, it gives Spider-Man your size instead of the
+                   calibration's or the headset's measure (the calibration
+                   still fits his arms), and it is how high SEATED raises
+                   you. SEATED (off until you switch it on): play sitting
+                   down. Spidy measures how high your eyes are over your
+                   first second of play, and again each time you recenter
+                   the headset, and raises your view, your body and your
+                   hands by the difference to your standing eye height:
+                   HEIGHT's, else a calibration you made standing, else a
+                   1.76 m player's. Sit as you will play before you
+                   recenter. Stand up with SEATED on and you tower: switch
+                   it off first.
+  COMBAT VISUALS ... in DISPLAY, on by default. Off hides Spidy's punch
+                   arrows, target circle, impact/combo effects, KO text and
+                   automatic combat slow-motion screen effects. Spider-Sense
+                   attack warnings and offscreen direction markers remain
+                   visible. Off also removes directional combo requirements:
+                   uppercuts launch freely, downward blows knock standing enemies
+                   down or slam airborne enemies into the ground, even on a
+                   finisher count. Punch speed, contact and free-hand rules
+                   still apply. Sound and vibration still work. Web aim markers and the
+                   game's own HUD have their existing separate controls.
+  EXPERIMENTAL ... FLIPS (off until you switch it on) uses the right stick
+                   in the air; release holds the angle and A returns upright.
+                   CONTROLLED FLIPS is a separate A-toggle mode, above.
+                   FLIP SPEED sets how fast either steering stick turns you.
                    HAND WALL CLIMBING (off until you switch it on, above)
-                   and its WALL CAMERA DISTANCE. REALISTIC FLIPS (off until
-                   you switch it on, above) and the nine rows that tune it.
+                   uses a fixed wall-camera clearance. EYE AIM (OFF unless
+                   you pick WEB BALLS, ZIPS or BOTH; below). REALISTIC FLIPS
+                   (off until you switch it on, above) and the ten rows that
+                   tune it.
+  EYE AIM ........ for a headset whose VR runtime gives games your eyes
+                   (OpenXR's eye gaze: Quest Pro, Varjo, Pimax Crystal and
+                   the like; a Quest 3 has no eye tracker). The session log
+                   says whether yours does. WEB BALLS: a free hand's trigger still
+                   fires from that hand, but the ball goes to what you look
+                   at: the enemy nearest your gaze, else the surface it
+                   meets, else open air along it. ZIPS: the stick pushed up
+                   zips to the point you look at - Spidy turns the game's
+                   own camera onto it, which is how the game picks its zip
+                   point, and holds the zip back a moment (a third of a
+                   second at most) until it is there. Held into the game's
+                   aim mode, your eyes aim it until you let go. Without an
+                   eye tracker, or with EYE AIM off, your hands aim web
+                   balls and your head zips, as before; the session log
+                   says which ("Eye aim: ..."). Quest Pro over Quest Link
+                   or Virtual Desktop sends its eyes to PC games only with
+                   that switched on (Quest Link: Settings > Beta; Virtual
+                   Desktop: its eye tracking forwarding).
   Changes apply at once. The launcher starts your next session with them;
   its options show every one of them but VR VIEW too.
-  NEAR CLIP, RECORDING FOV, UI STYLE, the four body haptics switches and the
-  EXPERIMENTAL rows below FLIP SPEED Spidy keeps in
+  NEAR CLIP, RECORDING FOV, UI STYLE, BLOW SOUNDS, HEIGHT, SEATED, EYE AIM,
+  SMART ANCHOR, WEB RANGE, WEB SPEED, ELASTIC WEB, SOFT RELEASE, SWING
+  ASSIST, SLINGSHOT SPEED, TWO HAND WEB ZIP, HAND ROPE STEERING, RECORDING
+  SMOOTHING, the four body haptics switches and the
+  CONTROLLED FLIPS and EXPERIMENTAL rows below FLIP SPEED Spidy keeps in
   %APPDATA%\Spidy\spidy_vr.ini, beside the launcher's own settings; the
-  launcher shows realistic flips' nine rows while it is on, and the body
+  launcher shows realistic flips' ten rows while it is on, and the body
   haptics switches while it plays. Playing
   the game on its screen instead of VR is on the pause menu itself: SWITCH
   TO GAME SCREEN, under RESUME (each session starts in VR).
@@ -653,10 +898,11 @@ VR settings
 Settings profiles (share your settings, or try someone else's)
   "Profile", at the top of the launcher's Options tab, keeps sets of settings
   and switches between them. A profile holds every setting of the SPIDY VR
-  tab but RECORDING FOV, the ones in spidy_vr.ini too (NEAR CLIP, UI STYLE,
-  the body haptics switches, the EXPERIMENTAL rows), and "Wall running". Not
+  tab but RECORDING FOV and SMOOTHING, the ones in spidy_vr.ini too (NEAR CLIP, UI STYLE,
+  BLOW SOUNDS, the body haptics switches, the EXPERIMENTAL rows), and the
+  four realistic flips settings only the launcher shows. Not
   your graphics options (render resolution, upscaling, the game window, the
-  monitor and its RECORDING FOV, the game's depth of field and sharpening),
+  monitor and its RECORDING FOV and SMOOTHING, the game's depth of field and sharpening),
   which suit your own PC, and not your body calibration: a profile leaves
   those as they are.
   Save as a profile ... keeps your settings under a name. Pick a profile in
@@ -751,9 +997,9 @@ IF SOMETHING IS WRONG
 - "A problem has occurred with your display driver" as VR starts, every
   time: the session log names the code (0x887A002B is one). Try these one
   at a time, pressing START VR after each: in the launcher's options,
-  "Normal camera on the monitor" on; the game's Display settings with
-  Monitor set to your main display; the newest graphics driver. Then post
-  the report in #spidy-bugs on Discord.
+  Troubleshooting, "Normal camera on the monitor" on; the game's Display
+  settings with Monitor set to your main display; the newest graphics
+  driver. Then post the report in #spidy-bugs on Discord.
 - The game's menus ignore the VR controllers: keep the game window in front
   on the desktop, and start the game from the launcher with the game closed
   (the launcher turns off what lets SteamVR's virtual gamepads take over).
@@ -776,6 +1022,14 @@ IF SOMETHING IS WRONG
 - The picture breaks up: start the game from the launcher with the game
   closed. Attached to a game that is already running, Spidy cannot give it
   the larger render memory VR needs.
+- The game freezes for good in VR (the headset keeps showing the last
+  picture and nothing answers): since October 23 Spidy notices after eight
+  seconds and saves where each of the game's threads stood, in a
+  game-vr-...-freeze.dmp file beside the session report. Close the game from
+  Task Manager, then send the report with that file: it shows what the game
+  was waiting for. A freeze that comes back at the same moment of a mission
+  is worth playing past on the game screen (pause, SWITCH TO GAME SCREEN),
+  then SWITCH TO VR again.
 - The picture freezes or jumps for a second or two at a time, however fast
   the game runs: with a wireless headset (Virtual Desktop, Steam Link), connect
   the PC to the router by network cable and turn the PC's Wi-Fi off, then
@@ -849,8 +1103,8 @@ IF SOMETHING IS WRONG
   and takes no button: the game offers a thing only when its own camera
   looks at it, and Spidy turned that camera left and right with your head
   but not up and down. It follows your head both ways now: look at the
-  thing, then press what the game shows (Y; the right stick's click for
-  LB + RB; the right stick up for LT + RT).
+  thing, then press what the game shows (Y; X for LB + RB; the right stick
+  up for LT + RT).
 - The picture is softer, or a cutscene has lost its blurred background:
   Spidy turns the game's sharpening and depth of field off for VR. "Game's
   sharpening" and "Game's depth of field" in the launcher's options keep
@@ -876,10 +1130,13 @@ IF SOMETHING IS WRONG
   Spidy read none of the game's prompts (the reading closed the game as a
   save loaded, and was off from October 13): "press X" opened the map, and
   the Oscorp stations' leaks, vaccine and camera could only be done on the
-  game screen. If a moment still asks for something none of this reaches,
-  click both thumbsticks for the pad layer, where your grips are the game's
-  LB and RB, your triggers its LT and RT, X its X and the right stick its
-  D-pad; click both again to leave it.
+  game screen. Since October 22 a station's leaks and vents take your
+  trigger's web (the game's Web Shooter, while it has charges), the phone's
+  CAMERA takes the game's camera out, and both fists slammed down in the
+  air are the Ground Strike. If a moment still asks for something none of
+  this reaches, click both thumbsticks for the pad layer, where your grips
+  are the game's LB and RB, your triggers its LT and RT, X its X and the
+  right stick its D-pad; click both again to leave it.
 - A prompt shows keyboard keys ("click F to decipher") and no button works:
   the game shows the icons of the device it last saw. Press something on
   the controllers so it sees the pad again, then Y. If it keeps happening,
@@ -895,8 +1152,21 @@ IF SOMETHING IS WRONG
 - The blows are too loud or the bursts too bold: tell us; this build has
   no switch for them yet.
 - B no longer interacts, or Y no longer opens the game menu: the buttons
-  moved to make room for the dodge. B dodges, Y interacts (as the game's
-  prompts say) and X opens the game menu.
+  moved to make room for the dodge. B dodges and Y interacts (as the game's
+  prompts say), and the game menu is your phone's MENU.
+- X no longer opens the game menu (since October 23): draw your phone (a
+  grip squeezed behind your hip, brought up in front) and press A on MENU.
+  Held, X still opens the gadget wheel.
+- The right stick's click no longer pulls a door or a grate (since October
+  24): X does where the game shows LB + RB, and its prompt shows X there,
+  as does the marker over a thing you can throw. That marker no longer
+  fills as you hold X.
+- Holding X opened nothing early in a new game (builds before October 24):
+  the game had given you no gadget yet. The wheel opens now, with the web
+  shooter alone.
+- The suit power did nothing (builds before October 23): the gesture
+  buzzed both hands but never reached the game. Both hands before your
+  chest, both triggers pulled together, now uses it when its meter is full.
 - Y does nothing at a door, a console or a backpack: look at the thing as
   you press it, from within about a metre (closer than feels natural at a
   wall in VR). The game takes its Y only for what its own camera sees and
@@ -910,15 +1180,13 @@ IF SOMETHING IS WRONG
 - The game says "Tap RB repeatedly to web up the turret" (Fisk's office):
   shoot web balls at the turret, three in a row. Then, for "Hold LB + RB to
   yank and throw turrets": from within about 15 m, look at the webbed turret
-  and hold the right stick's click until it is thrown. Being shot during the
+  and hold X until it is thrown. Being shot during the
   first second and a half stops the yank, as in the plain game: web both
   turrets first, or wait until they reload. The webbing lasts four seconds.
 - The view turning onto a wall makes you uneasy: it has no switch of its own
   any more, because it is what makes a wall feel like a floor and it turns on
-  every wall, whoever holds you. "Wall running" off makes every wall the
-  game's own crawl, which is slower, but the view turns there too. Ask and the
-  switch comes back; until then a session started by hand takes
-  `--no-stand-on-walls` and stays upright.
+  every wall, whoever holds you. Ask and the switch comes back; until then a
+  session started by hand takes `--no-stand-on-walls` and stays upright.
 - A vent or a door on a wall does nothing: point a hand at it and press Y.
   No ring round it means the game does not offer it from where you stand -
   come closer; a faint ring means you nearly are. A ring and still nothing:

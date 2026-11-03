@@ -15,6 +15,8 @@ struct NativeEyeFrame {
     std::array<TrackedEye, 2> trackingEyes;
     std::array<game_swing::WebState, 2> webs;
     std::array<WebTimeline::Hand, 2> webTimes{};
+    game_swing::WebFlightData webFlight;
+    WebFlightVisual flightVisual[2];
     // The game rope that draws each hand's web (WebRopes; -1: none). One web
     // in both hands: the hand its strand comes to first, the other hand's
     // part running from wrist to wrist; -1 otherwise.
@@ -32,6 +34,8 @@ struct NativeEyeFrame {
     SlowMotionView slow{};
     // Miles's venom round the right fist (0: none; venom_punch.hpp).
     float venomGlow{};
+    // The pad layer is on (game_pad::PadLayer): its sign over the right wrist.
+    bool padLayer{};
     // The gadget wheel, open while X is held (gadget_wheel.hpp).
     GadgetWheelView gadgetWheel{};
     // The phone, open from a pocket draw until B: whether the image has it,
@@ -39,6 +43,7 @@ struct NativeEyeFrame {
     PhoneImage phone{};
     // How Spidy's marks look in this image (the tab's UI STYLE).
     UiStyle uiStyle{};
+    bool combatVisuals{}; // overlay choice when this image was submitted
     bool flatScreen{};
     // The game screen in stereo (eye command 3): the pair goes on the screen,
     // the left image for the left eye and the right one for the right.

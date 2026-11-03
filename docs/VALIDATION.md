@@ -1,6 +1,309 @@
-# Validation — 2026-10-21
+# Validation — 2026-10-27
 
-## Every SPIDY VR setting in the launcher (latest build)
+## The far buildings' cone and the texture budget (latest build)
+
+The user: "there is still a bug where buildings and detail on objects is low
+even when really visible and nearby mostly when swinging ... maybe the culling
+system is not tracking the right camera or body" (CHANGELOG, October 27,
+sixth). `include/spidy/native_stream.hpp` (new), `src/stereo_probe.cpp`
+(`impostorQueries`, `placeEyes`, `slotPool`, `coneMargin`, `keepTextureBudget`,
+`restoreTextureBudget`, `SpidyStreamData`, `SpidyBuildingCone`,
+`SpidyTextureBudget`), `src/native_eye_gpu.cpp` and
+`include/spidy/native_eye_gpu.hpp` (`videoMemory`), `tools/run_game_vr.py`
+(`stream_snapshot`, the report's `streaming`), `tests/core_tests.cpp`,
+`tests/game_vr_protocol_tests.py`.
+
+| | |
+| --- | --- |
+| The session | `game-vr-20261026-165822.json` (`Downloads\Spidy-0.5.0`): Quest 3 through Virtual Desktop, 3360 x 3600 eyes rendered at 67%, `eye_detail` 1.59, `texture_request_raise` 1.49, `impostor_frames` 39,231 of 39,273, the building reach 150%. The game log's texture lines: 3,858 to 3,872 MB of a 3,874 MB budget in all seven minutes, the card's budget for the game 31,418 MB with 9,448 to 9,511 used. Swing speed at most 32 m/s (the setting), above 25 m/s 37.5% of the time. The eye pictures are 480 pixels across, too small to judge detail. |
+| The game's code | Offline, `tools/research_game.py` on the supported exe: `16faf10` -> `191ecd0` (the frustum query copies its 0x100-byte cull, `1c21cf0`: 16 planes); the wanted states cleared each frame (`16fadbe`, `1c64b10`), set only for queried impostors in reach (`16f8ae0`), applied and taken away by `16f8940` -> `16f7f30`, whose additions check the scene registry's room (`190cb80`: `+1cc` + n <= `+1c8`), as `UpdateHibernateRegistration` (`1a22530`, `1a22f9d`) does for the nearby zones; that job's view is `7a34ec8`, the active view `189daa0` compares with; the descriptor's planes are rebuilt by the pose setter (`187ca10` -> `187b1e0`). The texture budget: stored by `1891174`, read by `19b2d90` (budget - held - loading - the 16 MB reserve), the heap made with no size (`19b2e50`, `1c5e0f0`). The bytes the module checks at these places are the ones read here. |
+| Build | `tools\build-native.cmd` into `build\scratch-4b` (Release, XR and observer on), the shared `build\windows-ninja` left alone: ctest 3/3, 702 core tests (3 new: the cone, the pool's easing, the budget). Warnings in `stereo_probe.cpp` only the three older ones (`placeScreenHud`, `stereoEyes`, `enqueueCommand`). `spidy_graphics_test` at 1536 x 1536 with the debug layer: passed, no errors. |
+| Module | `spidy_stereo_probe.dll` loaded in Python: `SpidyStreamData` reads magic 0x53545244, version 1, 88 bytes, features 0 before a start; `SpidyBuildingCone` 61 -> 4501, 30 and 0 -> 0; `SpidyTextureBudget` 2 -> 4601, 0 and 1 -> 0. |
+| Python | The six protocol suites (new: `stream_snapshot` decodes every field, `-1` for a pool not set up, refuses version 2, gives up on a write in progress, and returns nothing for a short read). |
+| Not run | The game and the headset. |
+
+## The controls in four pictures (October 25, third build)
+
+The user: "lets update the control infographic and also maybe describe
+controls in context and add the motion actions and what's in the phone", then
+"can we make an infograhpic with other common controllers with diffirent
+button layouts, like frame, psvr2 and index" (CHANGELOG, October 25, third).
+`docs/images/readme/controls-quest3.jpg` (re-shot), `controls-moves.jpg`,
+`controls-phone.jpg` and `controls-others.jpg` (new), `README.md`,
+`docs/PLAYERS.md` (Index and PS VR2 buttons),
+`apps/launcher/launcher.rc` (`PICTURE_MOVES`, `PICTURE_PHONE`, `PICTURE_OTHERS`),
+`apps/launcher/main.cpp`, `apps/launcher/ui.hpp`, `apps/launcher/ui.cpp`
+(`App` takes a list of pictures), `CMakeLists.txt` (the launcher's resources
+depend on every `controls-*.jpg`).
+
+| | |
+| --- | --- |
+| Pictures | Each rendered at 3840 x 2160 and scaled to 1920 x 1080, JPEG quality 88 (529, 580 and 512 kB). Every line checked against PLAYERS.md's CONTROLS. The marks: `spidy_mark_preview` (this checkout, built October 25) over black and over white, the difference kept as transparency. The phones: `spidy_phone_preview` from a scratch copy whose sample song is TRACK 03 (the checkout's names a film's song). |
+| Other controllers | The buttons from `include/spidy/controller_layout.hpp` (Touch, Index, Frame) and PLAYERS.md's Steam Frame section. PS VR2: SteamVR's translation of the Touch layout as a community port describes it (github.com/satyaloka93/cyberpunk-vr-port: Square/Triangle X/Y, Cross/Circle A/B, no Menu or System path); the PS VR2 driver is not on this PC and no player has reported. Renders: the Quest from the WebXR model, the Frame and Index from SteamVR's `drivers\*\resources\rendermodels` (OBJ with their textures), all at the same angle; the Sense controllers a likeness from three.js primitives (no model of them is free to use), checked side by side against a product photo the user sent. 1920 JPEG 387 kB. |
+| Build | `cmake --build build\windows-ninja --target spidy_launcher spidy_launcher_tests`: no warnings at /W4. Launcher tests 32/32. The built exe holds `PICTURE_CONTROLS`, `PICTURE_MOVES`, `PICTURE_PHONE` and `PICTURE_OTHERS`, each the whole file. |
+| Launcher | A copy in `build\launcher-check`, off-screen, with the first three: the Controls tab shows them one under another, then the words; scrolled through with the wheel. `%APPDATA%\Spidy` unchanged after (hashes). The fourth goes through the same loop; not looked at in the window. |
+| Not run | The game and the headset: nothing in them changed. |
+
+## The pad layer's sign; the phone's draw leaves the layer (the build before)
+
+The user: "I couldn't access the phone and some other aspects of the vr mode
+broke after playing around with camera (was fixed by opening and closing the
+pause menu)" (CHANGELOG, October 25, second). `include/spidy/game_pad.hpp`
+(`PadLayer::leave`), `src/game_xr.cpp` (the pocket draw in the layer, its grip
+no bumper, the sign), `include/spidy/native_eye_history.hpp` (`padLayer`),
+`include/spidy/web_visual.hpp`, `src/web_visual.cpp`, `include/spidy/tech_marks.hpp`,
+`src/tech_marks.cpp` (`appendPadLayerSign`), `apps/mark_preview.cpp`,
+`tools/preview-marks.ps1`, `tests/core_tests.cpp`.
+
+| | |
+| --- | --- |
+| The session | `game-vr-20261025-102303.json` (the play folder): `prompts.pad_entries` 1. The layer latched at 177.4 s, 2.3 s after the phone's CAMERA took the game's camera out (`prompt_demand` 0x10201), and stayed on to 287.6 s, when the menu button paused the game. Meanwhile the right stick sent the D-pad's up at least 9 times (the camera away and out again), the face buttons went to the game, the layer's idle never reached 20 s, and no web attached (`swing_samples` `attaches` flat from 102 s to 418 s). The camera's other three times out (154, 296, 396 s) ended with the right stick up and nothing stuck: webs attached again from 418 s. |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3, 572 core tests (more checks in two: the pad layer's phone drawn lets a busy layer go, and a click latches it again, counted; UI STYLE: the sign comic unless tech is asked for, tech drawn anew, within 13 cm of the wrist's point in both, nothing for a hand that is no number). |
+| Python | The six protocol suites, unchanged. |
+| Preview | `tools/preview-marks.ps1 -Style Comic` and `-Style Tech` over a capture of the session, the sign 0.4 m and 0.6 m off: both lines read at both distances. |
+| Not run | The game and the headset: the sign over a real wrist, and a draw in the layer. |
+
+## Fewer options: wall running, the monitor's camera, four realistic flips rows, leftovers (the build before)
+
+The user: "cleanup the redundant", after a review of the options (CHANGELOG,
+October 25). `include/spidy/vr_settings.hpp` (`Place`, `Row::place`;
+`Item::standOnWalls`, `Item::wallDistance`, `Values::wallDistance` and
+`wallDistances` gone), `src/vr_settings.cpp`, `src/game_menu.cpp`,
+`include/spidy/game_menu.hpp`, `include/spidy/launcher_text.hpp`
+(`SessionOptions::wallRun` and `standOnWalls` gone), `include/spidy/launcher_profile.hpp`
+(`retired`: `wall_run` and `wall_distance_cm` kept in profiles at 1 and 25, for the user's "make sure it
+wont break profiles"), `apps/launcher/system.cpp`, `apps/launcher/ui.cpp` (the Troubleshooting card),
+`tests/core_tests.cpp`, `tests/launcher_tests.cpp`.
+
+| | |
+| --- | --- |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3, 571 core tests (changed: each row's place, VR VIEW `page`, MINIMUM FLIGHT SPEED, ROTATION RESPONSE, ANGULAR DRAG and MINIMUM HAND SPEED `launcher`, 43 rows `tab`; every setting has a row; the wall view and the wall camera's distance have none; spidy_vr.ini's text without `wall_distance_cm`, and an older file's line changes nothing; the hand climb's eyes 25 cm from the wall, through a reset), 32 launcher checks (changed: a new launcher tells a session neither `--no-wall-run` nor `--no-stand-on-walls`; a headset line's `stand_on_walls` and `wall_run` change nothing; no launcher option in a profile, the two retired ones fixed at 1 and 25 with no row; an older profile's `wall_run=0` and `wall_distance_cm=100` read as 1 and 25, it matches once used and lists no change, `wall_run=off` counts, a profile written again has `wall_run=1` and `wall_distance_cm=25`; the defaults' profile text as before; new: a profile holds each of 0.4.1's 34 keys). |
+| Python | The six protocol suites, unchanged. |
+| Profiles across versions | A scratch program built three times against `launcher_profile.hpp` and `vr_settings.cpp` of 0.4.1 (`origin/main` ff3fc89), the last commit (0ea290a) and the tree. Two sets of settings: this PC's launcher.ini and spidy_vr.ini, and the same with `wall_run=0` and `wall_distance_cm=60` (a 0.4.1 player's). Each version wrote each as a profile, used on default settings; each read every one. 0.4.1's: 34 of 34 in 0.4.1, 34 of 39 in the last commit and the tree (its five newer settings missing, as before). The last commit's and the tree's: 39 of 39 in both, 34 of 34 in 0.4.1. The tree's text for this PC's settings is byte for byte the last commit's. The tree reads `wall_run=0` as 1 and 60 cm as 25 (the last commit read 60 as 25 already), and a profile that has them matches once used. A hand-written `wall_run=off`: counted by all three. |
+| Not run | The game: the tab's 43 rows and its RESET ALL in the pause menu. `tools/probe_menu.py` walks the rows up to FLIP SPEED, none of which moved, and expects the same changes. The launcher's window: the user's own launcher was open, and one runs at a time. |
+
+## Dodging on a web; broken glass passed (the build before)
+
+The user: "Swinging and moving with webs should count as dodging"; "also
+walking up broken glass (trough which you can walk) was still responding as a
+wall not letting me pass in vr" (CHANGELOG, October 24, sixth). For the glass:
+`include/spidy/native_rays.hpp` (`BodyFilter`, `meets`, `setPlayer`,
+`Command::bodyRays` for the former `reserved`), `src/native_rays.cpp`,
+`include/spidy/swing.hpp` (`bodyRaycast`), `src/swing.cpp`, `src/game_swing.cpp`,
+`include/spidy/crawl_hands.hpp`, `src/web_strike.cpp`, `src/game_tracking.cpp`,
+`tools/probe_body_rays.py` (new). `include/spidy/spider_sense.hpp` and
+`src/spider_sense.cpp` (`WebDodge`), `include/spidy/game_dodge.hpp` and
+`src/game_dodge.cpp` (new, ray module), `src/game_swing.cpp` (starts and stops
+it, sends each input sample's carry), `src/game_xr.cpp` (the whoosh),
+`tools/run_game_vr.py` (`dodge` in the report), `tools/probe_web_dodge.py` (new),
+`CMakeLists.txt`, `tests/core_tests.cpp`, `tests/game_vr_protocol_tests.py`,
+`apps/launcher/ui.cpp`.
+
+| | |
+| --- | --- |
+| Static | The hero's HeroDodgeManager's update, dodge start and end, the dodge for each attack, its immunities, the kinds the hero's states start (REFERENCE.md, "For the dodge a web carrying the player starts"). |
+| In the game (this build) | The title's CONTINUE: Spider-Man perched on a roof, no enemy. `tools/probe_web_dodge.py --times 3`: `SpidyDodgeStart` 0; three times `SpidyDodgeTest` with kind 5 for the hero: no dodge on before, kind 5 on the hero's manager after the start, answer 0 (no warning standing), kind 0 after the end, read from outside 0 too, no error; `SpidyDodgeStop` 0 and the update's entry bytes as the exe has them. The game ran on (screenshots before and after). |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3, 570 core tests (new: a dodge on a web starts 0.3 s before a blow, lasts 0.6 s, holds for a blow still to come, 1.5 s at most; none on the ground, hanging still, at an answered warning, over the game's own dodge; the flight after a web for a second; an untimed warning a tenth on; a dodge the game ended, one it did not take). |
+| Python | The six protocol suites (new: `dodge` decoded; its magic, version and size agree with the module's). |
+| Saves | Of the 19 files only `-userprefs.save` changed (Continue rewrites it); backup `reports/backups/saves-before-dodge-probe-20261024-224012`. |
+| Not run | A blow dodged on a web: no enemy was near. The headset: the whoosh, the game's dodge sound, its Focus. |
+| Read (glass) | The user's game-vr-20261024-213937: 14 ground mounts, 11 at two spots of a burning office at y = 141 (5 at (-603, -649), 6 at (-579, -648)), each lifting the body 1-4 m; the hands' rays there met vertical bodies with the filter word 0x10 (2 bodies in the whole session, 1658 hits, every one vertical) beside the floor's and walls' 0x43f and 0x63f; eye images 0119-0120: a glass partition, broken glass at the view's edge. |
+| In the game (glass, research) | Free roam. Read: the world's filter `InsomniacCollisionFilter`, its type table, the 19 collision profiles, the player's MoverManager on profile 3. A scratchpad MinHook build on the filter's test (`18060a0`) for 8 s: 96 distinct query words (5.4 million more calls past the table); every word of the mover's kind (`0x..e7804`: categories 0x004, types 0xe7) meets 0x43f and not 0x10, by the game's own answer; the mover's safe-body query carried `{0x2ed, 0x70001, 0xfee7, 0x4}`, profile 3's fields. |
+| In the game (glass, this build) | `tools/probe_body_rays.py`: `SpidyRayStart` 0; `SpidyRayBody` for the player: categories 0x4, types 0xe7 (the module found his MoverManager in the registry); for no record 0, 0. The office's panes are in a mission and were not reached: no body ray was seen passing one. |
+| Build (glass) | 571 core tests (new: `meets` for the player's profile against 0x10, 0x43f, 0x63f, two types, none; a pane the body passes walked at, no mount, the same pane solid, a mount; the tracking rays' body bits, a bit past the rays refused). |
+
+## The throw aimed by the free hand (the build before)
+
+The user: "the x works well but really hard or not possible to aim where
+the throw will go"; the aim chosen: the free hand, pointing (CHANGELOG,
+October 24, fifth). `include/spidy/throw_aim.hpp` (new),
+`include/spidy/game_throw.hpp` and `src/game_throw.cpp` (new, ray module),
+`src/game_swing.cpp` (starts and stops it), `src/game_xr.cpp`,
+`CMakeLists.txt`, `tests/core_tests.cpp`, `apps/launcher/ui.cpp`.
+
+| | |
+| --- | --- |
+| Static | The yank-and-throw states, the hero's aim manager and its results' getters, the actor table (REFERENCE.md, "For the throw of a prop"). |
+| In the game (research builds) | Profile 2. The aim manager's slots read during LB + RB at a mailbox: slot 4 appeared only in the hold, no actor, its way the camera's heading. With the getters hooked, slot 4 was read 117 times in a 1.5 s hold; given a way 90 degrees right of the camera, a manhole cover and a trash can were thrown (frames 0.15 s apart: the can swung round and let go to the right). The probes could not follow a thrown prop's flight: the records they read stay put, the drawn matrix at the actor moves. |
+| In the game (this build) | `spidy_ray_bridge.dll` loaded into the game: `SpidyThrowStart` 0, the three getters' entries jumps to its hooks, `SpidyThrowAim` 0 for a request and 9803 for a malformed one, `SpidyThrowData` running, no error. No throw was made through it: no prop the game offered was within reach then. No enemy was near in any run. |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3, 569 core tests (new: the hand's aim made a throw's at a character, at a surface, with no aim, straight down; the handle; the enemy nearest a point). |
+| Saves | Of the 19 files only `-userprefs.save` and `slot1-s.save` (profile 2: the game's autosave in free roam, where Spider-Man stood) changed; backup `reports/backups/saves-before-throw-probe-20261024-204556`. |
+| Not run | A headset: X's throw aimed by the hand, at a spot and at an enemy. |
+
+## The overlay drawn about the eyes; the throw marker drawn as X (the build before)
+
+The user: "phone still z-fighting between screen and its body i think.
+rb+lm still appears over the object together with the static places press
+x indicator - can we have the press x appear instead of the rb+lb over the
+relevant object" (CHANGELOG, October 24, fourth). `src/game_xr.cpp` (the
+overlay about `viewer`, the phone built about it), `tests/graphics_test.cpp`,
+`include/spidy/prompt_buttons.hpp` (`markerSubtype`),
+`include/spidy/game_prompts.hpp` and `src/game_prompts.cpp`
+(`rewriteCall`), `src/game_menu.cpp`, `apps/launcher/ui.cpp`.
+
+| | |
+| --- | --- |
+| Read | The user's game-vr-20261024-190631: the player at (319, 1, 2004). A float there resolves 0.12 mm. |
+| Simulated | Single-float arithmetic as the overlay's (`math.hpp`'s projection, near 0.03 m, the view matrix, the positions built on the CPU, the GPU's view-projection), the phone 0.4 m before an eye at random headings: in the world's coordinates the screen was behind or level with its glass at 0 of 1800 points at the origin, 481 at (438, 1.6, -414), 324 at (-1158, 9, -360), 191 at (1700, 5, -10); about the eye at 0 everywhere. Geometry built in the world and only then moved about the eye: 0 everywhere too, so the GPU's view-projection is the error's main part. |
+| In the game (research build) | Profile 2's CONTINUE, the mailbox below its lamp post. A scratchpad MinHook DLL on the UI's call wrapper, chained after Spidy's: `AddPOI(id, 9, 7)` made `AddPOI(id, 9, 13)` drew a circled X over the mailbox (screenshot) where `LB • RB` had been. The tries before it in the same game changed a pedestrian's talk marker (subtype 1, taken for the throwable's since the morning): a text in its `POIInteractAvailable`, its subtype made 7. The HUD's AS3 bytecode was read from the game's memory (`POIManager`, `POI`, `POIDefault`; REFERENCE.md); saves: only `-userprefs.save` changed. |
+| Static | `AddPOI`'s name literal `0x38a02a0` has two references in Spider-Man.exe; `lea rdx` at `0x1f07f98` passes it to the wrapper call at `0x1f07fa6`, the caller the research build logged. |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3. 568 core tests (new: the throw marker drawn as X and no other marker changed). The GPU test passes its 15 checks; new: the phone at (1158, 9, -360) before an eye looking off the world's axes, drawn about the eye, its screen over its glass at all 8242 points; in the world's coordinates the glass showed at 293 (with the eye on the world's axes, at 0, which the first version of the check used). |
+| Python | The six protocol suites. |
+| Not run | This build in the game (it was not started again while the user may have been at the PC) and in a headset: the marker through Spidy's own hook, the phone and the rest of the overlay about the eyes. |
+
+## X for the game's LB + RB, the wheel with no gadgets, the duct's roof, the phone's body and picture (the build before)
+
+The user's list after the 14:04 and 14:05 sessions (CHANGELOG, October 24,
+third). `include/spidy/game_pad.hpp` (`NamedPress`: X for LB + RB;
+`PullPress` gone), `include/spidy/prompt_buttons.hpp` and
+`src/prompt_buttons.cpp` (the `[ACTION_*]` words, `pairOnX`,
+`LiveDemands::prompt`), `include/spidy/game_prompts.hpp` and
+`src/game_prompts.cpp` (the rewritten copies, `promptShown` and
+`promptHidden`), `src/game_menu.cpp` (hooks at `0x7793d0` and `0x77a1e0`),
+`include/spidy/gadget_wheel.hpp`, `src/web_visual.cpp` and
+`src/tech_marks.cpp` (the bare wheel), `include/spidy/game_tracking.hpp`
+(`FloorCrawlRoof`), `src/game_xr.cpp`, `include/spidy/phone.hpp` and
+`src/phone.cpp`, `include/spidy/d3d12_renderer.hpp` and
+`src/d3d12_renderer.cpp` (`Picture`), `apps/phone_preview.cpp`,
+`apps/launcher/ui.cpp` (the controls list), `tools/run_game_vr.py` (the
+prompt line).
+
+| | |
+| --- | --- |
+| Read | The user's game-vr-20261024-140459 and -140556 (profile 2, the October 23 18:42 deploy). Gadgets: 0 listed, no error (profile 1 lists 7). Floor crawl: 958 frames, 670 with the head capped, 685 kneeling; the least headroom 1.7 m; mover `0x8001` while standing on a roof at y 113 (301-308 s, 312-315 s) and in bursts on the street. Frame drops: Virtual Desktop holding frames about 100 ms (`stream_stalls`), with 69 of the game's 75 stalls inside them. Such holds appear in every session with bHaptics devices connected (October 20 21:21, October 22 17:48, both of today's) and in none of the four without. The overlay stage was 11 ms (waiting on the game's queue) in 2 of the 3 sessions with the suit. |
+| In the game (research build) | Scratchpad MinHook DLLs in the supported exe, profile 2. The throw prompt's text `[ACTION_WEB_YANK] (Hold) Throw` (hash `0x9e608aeb`) comes from the text lookup when the prompt is made. Written as `[BTN_X]` there, the bottom-left line drew "(X) (Hold) Throw" (screenshot). The world marker did not change for any of: the icon cache with its dirty flag, `POISetButton`'s hash, or `AddPOI`'s subtype. |
+| Build | `tools/build.ps1 -Observer`, ctest 3/3. 567 core tests. New: the floor crawl caps the head only under a duct's roof; X sends LB + RB where the game names the two; the action words and LB + RB written as X; prompt kinds as live demands; the phone's body box and screen corners. The PullPress test is gone. The GPU test passes its 14 checks; new: the phone's picture, its own texture with mips on a quad, its layers by depth, under nearer geometry. `spidy_phone_preview` draws four screens face-on and the home screen turned 35°: the frame, the side buttons, the depth. Launcher tests 31/31. |
+| Python | The six protocol suites. Changed: the prompt line reads "in VR: X, held." for LB + RB. |
+| In the game (this build) | No headset. `tools/probe_menu_pad.py start`, profile 2's CONTINUE (on a lamp post), a jump down and one forward to the trash can, with `tools/probe_prompt_watch.py --rewrite --seconds 260` (game_menu's hooks with the prompt widget's, rewriting on). The timeline has `HUD prompt 11: '[BTN_X] (Hold) Throw'` four times, once for each throw prompt the game made (POIs 13 to 16), and `HUD prompt 11: '[BTN_Y] Interact'` for a pedestrian. The demand was LB + RB held (`0x40300`). Screenshots: "(X) (Hold) Throw" bottom left, again after walking away and back; the marker over the can still LB • RB. Closed cleanly with no crash dump. Of the 19 save files only `-userprefs.save` changed (backup `reports/backups/saves-before-x-prompt-check-*`). |
+| Not run | A headset: X sending LB + RB, the bare wheel, the phone's body and picture on the game's queue, the duct's roof in the first mission's vent. |
+| Not changed | `docs/images/readme/controls-quest3.jpg` still shows the right stick's click as the door pull and X as the game menu. Its page is not on this PC; the README says so under the picture. |
+
+## Three pull requests: wall crawling and vents (27), the web slingshot (28), better climbing (29) (the build before)
+
+The user: "review the 3 open prs, fix if needed and merge with what we have
+here". Pull request 27 (AdrianGzzEsc, c9284e7), 28 and 29 (iplusdvr,
+fa2c369 and b8a8925), all from 0.4.1 (ff3fc89), merged onto main's October 22
+fifth build (f82f334), with the review's fixes after them (CHANGELOG).
+
+| | |
+| --- | --- |
+| Read | 28 and 29 in full. 27 against the rules for the body, the walls and the protocols: the hand push and the grips' reference dropped in a frame when a hold ended, the duct's head cap lost to its camera gate, the XR thread waiting on the body's solve, the launcher's dead "Wall camera distance", the body Command's version 5 and flag 128 taken twice (main's kick). The user turned the vent part off for now (`ventHandCrawl`): the game's crawl animation on the legs on a vent's walls and ceiling, the view tipping by itself in a vent, the vent test passing in narrow rooms |
+| Build | `tools/build.ps1 -Observer` after each merge and fix: 447, 448, 451, 562 and 564 core tests (new: 27's own, the slingshot's and better climbing's, the reel with the slingshot on, the hand push and the grips' reference easing back), the launcher's, the realistic flips'; the six Python suites |
+| Not run | The game and a headset: the slingshot's takeoff and buzz, better climbing's strokes, 27's crawl body, turning away and hand push. 27's author played it in a Quest 3 (Virtual Desktop) on 0.4.1, without the review's fixes |
+## A frozen game's threads saved; HEIGHT and SEATED (the build before)
+
+The user: "check what was sent in mod chat and fix it (the reports and the
+bug), also add proper height calibration or override for seated mode".
+`tools/game_freeze.py` (new), `tools/run_game_vr.py` (the freeze watch,
+`freeze`, XrData 41's `seated`), `tools/package.ps1`,
+`include/spidy/seated.hpp` (new), `include/spidy/vr_settings.hpp` and
+`src/vr_settings.cpp` (HEIGHT, SEATED), `include/spidy/launcher_profile.hpp`,
+`apps/launcher/ui.cpp`, `src/game_xr.cpp`, `tools/probe_menu.py`.
+
+| | |
+| --- | --- |
+| Read | HaNToP's game-vr-20261023-104103 (0.4.0, RTX 4090, Quest 3, VD): new images, camera commits and pad reads stop together at 105.34 s, XR frames go on to 139.9 s; eye jobs left begins 3950, ends 3949, right begins 3949; GPU fence 14226 completed 14226; the swing owned, on Spidy's wall, the right web's anchor jumped 3.72 m (38.10 to 34.38 m) at -0.18 s; game log ends 10:42:14 without a fault. His video (Video_Project_48) holds still from 24 s, the helicopter firing into the building he swings down. The October 15 silent close (game-vr-20261015-174325) also came 0.015 s after the right web's first bend. |
+| Static | Spider-Man.exe `679dc0`/`67a227`: point budget r15 = min(128, most), fill loop skips when the laid count reaches n - 1 (`0067ac19`), so the rope fill is bounded with Spidy's count capped at most - 2. `native_eye_gpu.cpp`: fence waits time out (500 ms - 5 s), `submission` before `recording` on every path. |
+| Build | `tools/build.ps1 -Observer`: ctest 3/3, 441 core tests (new: seated play - standing eye from HEIGHT or a standing calibration, the seat measured after a second of play, eased, kept through a menu, measured again after a recenter, never below the floor, at most 1.2 m, off at once; the frame raised, its copy left; the tab's rows two further down for BODY's HEIGHT and SEATED; spidy_vr.ini's two keys and HEIGHT's range), launcher tests 30/30 (SEATED in profiles, HEIGHT not). |
+| Python | The six protocol suites; new: `game_frozen` (8 s of nothing, any count starts it over), `freeze_line`, a minidump of a sleeping child process read back to its threads by module, `package.ps1` carrying every tool `run_game_vr.py` imports (fails without `game_freeze`), XrData 41's seated block. |
+| Not run | A frozen game (the capture on one), a headset: SEATED's lift and the view, HEIGHT's size, a calibration seated; `tools/probe_menu.py` (two more presses to FLIPS) in the game. |
+
+## The suit power reaches the game; the game menu on the phone (the build before)
+
+The user: "i couldnt trigger the suit power (at least it didn't feel like
+it) also lets move the menu we open with x to the phone". Built on main
+(f82f334); the single-pass stereo work went to the branch
+`single-pass-stereo` (c42d334) first. `include/spidy/game_pad.hpp`
+(`Walk::suit`, `Walk::menu`; X no longer Back in play),
+`include/spidy/phone.hpp` and `src/phone.cpp` (MENU in MAP's place,
+`PhoneAction::menu`), `src/game_xr.cpp`, `src/prompt_buttons.cpp`,
+`apps/phone_preview.cpp`, `apps/launcher/ui.cpp` (the controls list),
+`tools/run_game_vr.py` (`reachable_in_play`, the prompt line).
+
+| | |
+| --- | --- |
+| Read | The user's sessions game-vr-20261022-212813 and game-vr-20261023-180107: `combat_headset.suit_powers` 3 and 21. game_xr.cpp read `suitPress.hands()` and `powers()`, never `held()`; `Walk` had no field for it, so `fromControllers` never sent L3 + R3. |
+| Build | `tools/build.ps1 -Observer`: ctest 3/3, 440 core tests (changed: the suit power's L3 + R3 reaches the controller in play and not on the game screen; X in VR play sends nothing, the phone's MENU sends Back; the pad-wide reach test with `suit` and `menu`; the phone's MENU on the home screen and as `Phone::take`'s action). Two older tests that expected X to be Back in play now expect nothing. Launcher tests 30/30, the GPU test, `spidy_phone_preview` (MENU's card with its three bars, MAP, SUITS, SKILLS under it). |
+| Python | The six protocol suites, 141 tests; new: every gesture in game_xr.cpp with a `held()` has it read, and every `Walk` field is filled. With `walk.suit = ...` taken out it fails ("SuitPowerPress suitPress: what it holds never goes out"), and with `walk.menu = ...` taken out ("Walk::menu is never filled"). |
+| Not run | A headset: the gesture's L3 + R3 and the game's answer (its meter must be full), the phone's MENU opening the game menu and B closing it. No game run (the standing OK for game runs was for the single-pass work). |
+| Not changed | `docs/images/readme/controls-quest3.jpg` still shows X as the game menu: its page is not on this PC. |
+
+## Four combat ideas from the Discord: dodging by moving, the suit power, the dive, the game's own blow sounds (the build before)
+
+The user: "commit current dif and do all 4" - the four picked from the ideas
+forum. `include/spidy/spider_sense.hpp` and `src/spider_sense.cpp`
+(`MoveDodge`), `include/spidy/game_pad.hpp` (`SuitPowerPress`),
+`include/spidy/web_strike.hpp` and `src/web_strike.cpp` (`WebStrike::dive`),
+`include/spidy/game_punch.hpp` and `src/game_punch.cpp` (the player's
+velocity, the dive, the blow's sound), `src/game_swing.cpp`,
+`include/spidy/slow_motion.hpp` (`Moment::dive`), `include/spidy/body_ik.hpp`,
+`src/body_ik.cpp`, `include/spidy/native_body.hpp` and `src/native_body.cpp`
+(the kick; Command version 5), `include/spidy/game_sound.hpp` and
+`src/game_sound.cpp` (new), `src/game_shooter.cpp` (its frame),
+`include/spidy/vr_settings.hpp`, `src/vr_settings.cpp` and
+`include/spidy/launcher_profile.hpp` (BLOW SOUNDS), `src/game_xr.cpp`
+(XrData version 40), `tools/run_game_vr.py` (`sound`, `combat_headset`),
+`tools/probe_sound.py` (new).
+
+| | |
+| --- | --- |
+| Read | Spider-Man.exe with capstone: the sound call `0x16d5e80` (system `0x7475690`) from the Spider-Sense warning; the 73 uses of DamageDealtEvent's type, the handlers that reach the sound call (bosses' hurt sounds, a perk's `0x940ce0` in `Hero::HeroMeleeManager`, `AnimImpactEventManager`'s `0x69e5d0`); its impact `0x69c730` and melee impact `0x69ceb0`: five switches of the "Melee Impact Event" set on the one struck's `SoundSourceComponent`, value names read from the game's own tables, three hit sounds (docs/REFERENCE.md) |
+| Build | `tools/build.ps1 -Observer`: ctest 3/3, 440 core tests (new: dodging by moving - a step aside, a step back, a duck, the warning answered once, none for a lean in, a jump's warning, a slow drift, out of play, a re-placed view, a turned tracking space; the suit power - both triggers at the chest, the press's length, held, again, half a second apart, at the belt, a turned head's chest, out of play, an untracked hand; the dive - on course, its strength and flight, the hang after it, none unmarked, from the ground, slow, off course, too far, going away, flying already; the kick's legs; the dive's moment after another; the sound engine's ids and a blow's place on him; the tab's BLOW SOUNDS row and its spidy_vr.ini line), the launcher's (a profile's BLOW SOUNDS), the six Python suites (XrData 40, 1192 bytes; a sound reader: decode, another build, a torn read), the GPU test |
+| In the game | Your save, free roam on a sign over a plaza at night, no headset, three games. The sound call from Spidy's main-thread frame: every one of over 200 plays gave a sound back. The player has a `SoundSourceComponent` with 3 sound sources; a blow sounded on him set all 15 switches. His `AnimImpactEventManager` appeared only while the flat game's own punches ran (references 0xc0b00000 then 0x80101000, variant 0 then 1; entries with data, +0x4c 1), none while he stood or perched. Thugs of a street crime 80 m off, in its opening scene: no `SoundSourceComponent` (result -1); actors without one have the blow sounded on the player's sources (8 of 8) |
+| Heard | Not established. A loopback recording of the PC's output while the game played, the plays time-locked, compared trial by trial (median of 12 or 25) with as many moments of nothing: none of the three hit sounds, 0x6845dc9d with variants 0-3, nor the game's own Spider-Sense sound played from the same call stood out of the plaza's noise for certain (medians: the first hit sound 2.9, the second 2.1, the third 2.4, nothing 2.2; one run's x6 average for the second was one loud trial); 20 plays back to back, three times each, raised nothing either. The game's own air punches did not show in it either. The blows take the first hit sound, the impact's plain case. Whether they sound, and how, is the headset's to tell; BLOW SOUNDS: SPIDY plays the old tones |
+| Saves | 19 byte-identical after the three games |
+| Not run | A headset: the dodge by moving (thresholds 17 cm aside, 20 cm back, 15 cm down within 0.3 s), the suit power gesture and the game's answer to its L3 + R3 (its meter must be full), the dive's feel and its kick pose, a fight's blows with the game's own sound on thugs that have sound sources. Which hit sound the game's own punches name (their impact entries' +0x3c): the hero, perched on that save, punched nothing, and the virtual stick does not take him off a perch |
+
+## Webs off a wall with hand wall climbing on (the build before)
+
+The user: "webbing from a wall with current settings doesnt work, i need to
+jump down to do it". `src/swing.cpp` (`inputs`: a web off the wall;
+`pointsAtWall`, `wallHand`, `shot`), `include/spidy/swing.hpp`
+(`SwingConfig::gripAim`), `include/spidy/game_tracking.hpp` and
+`src/game_tracking.cpp` (`wallHands`, the roll), `src/game_xr.cpp`.
+
+| | |
+| --- | --- |
+| Read | The user's session game-vr-20261022-174832 (0.4.1 + the Oct 22 work; physical webs, `hand_climb=1`, 40 cm). Swing samples: webs attached on the wall at rest, 83.95-88.80 s (six) and 617.99-630.59 s (three), position unchanged, tension at most 0.0001 and 2.3, zips unchanged; each rest ended in a wall jump (velocity 6 out, 4.6-4.9 up). 18 attaches on walls in all, 12 of 18 wall stretches over 0.4 s attached none, 0 misses on a wall; haptics `wall_grip` 17. XR samples (hand rows: x, the turned -y, the turned -z = forward): head 0.40 m off the wall; palms within 18 cm of it aimed 10-66 degrees into it along the web shooter (`aim * (0, -0.5, -0.866)`), except 617.99-646 s left palm 0.15-0.18 m off aimed 5-18 degrees away and down. Grips are not in the report |
+| Build | `tools/build.ps1 -Observer`: ctest 3/3, 434 core tests (new: a web out from a wall at rest swings the body off it, one up the wall keeps it there; squeezes at the wall away, up, along and a hair into it shoot webs, three reaches into it hold; a shot from a web shooter inside a two-sided wall leaves it; two grips roll the view only with both hands holding), the six Python suites |
+| Not run | The game and a headset: the swing off a wall's feel, how far into the wall players point a real reach, whether 0.5 m catches every hold |
+
+## Spidy's blows fill the game's Focus (the build before)
+
+The user: "also check our combat is filling up focus for healing".
+`src/game_focus.cpp`, `include/spidy/game_focus.hpp`, the blows in
+`src/game_punch.cpp` (`land`) and `src/game_grab.cpp` (yank, throw, struck),
+the main-thread frame in `src/game_shooter.cpp`, `tools/run_game_vr.py`
+(`focus_snapshot`), `tools/probe_focus.py`.
+
+| | |
+| --- | --- |
+| Read | Spider-Man.exe with capstone: the meter's class and component type, its event handlers, the energy per kind and the enum's values; DamageDealtEvent's handler files a request with no attack data and no known DamageHash under kOtherDamage (6), which `0x962210` leaves at 0 |
+| Build | `tools/build.ps1 -Observer`: no warnings, ctest 3/3, 430 core tests, the six Python suites (a Focus reader test: decode, another build, a torn read; the reader's refusal of another version) |
+| In the game | Your save, free roam on a roof, no headset, `probe_focus.py`: meter 0 of 300; kOtherDamage twice, 0 and 0; kMeleeDefault six times, 1.25 each to 7.5; kMeleeAir +4, kYankBot +4, to 15.5; 10 asked, 10 given, 0 missed; hooks restored, stops 0 |
+| Saves | 18 byte-identical, `-userprefs.save` rewritten by the load |
+| Not run | Blows on a real thug; the HUD's bar in a fight; the game's combo counter (Spidy's blows still do not raise its tier, read from the code) |
+
+## hantop's research stations (October 22, second)
+
+hantop's list in #mod-chat (eight research stations in Harlem) and his session
+report of October 22 on 0.4.1. `src/game_shooter.cpp` (`gameWebShooter`),
+`src/game_prompts.cpp` (census, any call's text, the camera's overlay),
+`include/spidy/prompt_buttons.hpp` (`LiveDemands::other`, `stand`,
+`cameraDemand`), `include/spidy/game_pad.hpp` (`NamedPress`'s slam),
+`src/phone.cpp` (CAMERA), `src/game_xr.cpp`, `tools/run_game_vr.py`
+(`prompts_line`).
+
+| | |
+| --- | --- |
+| Build | `tools/build.ps1 -Observer`: no warnings, ctest 3/3, 430 core tests, the six Python suites. |
+| His report | 723 web balls, 718 collisions, `webbed` 0; about 190 of them struck the same three actors in two bursts (641-671 s, 1050-1070 s). The equipped weapon was 40070 (the game's Web Shooter, no wheel item) in 1099 of 1125 shooter samples, 40078 in 25 (413-448 s). Prompts: 13 texts named buttons, the census full (48 names), no ask of LT + RB, D-pad up or X + A; the pad layer never entered. |
+| In the game, first run | Your save, CONTINUE, free roam on a roof, no headset. `probe_prompt_load.py --seconds 45`: the game lived through CONTINUE and 45 s of free roam with the new census. `probe_gadgets.py --only-web-shooter`: 12 pulls, 12 fired, 10 the game's Web Shooter's own (its 10 charges), 2 balls, 0 dropped; the HUD showed its Web Shooter; hooks restored. Virtual pad: D-pad up equipped weapon 40079 (`ShowCameraOverlay()`, `CameraRefresh(-1, 'No Subject In View', ...)`), LT held the viewfinder, RB the photo (a white flash), RT nothing, D-pad up again 40076 (`HideCameraOverlay()`). |
+| In the game, second run | The rebuilt module, reading on: the live demand 0 before, `0x10201` (LT, RB, D-pad up) with the camera out, 0 once D-pad up put it away; the timeline has both overlay calls. |
+| Saves | 19 files backed up before; after both runs 18 byte-identical, `-userprefs.save` rewritten by the load as always. |
+| Not run | A headset session: the phone's CAMERA, the camera's triggers and the slam in VR play; a station's leak or vent sealed by the Web Shooter's shot. |
+
+## Every SPIDY VR setting in the launcher (October 21, third)
 
 The user: "why doesnt the new launcher include all the realstic flips stuff?",
 then "yeah lets add all". `apps/launcher/ui.cpp` (`options()`: `tabCombo`,

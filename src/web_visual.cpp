@@ -255,7 +255,13 @@ void appendWeb(std::vector<Vertex>& out, const WebLine& web, Vec3 viewer, float 
     const float slack = std::isfinite(web.slack) ? std::max(web.slack, 0.f) : 0.f;
     const float sag = std::min(std::sqrt(3 * distance * slack / 8), distance * .5f);
     const Vec3 down{0, -1, 0};
-    auto point = [&](float u) { return web.start + chord * u + down * (sag * 4 * u * (1 - u)); };
+    // A web still flying (WEB SPEED) flutters on its way.
+    auto point = [&](float u) {
+        const Vec3 on = web.flightProgress < 1 ? flyingWebPoint(web.start, web.end, u, web.flightAge,
+                                                                web.flightProgress, web.flightDirection)
+                                                : web.start + chord * u;
+        return on + down * (sag * 4 * u * (1 - u));
+    };
     auto tangent = [&](float u) { return normalized(chord + down * (sag * 4 * (1 - 2 * u))); };
     // Short segments near the viewer resolve the braid; distant ones only need
     // to follow the curve.
@@ -472,6 +478,38 @@ void appendSlowMotionMeter(std::vector<Vertex>& out, const SlowMotionView& view,
         for (const auto& shape : {upper, lower})
             softTriangle(out, shape, view3, shadow ? shadowColor : mix(glass, fill, .35f),
                          opacity * (shadow ? .55f : .9f), shadow ? 1.2f * px : 0.f, shadow ? 1.6f * px : soft);
+}
+void appendPadLayerSign(std::vector<Vertex>& out, Pose hand, Vec3 viewer, float pixelAngle, UiStyle style) {
+    if (style == UiStyle::tech)
+        return tech::appendPadLayerSign(out, hand, viewer, pixelAngle);
+    if (!finite(hand.position) || !finite(viewer) || !std::isfinite(pixelAngle) || pixelAngle <= 0)
+        return;
+    // Over the back of the wrist as the meter is over the left one, a little
+    // higher: two lines of lettering stand taller than a watch's face.
+    const Vec3 c = hand.position + hand.orientation.rotate({0, .07f, .065f});
+    const float distance = length(viewer - c);
+    if (!finite(c) || !(distance > .08f && distance < 3))
+        return;
+    // Level and upright across the line of sight, as the aim markers are.
+    const Vec3 view = (viewer - c) / distance;
+    Vec3 right = cross(Vec3{0, 1, 0}, view);
+    right = length(right) > .1f ? normalized(right) : perpendicular(view);
+    const Vec3 up = cross(view, right);
+    // A caption: a yellow pill with a red drop, the title in red over the
+    // hint in ink, each line centred (the lettering leans right).
+    constexpr float title = .016f, hint = .0075f, gap = .005f;
+    const float block = title + gap + hint;
+    const float wide = std::max(textWidth(padLayerTitle, title), textWidth(padLayerHint, hint));
+    const auto from = [](std::string_view words, float height) {
+        return -.5f * (textWidth(words, height) + Print::lean * height);
+    };
+    Print print(out, c, right, up, view, pixelAngle * distance);
+    print.layers(title * .08f, title * .15f, plate::red, 0,
+                 [&] { print.line({wide * -.5f, 0}, {wide * .5f, 0}, block * .5f + .005f, plate::yellow); });
+    print.layers(title * .05f, 0, {}, 0, [&] {
+        print.text(padLayerTitle, {from(padLayerTitle, title), block * .5f - title}, title, .2f, plate::red);
+        print.text(padLayerHint, {from(padLayerHint, hint), block * -.5f}, hint, .16f, plate::ink);
+    });
 }
 void appendImpact(std::vector<Vertex>& out, const ImpactView& impact, Vec3 viewer, float pixelAngle,
                   UiStyle style) {
@@ -1060,8 +1098,28 @@ void appendGadgetWheel(std::vector<Vertex>& out, const GadgetWheelView& view, Ve
     for (int p = 0; p < gadgetPlaces; ++p)
         if (view.places[static_cast<size_t>(p)] != Gadget::none && p != lit)
             gadgetPicture(wheel, view.places[static_cast<size_t>(p)], place(p, radius), badge, plate::ink);
-    if (lit < 0)
+    // Words in a yellow caption across the middle, leaning as its lettering
+    // does: the lit gadget's name, or what a bare wheel says.
+    const auto caption = [&](const char* words, float scale, float turn, bool hit) {
+        const float height = fittedHeight(words, .0135f, .15f);
+        const float width = textWidth(words, height) + Print::lean * height;
+        const float halfWidth = width * .5f + .008f, halfHeight = height * .5f + .0075f;
+        const float slant = Print::lean * halfHeight;
+        Print print(out, f.centre, f.right, f.up, f.out, px);
+        print.place(scale, turn + 2 * plate::degree);
+        print.layers(.003f, .0045f, plate::ink, hit ? .005f : 0, [&] {
+            const Flat a{-halfWidth - slant, -halfHeight}, b{halfWidth - slant, -halfHeight},
+                d{halfWidth + slant, halfHeight}, e{-halfWidth + slant, halfHeight};
+            print.triangle(a, b, d, plate::yellow);
+            print.triangle(a, d, e, plate::yellow);
+        });
+        print.text(words, {width * -.5f, height * -.5f}, height, .17f, plate::ink);
+    };
+    if (lit < 0) {
+        if (view.bare)
+            caption(bareWheelText, land.scale, land.turn, land.hit);
         return;
+    }
     const Gadget chosen = view.places[static_cast<size_t>(lit)];
     // The lit badge: red and larger. It snaps on each time another gadget
     // lights - a pose wide and out of register, a pose short - and then
@@ -1096,22 +1154,8 @@ void appendGadgetWheel(std::vector<Vertex>& out, const GadgetWheelView& view, Ve
                       [&] { charges(badgePrint, lit, {}, pipsFrom); });
     badgePrint.layers(.0016f, 0, {}, 0,
                       [&] { gadgetPicture(badgePrint, chosen, {}, litBadge, plate::paper); });
-    // Its name in a yellow caption across the middle, leaning as its
-    // lettering does, snapping on with the badge.
-    const char* name = gadgetName(chosen);
-    const float height = fittedHeight(name, .0135f, .15f);
-    const float width = textWidth(name, height) + Print::lean * height;
-    const float halfWidth = width * .5f + .008f, halfHeight = height * .5f + .0075f;
-    const float slant = Print::lean * halfHeight;
-    Print caption(out, f.centre, f.right, f.up, f.out, px);
-    caption.place(land.scale * pop.scale, land.turn + pop.turn + 2 * plate::degree);
-    caption.layers(.003f, .0045f, plate::ink, pop.hit ? .005f : 0, [&] {
-        const Flat a{-halfWidth - slant, -halfHeight}, b{halfWidth - slant, -halfHeight},
-            d{halfWidth + slant, halfHeight}, e{-halfWidth + slant, halfHeight};
-        caption.triangle(a, b, d, plate::yellow);
-        caption.triangle(a, d, e, plate::yellow);
-    });
-    caption.text(name, {width * -.5f, height * -.5f}, height, .17f, plate::ink);
+    // Its name, snapping on with the badge.
+    caption(gadgetName(chosen), land.scale * pop.scale, land.turn + pop.turn, pop.hit);
 }
 void AimMarkerMotion::reset() {
     *this = {};

@@ -134,9 +134,16 @@ uint32_t game_pad::install() {
     }
     if (result)
         return result;
+    // Under one freeze of the game's threads (stereo_probe.cpp says why).
     for (unsigned i = 0; i < targetCount; ++i)
-        if ((status = MH_EnableHook(targets[i])) != MH_OK)
+        if ((status = MH_QueueEnableHook(targets[i])) != MH_OK)
             return 8300 + status;
+    if ((status = MH_ApplyQueued()) != MH_OK) {
+        for (unsigned i = 0; i < targetCount; ++i)
+            MH_QueueDisableHook(targets[i]);
+        MH_ApplyQueued();
+        return 8300 + status;
+    }
     hooked = true;
     return 0;
 }

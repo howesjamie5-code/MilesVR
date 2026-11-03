@@ -39,29 +39,34 @@ std::uint32_t Shooter::update(float seconds, const std::array<ShooterHand, 2>& h
     }
     return shots;
 }
-ShotRequest Shooter::aim(int hand, Pose pose, std::span<const ShooterTarget> targets,
-                         const WorldQueries& world) const {
+ShotRequest Shooter::aim(int hand, Pose pose, std::span<const ShooterTarget> targets, const WorldQueries& world,
+                         const ShooterGaze* gaze) const {
     const Vec3 forward = normalized(pose.orientation.rotate({0, 0, -1}));
     ShotRequest shot;
     shot.hand = hand;
     shot.origin = pose.position + forward * config_.muzzle;
     shot.direction = forward;
+    // The line that picks: the hand's, or the eyes' (EYE AIM).
+    const bool eyes = gaze && finite(gaze->origin) && finite(gaze->direction) &&
+                      std::abs(length(gaze->direction) - 1) < .01f;
+    const Vec3 from = eyes ? gaze->origin : shot.origin, line = eyes ? gaze->direction : forward;
     // The character nearest the line, as a share of the angle he may be off it.
     const ShooterTarget* best{};
     float bestShare = 2;
     for (const auto& t : targets) {
-        const Vec3 to = t.centre - shot.origin;
+        const Vec3 to = t.centre - from;
         const float distance = length(to);
         if (!finite(t.centre) || distance < .3f || distance > config_.assistRange)
             continue;
         const Vec3 along = to / distance;
-        const float angle = std::acos(std::clamp(dot(along, forward), -1.f, 1.f));
+        const float angle = std::acos(std::clamp(dot(along, line), -1.f, 1.f));
         const float allowed = std::max(config_.assistAngle, std::atan2(std::max(t.radius, 0.f), distance));
         if (angle > allowed || angle / allowed >= bestShare)
             continue;
-        // A wall between them takes the ball first.
-        if (const auto hit = world.raycast(shot.origin, along, distance);
-            hit && length(hit->point - shot.origin) < distance - std::max(t.radius, 0.f))
+        // A wall between them takes the ball first (one the eyes cannot see
+        // past, with EYE AIM).
+        if (const auto hit = world.raycast(from, along, distance);
+            hit && length(hit->point - from) < distance - std::max(t.radius, 0.f))
             continue;
         best = &t;
         bestShare = angle / allowed;
@@ -70,14 +75,22 @@ ShotRequest Shooter::aim(int hand, Pose pose, std::span<const ShooterTarget> tar
         shot.direction = normalized(best->centre - shot.origin);
         shot.aimPoint = best->centre;
         shot.target = best->id;
+        shot.gazed = eyes;
         return shot;
     }
-    if (const auto hit = world.raycast(shot.origin, forward, config_.range)) {
-        shot.aimPoint = hit->point + forward * config_.beyond;
-        shot.surface = true;
-    } else {
-        shot.aimPoint = shot.origin + forward * config_.range;
+    const auto hit = world.raycast(from, line, config_.range);
+    const Vec3 point = hit ? hit->point : from + line * config_.range;
+    if (eyes) {
+        // From the hand to what the eyes meet; the hand itself, looked at,
+        // aims as it points.
+        const Vec3 toPoint = point - shot.origin;
+        if (!(length(toPoint) >= ShooterGaze::nearest))
+            return aim(hand, pose, targets, world);
+        shot.direction = normalized(toPoint);
+        shot.gazed = true;
     }
+    shot.surface = static_cast<bool>(hit);
+    shot.aimPoint = hit ? point + shot.direction * config_.beyond : point;
     return shot;
 }
 } // namespace spidy

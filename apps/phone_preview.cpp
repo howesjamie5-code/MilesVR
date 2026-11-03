@@ -1,6 +1,8 @@
-// Draws the phone's screens (phone.hpp's appendPhone) face on, side by side -
-// home, MUSIC, MAP, GEAR - with sample songs and gadgets, as a BMP, to look at
-// its layout without a headset. Drawn as the marks' preview draws them
+// Draws the phone (phone.hpp's appendPhone, its screen's picture laid on its
+// glass) face on, side by side - home with MUSIC picked, home with MENU
+// picked, MUSIC, GEAR - and the home screen once more turned 35 degrees, for
+// its body's depth, with sample songs and gadgets, as a BMP, to look at its
+// layout without a headset. Drawn as the marks' preview draws them
 // (preview_image.hpp), from 10 m off, where the eye's perspective is next to
 // none: 5000 pixels a metre.
 //
@@ -18,7 +20,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     constexpr float pixels = 5000, distance = 10;
-    constexpr int each = 520, w = each * 4, h = 960;
+    constexpr int each = 520, w = each * 5, h = 960;
     Image image(w, h);
     for (float& c : image.rgb)
         c = .03f;
@@ -39,15 +41,24 @@ int main(int argc, char** argv) {
         view.gear[i].ammo = i ? 2 + i % 2 : 0;
         view.gear[i].equipped = i == 2;
     }
-    view.frame = {{0, 0, -distance}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-    const PhoneScreen screens[] = {PhoneScreen::home, PhoneScreen::music, PhoneScreen::map, PhoneScreen::gear};
-    for (int s = 0; s < 4; ++s) {
+    const PhoneScreen screens[] = {PhoneScreen::home, PhoneScreen::home, PhoneScreen::music, PhoneScreen::gear,
+                                   PhoneScreen::home};
+    for (int s = 0; s < 5; ++s) {
+        // The last turned about its up, its right edge away.
+        const float turn = s == 4 ? .61f : 0.f;
+        view.frame = {{0, 0, -distance},
+                      {std::cos(turn), 0, -std::sin(turn)},
+                      {0, 1, 0},
+                      {std::sin(turn), 0, std::cos(turn)}};
         view.screen = screens[s];
-        view.app = 0;
+        view.app = s == 1 ? phoneMenuApp : 0;
         view.lit = PhoneButton::play;
         view.gearTop = s == 3 ? 1 : 0;
-        std::vector<Vertex> v;
-        appendPhone(v, view);
+        std::vector<Vertex> v, screen;
+        appendPhone(v, view, {0, 0, 0});
+        appendPhoneScreen(screen, view);
+        placePhoneScreen(screen, view);
+        v.insert(v.end(), screen.begin(), screen.end());
         // The phone's middle at its cell's.
         const Camera camera{pixels * distance, each * (s + .5f), h / 2.f};
         draw(image, v, camera, 0, 0, 0, 0, w, h);

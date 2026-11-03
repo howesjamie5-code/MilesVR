@@ -3,6 +3,7 @@
 #include "spidy/d3d12_renderer.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/lab_world.hpp"
+#include "spidy/phone.hpp"
 #include "spidy/tracking.hpp"
 #include "spidy/web_visual.hpp"
 #include <algorithm>
@@ -706,6 +707,137 @@ int main(int argc, char** argv) {
                                          std::to_string(errors[2]) + " levels)");
             std::cout << "PASS game screen blit into the sRGB eye image: 8-bit, 10-bit and float frames within "
                       << std::max({errors[0], errors[1], errors[2]}) << " level.\n";
+        }
+        {
+            // The phone's screen as a picture (D3D12Renderer::Picture): drawn into
+            // a texture of its own and shown on a quad 1 m ahead - its halves as
+            // drawn, a layer further out over one further in whatever the order,
+            // the overlay's own nearer geometry over the quad, and nothing of it
+            // off the quad.
+            auto d = td;
+            d.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+            ComPtr<ID3D12Resource> eye;
+            require(renderer.device()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d,
+                                                               D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                               IID_PPV_ARGS(&eye)));
+            const Vec3 redHalf{.8f, .02f, .02f}, greenHalf{.02f, .7f, .05f}, blueLayer{.03f, .05f, .9f}, greyBlock{.4f, .4f, .4f};
+            constexpr float hw = .04f, hh = .08f;
+            std::vector<Vertex> picture;
+            const auto rect = [&](float x0, float y0, float x1, float y1, float z, Vec3 c) {
+                picture.insert(picture.end(), {Vertex{{x0, y0, z}, c}, Vertex{{x1, y0, z}, c}, Vertex{{x1, y1, z}, c},
+                                               Vertex{{x0, y0, z}, c}, Vertex{{x1, y1, z}, c}, Vertex{{x0, y1, z}, c}});
+            };
+            rect(-.01f, -.01f, .01f, .01f, .003f, blueLayer); // first, and further out
+            rect(-hw, -hh, 0, hh, .001f, redHalf);
+            rect(0, -hh, hw, hh, .001f, greenHalf);
+            constexpr float qx = .1f, qy = .2f;
+            const D3D12Renderer::Picture shown{
+                picture, hw, hh, {Vec3{-qx, -qy, -1}, Vec3{qx, -qy, -1}, Vec3{qx, qy, -1}, Vec3{-qx, qy, -1}}, {}};
+            std::vector<Vertex> nearer;
+            addBox(nearer, {-.2f, .14f, -.9f}, {.2f, .3f, -.85f}, greyBlock);
+            constexpr float tangent = .3f;
+            const auto vp = multiply(projection(-tangent, tangent, -tangent, tangent), viewMatrix({{0, 0, 0}, {}}));
+            const D3D12Renderer::ViewTarget view{eye.Get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, width, height, vp};
+            for (int frame = 0; frame < 3; ++frame)
+                overlay.renderViews(std::span(&view, 1), nearer, false, true, {}, nullptr, &shown);
+            const auto image = overlay.readback(eye.Get());
+            // A point's pixel, from the camera at the origin looking down -z.
+            const auto at = [&](float x, float y, float z) {
+                const auto px = static_cast<size_t>((x / -z / tangent * .5f + .5f) * static_cast<float>(width));
+                const auto py = static_cast<size_t>((.5f - y / -z / tangent * .5f) * static_cast<float>(height));
+                return &image[(py * width + px) * 4];
+            };
+            const unsigned char* left = at(-.05f, -.1f, -1);
+            const unsigned char* right = at(.05f, -.1f, -1);
+            const unsigned char* middle = at(0, 0, -1);
+            const unsigned char* covered = at(.05f, .17f, -1);
+            const unsigned char* off = at(.15f, -.1f, -1);
+            if (left[0] < 150 || left[1] > 80 || right[1] < 150 || right[0] > 80)
+                throw std::runtime_error("Picture's halves are not where they were drawn");
+            if (middle[2] < 150 || middle[0] > 80)
+                throw std::runtime_error("Picture's outer layer was covered by one drawn later further in");
+            if (covered[0] < 110 || covered[0] > 210 || std::abs(int(covered[0]) - int(covered[1])) > 8)
+                throw std::runtime_error("Overlay geometry nearer than the picture did not cover it");
+            if (off[0] > 60 && off[1] > 60)
+                throw std::runtime_error("Picture drawn off its quad");
+            std::cout << "PASS phone screen picture: its own texture with mips on a quad, its layers by depth, "
+                         "under nearer geometry.\n";
+        }
+        {
+            // The phone far out in the city, where the game has it: its body
+            // (appendPhone) with a screen of one green on its glass, 35 cm before
+            // an eye at (1158, 9, -360) that looks off the world's axes (so all
+            // three of its coordinates reach the depth), the phone turned 25
+            // degrees. In the world's own coordinates single floats round the
+            // screen and the glass under it each their own way, and the glass
+            // shows through; about the eye, as game_xr.cpp draws the overlay, it
+            // never does.
+            auto d = td;
+            d.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+            ComPtr<ID3D12Resource> eye;
+            require(renderer.device()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d,
+                                                               D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                                               IID_PPV_ARGS(&eye)));
+            const Vec3 city{1158.37f, 9.21f, -360.53f}, ahead{.02f, -.03f, -.35f}, green{.02f, .7f, .05f};
+            constexpr float tangent = .3f, turn = .44f;
+            const Quat look = Quat::yaw(.65f) * Quat::around({1, 0, 0}, -.35f);
+            const Vec3 across = look.rotate({std::cos(turn), 0, -std::sin(turn)}), upward = look.rotate({0, 1, 0}),
+                       facing = look.rotate({std::sin(turn), 0, std::cos(turn)});
+            const float hw = phoneScreenHalfWidth, hh = phoneScreenHalfHeight;
+            std::vector<Vertex> screen;
+            for (const Vec3 corner : {Vec3{-hw, -hh, .001f}, Vec3{hw, -hh, .001f}, Vec3{hw, hh, .001f},
+                                      Vec3{-hw, -hh, .001f}, Vec3{hw, hh, .001f}, Vec3{-hw, hh, .001f}})
+                screen.push_back({corner, green});
+            // How many points of the screen's inner nine tenths show anything but
+            // its green, the phone and the eye drawn about `origin`.
+            const auto glassShown = [&](Vec3 origin, unsigned& points) {
+                PhoneView phone;
+                phone.open = true;
+                phone.age = 1;
+                phone.frame = {city - origin + look.rotate(ahead), across, upward, facing};
+                std::vector<Vertex> body;
+                appendPhone(body, phone, city - origin);
+                const D3D12Renderer::Picture shown{screen, hw, hh, phoneScreenCorners(phone), green};
+                const auto vp = multiply(projection(-tangent, tangent, -tangent, tangent),
+                                         viewMatrix({city - origin, look}));
+                const D3D12Renderer::ViewTarget seen{eye.Get(), DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, width, height,
+                                                     vp};
+                overlay.renderViews(std::span(&seen, 1), body, false, true, {}, nullptr, &shown);
+                const auto image = overlay.readback(eye.Get());
+                unsigned shows = 0;
+                points = 0;
+                // Its corners: lower left, lower right, upper right, upper left.
+                const auto corners = phoneScreenCorners(phone);
+                for (int i = -45; i <= 45; ++i)
+                    for (int j = -45; j <= 45; ++j) {
+                        // The point on the screen, from the eye, in the eye's axes.
+                        const Vec3 p = look.conjugate().rotate(
+                            (corners[0] + corners[2]) * .5f + (corners[1] - corners[0]) * (.01f * i) +
+                            (corners[2] - corners[1]) * (.01f * j) - (city - origin));
+                        const float fx = (p.x / -p.z / tangent * .5f + .5f) * static_cast<float>(width),
+                                    fy = (.5f - p.y / -p.z / tangent * .5f) * static_cast<float>(height);
+                        if (!(fx >= 0 && fy >= 0 && fx < static_cast<float>(width) &&
+                              fy < static_cast<float>(height)))
+                            continue;
+                        const unsigned char* c =
+                            &image[(static_cast<size_t>(fy) * width + static_cast<size_t>(fx)) * 4];
+                        ++points;
+                        shows += c[1] < 150 || c[0] > 80;
+                    }
+                return shows;
+            };
+            unsigned inWorld{}, aboutEye{};
+            const unsigned worldShows = glassShown({}, inWorld);
+            const unsigned eyeShows = glassShown(city, aboutEye);
+            if (aboutEye < 4000)
+                throw std::runtime_error("Phone far out: its screen was not in view");
+            if (eyeShows)
+                throw std::runtime_error("Phone far out, drawn about the eye: its glass showed through its "
+                                         "screen at " +
+                                         std::to_string(eyeShows) + " of " + std::to_string(aboutEye) + " points");
+            std::cout << "PASS phone 1158 m out, drawn about the eye: its screen over its glass at all "
+                      << aboutEye << " points (in the world's coordinates the glass showed at " << worldShows
+                      << " of " << inWorld << ").\n";
         }
         if (argc >= 2) {
             std::filesystem::path folder = argv[1];

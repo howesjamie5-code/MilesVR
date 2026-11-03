@@ -117,7 +117,8 @@ if(SPIDY_BUILD_OBSERVER)
   target_link_libraries(spidy_collision_probe PRIVATE minhook)
   add_library(spidy_ray_bridge SHARED src/native_rays.cpp src/game_swing.cpp src/game_targets.cpp
               src/game_grab.cpp src/native_bodies.cpp src/game_punch.cpp src/game_shooter.cpp
-              src/game_warp.cpp src/game_offers.cpp src/game_sense.cpp)
+              src/game_warp.cpp src/game_offers.cpp src/game_sense.cpp src/game_focus.cpp
+              src/game_sound.cpp src/game_throw.cpp src/game_dodge.cpp)
   target_include_directories(spidy_ray_bridge PRIVATE include)
   target_compile_definitions(spidy_ray_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(spidy_ray_bridge PRIVATE /W4 /permissive-)

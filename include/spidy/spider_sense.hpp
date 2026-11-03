@@ -160,6 +160,158 @@ class SpiderSense {
     std::array<bool, 2> spent_{};
     std::uint64_t warnings_{};
 };
+// Dodging by moving. Players asked for it on October 14 and 15 ("IRL dodging
+// mechanics, similar to Batman: Arkham Shadow"; "make it so when you flip,
+// web-zip, you dodge enemies"): a warning stood, and the one answer that took
+// the player out of the way was B. Now moving out of the way answers it too:
+// while the game warns of an attack a counter or a dodge answers (a jump's is
+// A), a quick step or lean across the attacker's line, a step back from him
+// or a duck is the game's own dodge, the way the head went (a duck: the way
+// the game chooses), so the game's perfect dodge and its slowed time come
+// with it as they do with B. A lean toward him is none: a counter leans in.
+// The head's move is measured in the tracking space, so walking with the
+// stick and a snap turn move nothing.
+struct MoveDodgeConfig {
+    // The move: within `window` real seconds, `aside` across his line, `back`
+    // away from him or `duck` down, and no more than `toward` toward him.
+    float window = .3f, aside = .17f, back = .2f, duck = .15f, toward = .08f;
+    // A move larger than this between two frames is not the player's (the
+    // view re-placed, a lost and found headset): the measure starts over.
+    float jump = .1f;
+    // The game's B held this long, and none for `rest` after.
+    float press = .12f, rest = .6f;
+};
+// A warning the headset shows, not countered yet.
+struct DodgeThreat {
+    std::uint64_t attacker{};
+    Vec3 at{}; // where he is in the world (his head)
+    SenseAnswer answer{};
+};
+class MoveDodge {
+  public:
+    explicit MoveDodge(MoveDodgeConfig config = {});
+    // One headset frame, `seconds` (real) after the one before. play: the
+    // game's B may go out (VR play, no web carrying the player). head: the
+    // headset in the world; room: the headset in the tracking space, and
+    // roomToWorld the turn from that space's axes to the world's. True while
+    // the game's B is to be held.
+    bool update(float seconds, bool play, Vec3 head, Vec3 room, Quat roomToWorld,
+                std::span<const DodgeThreat> threats);
+    // Which way the dodge goes: level, in the world, unit; zero for a duck,
+    // whose way the game chooses.
+    Vec3 way() const {
+        return way_;
+    }
+    bool pressing() const {
+        return pressLeft_ > 0;
+    }
+    // Dodges made so far.
+    std::uint32_t dodges() const {
+        return dodges_;
+    }
+    void reset();
+    const MoveDodgeConfig& config() const {
+        return config_;
+    }
+
+  private:
+    struct Sample {
+        Vec3 room{};
+        float age{};
+    };
+    MoveDodgeConfig config_;
+    // The head's places over the last window, oldest at `first_`.
+    std::array<Sample, 128> samples_{};
+    std::size_t first_{}, count_{};
+    Vec3 way_{};
+    float pressLeft_{}, restLeft_{};
+    // The attackers whose warnings a dodge answered, until they are gone.
+    std::array<std::uint64_t, 8> dodged_{};
+    std::uint32_t dodges_{};
+};
+// Dodging on a web. The user, October 24: "Swinging and moving with webs
+// should count as dodging". In the flat game they do: its web rush and its
+// zip to a target start the hero's dodge as they start (the hero's
+// HeroDodgeManager, its dodge start 92a040 with kinds 8 and 14), and its
+// traversal dodge is one on the move (kind 5). In VR the swing carries the
+// player, and neither B nor a dodge by moving goes out while a web does (the
+// game's dodge would take him off it): nothing dodged a warned blow while a
+// web carried him.
+//
+// So while a web carries the player - a swing, a zip, a pull, a web strike's
+// flight, the game's zip to a point out of the swing, and the flight a web
+// leaves him in for a moment after it lets go - fast enough to be getting
+// out of the way, a warning about to land starts
+// the game's own traversal dodge (game_dodge.hpp): it dodges every warning
+// standing then and those that go off while it lasts, with the game's damage
+// immunity, its Focus for an accurate or a perfect dodge and its sound. Not
+// its perfect dodge's slowed time: the swing goes on at its own speed. It
+// lasts `hold`, and longer while a blow it may have dodged is still on its
+// way, up to `most`.
+struct WebDodgeConfig {
+    // Carried at least this fast (real m/s): a web that holds the player
+    // still, hanging, dodges nothing. The flight after a web counts as the
+    // web's for `coast` real seconds.
+    float speed = 3, coast = 1;
+    // The dodge starts `lead` game seconds before a blow lands, or `untimed`
+    // after a warning the game set no time for; a blow `late` game seconds
+    // past is past.
+    float lead = .3f, untimed = .1f, late = .15f;
+    // Real seconds: how long a dodge lasts at least and at most, and the rest
+    // between two.
+    float hold = .6f, most = 1.5f, rest = .1f;
+};
+// A warning the game holds, as a dodge on a web sees it.
+struct WebDodgeThreat {
+    std::uint64_t attacker{};
+    float toImpact{}, warned{}; // game seconds, as SenseThreat's
+    bool timed{};
+    // The game has answered it already: dodged, or countered.
+    bool answered{};
+};
+// The game's own dodge as it stands this frame: none, the one this started
+// (still its kind and start), or another (the game's own, a B on the ground).
+enum class GameDodge : std::uint8_t { none, ours, other };
+class WebDodge {
+  public:
+    enum class Ask : std::uint8_t { none, start, end };
+    explicit WebDodge(WebDodgeConfig config = {});
+    // One game frame, `seconds` (real) after the one before. webbed: a web
+    // carries the player now; airborne: he is off the ground; velocity: his,
+    // real m/s in the world. Returns what to ask of the game: to start its
+    // dodge (the way it goes: way()) or to end the one this started.
+    Ask update(float seconds, bool webbed, bool airborne, Vec3 velocity, std::span<const WebDodgeThreat> threats,
+               GameDodge game);
+    // The ask to start was not taken (the game has no dodge on after it).
+    void refused();
+    bool dodging() const {
+        return dodging_;
+    }
+    // Which way the dodge goes: the way the player moves, level where he
+    // moves along the ground at all, unit. The game checks a dodge's way
+    // against the sides an attack lets the hero dodge to.
+    Vec3 way() const {
+        return way_;
+    }
+    // Dodges started, and those the game ended itself before this did.
+    std::uint32_t dodges() const {
+        return dodges_;
+    }
+    std::uint32_t cutShort() const {
+        return cutShort_;
+    }
+    void reset();
+    const WebDodgeConfig& config() const {
+        return config_;
+    }
+
+  private:
+    WebDodgeConfig config_;
+    bool dodging_{};
+    float age_{}, restLeft_{}, sinceWeb_ = 1e9f;
+    Vec3 way_{};
+    std::uint32_t dodges_{}, cutShort_{};
+};
 // Where the warning of an attacker out of the player's view shows instead,
 // as Arkham Shadow's icon in the sightline: on the circle `angle` (radians)
 // round the middle of his view, on the attacker's side, and the rim's lines

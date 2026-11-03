@@ -209,9 +209,10 @@ const std::vector<Demo>& demos() {
              });
              s.wait(.3);
          }},
-        {"landing", "a soft landing (a jump), then a hard one (a fall from a roof): from the waist up",
+        {"landing", "a soft landing (a jump): the waist's row only; then a hard one (a fall from a roof): from the "
+                    "waist up",
          [](Sink& s) {
-             s.post(at(Kind::landing, -1, .2f));
+             s.post(at(Kind::landing, -1, .34f));
              s.wait(.8);
              s.post(at(Kind::landing, -1, 1));
              s.wait(.8);
@@ -233,7 +234,8 @@ const std::vector<Demo>& demos() {
              s.post(at(Kind::leap));
              s.wait(.8);
          }},
-        {"punches", "a light jab (left), a firm punch (right), a heavy blow (right), a finisher (whole body)",
+        {"punches", "a light jab (left), a firm punch (right), a heavy blow (right), a finisher (arms, the upper "
+                    "chest and back, the face)",
          [](Sink& s) {
              s.post(at(Kind::punch, 0, .2f));
              s.wait(.6);
@@ -268,7 +270,7 @@ const std::vector<Demo>& demos() {
              s.post(at(Kind::heal));
              s.wait(1.2);
          }},
-        {"slow_motion", "slow motion: a deep pulse, a slow heartbeat left of your chest's middle, a short release",
+        {"slow_motion", "slow motion: a deep pulse, a slow heartbeat high on your chest's left, a short release",
          [](Sink& s) {
              s.post(at(Kind::slowStart));
              sweep(s, 3.5, [](State& st, float) { st.slowMotion = true; });
@@ -280,7 +282,8 @@ const std::vector<Demo>& demos() {
              sweep(s, 3.5, [](State& st, float) { st.health = .15f; });
              s.wait(.3);
          }},
-        {"grab", "the web catches a thug (left), yanks him, holds him pulling, then you throw him",
+        {"grab", "the web catches a thug (left), yanks him, holds him pulling (the arm, faintly the shoulder), then "
+                 "you throw him",
          [](Sink& s) {
              s.post(at(Kind::grabCaught, 0));
              s.wait(.4);

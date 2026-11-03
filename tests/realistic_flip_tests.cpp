@@ -189,6 +189,37 @@ int main() {
         check(apart < .00005f, "taking the heading out changed the turn in the world");
         check(twisted < .0001f, "upright, the tilt kept a turn about the vertical");
     }
+    // FLIPS IN COMBAT off: in a fight the arms and the webs turn nothing, the
+    // spin brought into it dies away to upright as on landing, and a web
+    // still held turns the player again once it ends. On, a fight is no
+    // different from any flight.
+    for (const bool inCombat : {true, false}) {
+        RealisticFlip a;
+        auto cfg = s;
+        cfg.inCombat = inCombat;
+        RealisticFlight arms{{}, {}, true, false, {.5f, 2, 0}};
+        for (int i = 0; i < 60; ++i)
+            a.update(arms, true, false, 0, 1.f / 90, cfg);
+        check(distance(a.orientation(), {}) > .5f, "the arms turned too little to tell");
+        arms.fighting = true;
+        for (int i = 0; i < 270; ++i)
+            a.update(arms, true, false, 0, 1.f / 90, cfg);
+        const float upright = a.orientation().rotate({0, 1, 0}).y;
+        check(inCombat ? length(a.angularVelocity()) > 1 : upright > .9999f && length(a.angularVelocity()) < .01f,
+              inCombat ? "with FLIPS IN COMBAT on, a fight stopped the arms' spin"
+                       : "with FLIPS IN COMBAT off, a fight did not bring the player upright");
+        RealisticFlight web{{0, 0, -15}, {1, 0, 0}, true, true};
+        web.fighting = true;
+        for (int i = 0; i < 45; ++i)
+            a.update(web, true, false, 0, 1.f / 90, cfg);
+        if (!inCombat) {
+            check(a.orientation().rotate({0, 1, 0}).y > .9999f, "with FLIPS IN COMBAT off, a web turned a fighter");
+            web.fighting = false;
+            for (int i = 0; i < 45; ++i)
+                a.update(web, true, false, 0, 1.f / 90, cfg);
+            check(a.orientation().rotate({0, 1, 0}).y < .99f, "the fight over, the web turned nothing");
+        }
+    }
     std::cout << "Momentum rotation: attach easing, rate/acceleration caps, stability, free heading, gesture "
                  "strength, full 360, no preset turn, drag, braking, sample loss, landing, common "
                  "translation, upward arms, tracking jumps, frame rate, heading taken into the yaw passed\n";

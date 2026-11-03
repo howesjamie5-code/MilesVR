@@ -248,24 +248,16 @@ int main() {
         options.arcadeWebs = true;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--arcade-webs", "arcade webs chosen");
-        // The view turning onto a wall is no option of its own and is never passed: it turns whoever holds
-        // the player there, the swing or the game's own crawl, which is the whole point of giving the crawl
-        // the view (the player, October 14: "i like how it feel to walk on building and stand on their side",
-        // of a vent that only works while the game holds him). A launcher.ini from the build that tied the
-        // view to wall running can still have it off, and that is not read back either.
+        // The view turning onto a wall is no option of its own: it turns whoever holds the player there (the
+        // player, October 14: "i like how it feel to walk on building and stand on their side"). Nor, since
+        // October 25, are the swing's own walls: off, the game's crawl took every wall, and walls are Spidy's
+        // own since October 15 (the user: "can you not just use our locomotion system only"). A session is
+        // told neither.
         options = {};
-        check(options.standOnWalls, "no standing on walls in a new launcher");
-        options.standOnWalls = false;
         args = sessionArguments(options, L"r.json", L"", L"");
-        check(args.size() == 7, "the view on walls was passed to the session");
-        // Wall running, the default, goes unsaid; off, the game's own wall crawl takes a wall, which is
-        // what tells whether something on a wall is the swing's doing (October 13, a vent the game would
-        // not interact with while the swing owned the hero).
-        options = {};
-        check(options.wallRun, "wall running is not the default");
-        options.wallRun = false;
-        args = sessionArguments(options, L"r.json", L"", L"");
-        check(args.size() == 8 && args[7] == L"--no-wall-run", "wall running switched off");
+        check(std::find(args.begin(), args.end(), L"--no-stand-on-walls") == args.end() &&
+                  std::find(args.begin(), args.end(), L"--no-wall-run") == args.end(),
+              "the walls switched off for a session");
         // Real gravity is the default weight since October 12, and goes unsaid; the old default is passed.
         options = {};
         check(options.weight == 100, "the weight in a new launcher is not real gravity");
@@ -333,8 +325,13 @@ int main() {
                   options.screenDepth == 3 && options.arcadeWebs && options.bodyHaptics == 25 &&
                   options.screenSize == 2,
               "every value, the last one before a carriage return");
-        // ... and `stand_on_walls` in that line is no longer one of them.
-        check(options.standOnWalls, "the view on walls was taken from a headset line");
+        // ... and `stand_on_walls` in that line is no longer one of them, nor an older session's wall_run.
+        {
+            const auto before = options;
+            check(!headsetSettings("VR settings from the headset: stand_on_walls=1 wall_run=0", options) &&
+                      options == before,
+                  "the walls taken from a headset line");
+        }
         // Webs are always physical since October 15: an older session's physical_webs changes nothing.
         {
             const auto before = options;
@@ -571,14 +568,16 @@ int main() {
         return static_cast<size_t>(found - begin);
     };
     test("a profile holds every setting of the SPIDY VR tab, the tab's own ones by spidy_vr.ini's keys", [&] {
-        // Not VR VIEW (each session starts in VR), CALIBRATE BODY (a request) or RECORDING FOV (the
-        // monitor's, which suits one PC, as the graphics options do).
+        // Not VR VIEW (each session starts in VR), CALIBRATE BODY (a request), HEIGHT (the player's own, as a
+        // calibration is), RECORDING FOV (the monitor's, which suits one PC, as the graphics options do) or
+        // EYE AIM (the headset's: an eye tracker or none).
         for (const auto& row : spidy::vr_settings::rows()) {
             if (row.item == Item::none)
                 continue;
-            const bool leftOut =
-                row.item == Item::view || row.item == Item::calibrate || row.item == Item::recordingFov ||
-                row.item == Item::venomButton; // MilesVR: always the button the web button is not
+            const bool leftOut = row.item == Item::view || row.item == Item::calibrate ||
+                                 row.item == Item::height || row.item == Item::recordingFov ||
+                                 row.item == Item::eyeAim || row.item == Item::recordingSmoothing ||
+                                 row.item == Item::venomButton; // MilesVR: always the button the web button is not
             check(std::count_if(begin, end, [&](const ProfileSetting& s) { return s.item == row.item; }) ==
                       (leftOut ? 0 : 1),
                   row.title);
@@ -588,7 +587,8 @@ int main() {
         size_t lines = 0;
         for (size_t line = 0; line < tabOnly.size(); line = tabOnly.find('\n', line) + 1) {
             const std::string key = tabOnly.substr(line, tabOnly.find('=', line) - line);
-            if (key == "recording_fov")
+            if (key == "recording_fov" || key == "recording_smoothing" || key == "height_cm" ||
+                key == "eye_aim")
                 continue;
             ++lines;
             check(at(key) < std::size(profileSettings) &&
@@ -598,10 +598,25 @@ int main() {
         const auto tabs = [](const ProfileSetting& s) { return s.flag || s.number; };
         check(lines == static_cast<size_t>(std::count_if(begin, end, tabs)),
               "a setting kept with the tab's own that spidy_vr.ini lacks");
-        // Of the launcher's own options, wall running alone: no graphics option, no body calibration.
-        check(std::count_if(begin, end, [](const ProfileSetting& s) { return s.item == Item::none; }) == 1 &&
-                  profileSettings[at("wall_run")].item == Item::none,
-              "the launcher's options in a profile");
+        const auto older = readProfile("controlled_flips=1\nwall_run_torso_angle_deg=80\n"
+                                       "momentum_camera_tilt_deg=-30\nmomentum_step_pace_pct=150\n");
+        check(older && older->count() == 1, "retired wall sliders still appear in imported profiles");
+        PlaySettings upgraded;
+        applyProfile(*older, upgraded);
+        check(upgraded.tab.controlledFlips && !upgraded.options.flips,
+              "controlled mode was not imported independently of the original flip setting");
+        // None of the launcher's own options (no graphics option, no body calibration), and two settings no
+        // more: wall running (until October 25 the one launcher option a profile held) and the wall camera's
+        // distance, at the values Spidy plays with. Only they have no row.
+        check(std::count_if(begin, end, [](const ProfileSetting& s) { return s.item == Item::none; }) == 2 &&
+                  profileSettings[at("wall_run")].retired() && profileSettings[at("wall_run")].low == 1 &&
+                  profileSettings[at("wall_run")].isSwitch() &&
+                  profileSettings[at("wall_distance_cm")].retired() &&
+                  profileSettings[at("wall_distance_cm")].low == spidy::vr_settings::fixedWallDistance &&
+                  std::all_of(begin, end, [](const ProfileSetting& s) {
+                      return s.retired() == (s.item == Item::none) && (!s.retired() || s.low == s.high);
+                  }),
+              "the launcher's options and the settings no more in a profile");
         for (const auto& a : profileSettings)
             check(std::count_if(begin, end, [&](const ProfileSetting& b) { return a.key == b.key; }) == 1,
                   "a key twice");
@@ -615,12 +630,49 @@ int main() {
                 check(spidy::vr_settings::sanitized(v).*s.number == s.high, std::string(s.key).c_str());
             }
     });
-    // Every setting a profile holds away from its default.
+    test("settings no more: an older profile's read at Spidy's one value, and a new one has them", [&] {
+        // 0.4.1's: wall running off, the wall camera 1 m out.
+        const auto read = readProfile("wall_distance_cm=100\nhand_climb=1\nnear_clip_mm=50\nwall_run=0\n"
+                                      "body_haptics=75\n");
+        check(read && read->count() == 5 && read->values[at("wall_run")] == 1 &&
+                  read->values[at("wall_distance_cm")] == spidy::vr_settings::fixedWallDistance,
+              "an old profile rejected, or its settings no more not at Spidy's values");
+        PlaySettings settings;
+        applyProfile(*read, settings);
+        check(settings.tab.handClimb && settings.tab.nearClipMm == 50 && settings.options.bodyHaptics == 75,
+              "an old profile's settings lost");
+        check(profileMatches(*read, settings) && profileChanges(*read, settings).empty(),
+              "an old profile's settings no more kept it from matching");
+        check(readProfile("wall_run=off")->values[at("wall_run")] == 1, "wall running by name");
+        // Written, they say how Spidy plays now, so that an older launcher finds every setting it has.
+        const std::string text = profileText(profileOf(settings), "0.4.1");
+        check(text.find("\nwall_run=1\n") != std::string::npos &&
+                  text.find("\nwall_distance_cm=25\n") != std::string::npos,
+              "a profile without the settings an older launcher has");
+    });
+    test("a profile holds every setting of 0.4.1's, so that it reads whole there", [&] {
+        // Spidy 0.4.1's keys, the first release with profiles: a launcher counts a profile that lacks one of
+        // its settings short ("It has 32 of the 34") and never takes it for the settings in use.
+        constexpr std::string_view released[] = {
+            "arcade_webs",       "trigger_webs",         "aim_markers",       "air_webs",
+            "swing_speed",       "weight",               "wall_run",          "snap_turn",
+            "smooth_turn",       "haptics",              "body_haptics",      "body_haptics_webs",
+            "body_haptics_wind", "body_haptics_combat",  "body_haptics_movement", "screen_size",
+            "screen_depth",      "hud",                  "ui_style",          "near_clip_mm",
+            "flips",             "flip_speed",           "hand_climb",        "wall_distance_cm",
+            "realistic_flips",   "rotation_strength",    "rotation_speed",    "flight_speed_min",
+            "swing_momentum",    "rotation_response_ms", "hand_momentum",     "angular_drag_ms",
+            "hand_speed_min_cm", "air_rotation_brake"};
+        const std::string text = profileText(profileOf(PlaySettings{}), "x");
+        for (const std::string_view key : released)
+            check(text.find("\n" + std::string(key) + "=") != std::string::npos, std::string(key).c_str());
+    });
+    // Every adjustable setting a profile holds away from its default.
     PlaySettings mine;
     {
         auto& o = mine.options;
         o.arcadeWebs = o.triggerWebs = o.flips = o.venomLeftHand = true;
-        o.aimMarkers = o.airWebs = o.wallRun = false;
+        o.aimMarkers = o.airWebs = false;
         o.swingSpeed = 47;
         o.weight = 125;
         o.snapTurn = 45;
@@ -633,11 +685,24 @@ int main() {
         o.flipSpeed = 300;
         auto& t = mine.tab;
         t.hapticWebs = t.hapticWind = t.hapticCombat = t.hapticMovement = false;
-        t.automaticReleaseFlip = t.automaticAirBrake = false;
-        t.handClimb = t.realisticFlips = true;
+        t.automaticReleaseFlip = t.automaticAirBrake = t.automaticCombat = false;
+        t.handClimb = t.realisticFlips = t.seated = t.controlledFlips = true;
+        t.wallRunCameraTilt = false;
         t.uiStyle = 1;
+        t.combatVisuals = false;
+        t.blowSounds = 1;
+        t.webSlingshot = true;
+        t.betterClimbing = true;
+        t.smartAnchor = true;
+        t.elasticWeb = 2;
+        t.softRelease = 3;
+        t.swingAssist = true;
+        t.slingshotSpeed = 200;
+        t.recordingSmoothing = 50;
+        t.twoHandZip = t.ropeSteering = true;
+        t.webRange = 500;
+        t.webSpeed = 2;
         t.nearClipMm = 10;
-        t.wallDistance = 60;
         t.automaticStrength = 75;
         t.automaticSpeed = 360;
         t.automaticMinimumSpeed = 8;
@@ -650,13 +715,19 @@ int main() {
         check(profileText(profileOf(PlaySettings{}, "Spidy's own"), "0.4.1") ==
                   "# Spidy settings profile. To use it, in the Spidy launcher: Profile > Paste a profile, "
                   "or Import a file.\nname=Spidy's own\nspidy=0.4.1\narcade_webs=0\ntrigger_webs=0\n"
-                  "aim_markers=1\nair_webs=1\nswing_speed=32\nweight=100\nvenom_left_hand=0\nwall_run=1\nsnap_turn=30\n"
-                  "smooth_turn=0\nhaptics=100\nbody_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\n"
+                  "aim_markers=1\nair_webs=1\nsmart_anchor=0\nweb_range_m=100\nweb_speed=0\nswing_speed=32\n"
+                  "weight=100\nelastic_web=0\n"
+                  "soft_release=0\nswing_assist=0\nweb_slingshot=0\nslingshot_speed=0\n"
+                  "better_climbing=0\ntwo_hand_zip=0\nrope_steering=0\nwall_run=1\nsnap_turn=30\n"
+                  "smooth_turn=0\nhaptics=100\nblow_sounds=0\n"
+                  "body_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\n"
                   "body_haptics_combat=1\nbody_haptics_movement=1\nscreen_size=1\nscreen_depth=2\nhud=2\n"
-                  "ui_style=0\nnear_clip_mm=20\nflips=0\nflip_speed=180\nhand_climb=0\nwall_distance_cm=40\n"
+                  "ui_style=0\ncombat_visuals=1\nnear_clip_mm=20\nseated=0\nflips=0\ncontrolled_flips=0\nflip_speed=180\nhand_climb=0\n"
+                  "wall_run_camera_tilt=1\n"
+                  "wall_distance_cm=25\n"
                   "realistic_flips=0\nrotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
                   "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\nangular_drag_ms=3000\n"
-                  "hand_speed_min_cm=100\nair_rotation_brake=1\n",
+                  "hand_speed_min_cm=100\nair_rotation_brake=1\nflips_in_combat=1\n",
               "the defaults' text: a key shared once keeps its name");
         const std::string message = profileMessage(profileOf(mine), "0.4.1");
         check(message.rfind("```ini\n# Spidy settings profile.", 0) == 0 && message.ends_with("\n```") &&
@@ -666,7 +737,8 @@ int main() {
     test("a profile's text gives its settings back and leaves graphics and the body as they are", [&] {
         const PlaySettings defaults;
         for (const auto& s : profileSettings)
-            check(profileValue(s, mine) != profileValue(s, defaults), std::string(s.key).c_str());
+            if (!s.retired())
+                check(profileValue(s, mine) != profileValue(s, defaults), std::string(s.key).c_str());
         const auto read = readProfile(profileText(profileOf(mine, "Arcade swing"), "0.4.1"));
         check(read && read->name == "Arcade swing" && read->madeWith == "0.4.1" && read->complete(),
               "read back");
@@ -691,7 +763,7 @@ int main() {
                   !o.stockMonitorView && o.gameDepthOfField && o.gameSharpening && o.eyeHeightMm == 1630 &&
                   o.armLengthMm == 590 && !o.calibrationPrompt,
               "graphics or the calibration changed");
-        check(o.standOnWalls == before.options.standOnWalls &&
+        check(other.tab.standOnWalls == before.tab.standOnWalls &&
                   other.tab.swingSpeed == before.tab.swingSpeed &&
                   other.tab.flatScreen == before.tab.flatScreen,
               "what no profile holds changed");
@@ -721,10 +793,10 @@ int main() {
         const auto ini = readProfile("\xEF\xBB\xBFgame=C:\\Games\\Spider-Man.exe\ngravity_percent=80\n"
                                      "render_scale=150\neye_height_mm=1700\nupdate_check=0\n");
         check(ini && ini->count() == 1 && ini->values[at("weight")] == 80, "launcher.ini: the weight alone");
-        const auto words = readProfile("aim_markers=OFF, air_webs=True; `flips=yes` wall_run=no hud=2.5");
+        const auto words = readProfile("aim_markers=OFF, air_webs=True; `flips=yes` seated=no hud=2.5");
         check(words && words->count() == 4 && words->values[at("aim_markers")] == 0 &&
                   words->values[at("air_webs")] == 1 && words->values[at("flips")] == 1 &&
-                  words->values[at("wall_run")] == 0,
+                  words->values[at("seated")] == 0,
               "switches by name, words apart by commas and code marks; a fraction is no whole number");
         const auto ranges = readProfile("swing_speed=500\nweight=-7\nnear_clip_mm=1\n"
                                         "flip_speed=99999999999\n");
@@ -742,21 +814,23 @@ int main() {
         PlaySettings change;
         change.options.arcadeWebs = true;
         change.options.swingSpeed = 47;
-        change.options.wallRun = false;
         change.options.smoothTurn = 90;
         change.tab.hapticWebs = false;
         change.tab.uiStyle = 1;
         change.tab.nearClipMm = 10;
         change.tab.automaticFalloff = 1000;
+        // ANGULAR DRAG by its row's name, though only the launcher shows that row.
         const std::vector<ProfileChange> expected{
             {"WEB STYLE", "REALISTIC", "ARCADE"},          {"SWING SPEED LIMIT", "32 M/S", "47 M/S"},
-            {"WALL RUNNING", "ON", "OFF"},                 {"SMOOTH TURN", "OFF", "90\xC2\xB0/S"},
-            {"WEB HAPTICS", "ON", "OFF"},                  {"UI STYLE", "COMIC", "TECH"},
-            {"NEAR CLIP", "2 CM", "1 CM"},                 {"ANGULAR DRAG", "VERY SLOW", "QUICK"}};
+            {"SMOOTH TURN", "OFF", "90\xC2\xB0/S"},        {"WEB HAPTICS", "ON", "OFF"},
+            {"UI STYLE", "COMIC", "TECH"},                 {"NEAR CLIP", "2 CM", "1 CM"},
+            {"ANGULAR DRAG", "VERY SLOW", "QUICK"}};
         check(profileChanges(profileOf(change), PlaySettings{}) == expected,
               "the changes, in the tab's order");
-        check(profileChanges(profileOf(mine), PlaySettings{}).size() == std::size(profileSettings),
-              "all of them");
+        const auto adjustable =
+            std::count_if(begin, end, [](const ProfileSetting& s) { return !s.retired(); });
+        check(profileChanges(profileOf(mine), PlaySettings{}).size() == static_cast<size_t>(adjustable),
+              "every setting but the two no more");
     });
     test("a profile's file is its name without what Windows refuses in a file name", [] {
         check(profileFileName("Arcade swing") == "Arcade swing", "a plain name");
@@ -771,6 +845,160 @@ int main() {
         check(profileFileName("Ilya's \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xF0\x9F\x95\xB8") ==
                   "Ilya's \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xF0\x9F\x95\xB8",
               "letters of any language, and a spider web");
+    });
+    test("a path is posted without the Windows user name", [] {
+        check(withoutUserName(R"(Game closed. Session report: C:\Users\lianm\Spidy\reports\r.json)") ==
+                  R"(Game closed. Session report: ~\Spidy\reports\r.json)",
+              "a report's path");
+        // As Python prints a file's name in an error: slashes doubled. A name may have a space.
+        check(withoutUserName(R"([WinError 5] Access is denied: 'c:\\users\\Peter Parker\\Spidy\\x.dll')") ==
+                  R"([WinError 5] Access is denied: '~\\Spidy\\x.dll')",
+              "doubled slashes, lower case, a name of two words");
+        check(withoutUserName(R"(File "D:/Users/mj/Spidy/tools/run_game_vr.py", line 12, in main)") ==
+                  R"(File "~/Spidy/tools/run_game_vr.py", line 12, in main)",
+              "forward slashes, another drive");
+        check(withoutUserName(R"(open "C:\Users\gwen" and C:\Users\miles)") == R"(open "~" and ~)",
+              "a path that ends with the name");
+        const std::string plain = R"(C:\Program Files (x86)\Steam\steamapps and D:\Games\Users\x, C:\Users\)";
+        check(withoutUserName(plain) == plain, "paths with no user name in them");
+        check(withoutUserName("").empty(), "no text");
+    });
+    test("how a session went: its last error, and its last line when that is another", [] {
+        auto end = sessionEnd("Rendering 3072 x 3264 pixels per eye.\nGame closed. Session report: r.json");
+        check(end.error.empty() && end.last == "Game closed. Session report: r.json",
+              "no error; a last line without a line end");
+        end = sessionEnd("Waiting for the headset\r\nOSError: [WinError 299] x\r\nHeadset active\r\n\r\n");
+        check(end.error == "OSError: [WinError 299] x" && end.last == "Headset active", "an error, and more");
+        end = sessionEnd("Traceback (most recent call last):\n  File \"run_game_vr.py\", line 1, in main\n"
+                         "KeyError: 'final'\n");
+        check(end.error == "KeyError: 'final'" && end.last.empty(), "a traceback's last line, said once");
+        // What tools/run_game_vr.py's settle_display prints after the end is not the end.
+        for (const char* notice :
+             {"Restored your game settings (display, frame generation, controllers).",
+              "Your game settings (display, frame generation, controllers) are restored after the game "
+              "closes, the next time Spidy VR starts it (or run tools\\vr_display.py --restore).",
+              "WARNING: Windows refused restoring your game settings ([WinError 5] Access is denied); the "
+              "next time Spidy VR starts the game it tries again (or run tools\\vr_display.py --restore)."}) {
+            end = sessionEnd("VR settings from the headset: hud=1\nGame closed. Session report: r.json\n" +
+                             std::string(notice) + "\n");
+            check(end.error.empty() && end.last == "Game closed. Session report: r.json", notice);
+        }
+        end = sessionEnd("Spidy VR unavailable: no headset.\nRestored your game settings (display, frame "
+                         "generation, controllers).\n");
+        check(end.error == "Spidy VR unavailable: no headset." && end.last.empty(), "an error, the notice");
+        end = sessionEnd(" \r\n\n");
+        check(end.error.empty() && end.last.empty(), "nothing printed");
+    });
+    // What the launcher of a PC with a Quest 3 on Virtual Desktop knows after a session.
+    SupportFacts known;
+    known.version = "0.3.1";
+    known.runtime = "Automatic; installed: Virtual Desktop, SteamVR (Windows' active)";
+    known.headset = "Connected: Oculus Quest3 via Virtual Desktop - 3072x3264 per eye";
+    known.game = "Steam, supported version 4.630.0.0";
+    known.pc = {"NVIDIA GeForce RTX 4080 Laptop GPU", 12282, 32479, 51935, 35020};
+    known.upscaling = "Quality (67%)";
+    known.renderResolution = "100%";
+    known.webButton = "Grip";
+    known.session.last = R"(Game closed. Session report: C:\Users\lianm\Documents\Spidy-0.3.1\reports\)"
+                         "game-vr-20261012-101500.json";
+    known.session.error = "OSError: [WinError 299] Only part of a ReadProcessMemory or WriteProcessMemory "
+                          "request was completed";
+    test("the summary for a help post: a code block, Spidy's version first, then one fact a line", [&] {
+        const std::string summary = supportSummary(known);
+        check(summary.rfind("```\nSpidy 0.3.1 summary\n", 0) == 0, "the first line, which a bot knows it by");
+        check(summary ==
+                  "```\n"
+                  "Spidy 0.3.1 summary\n"
+                  "VR runtime: Automatic; installed: Virtual Desktop, SteamVR (Windows' active)\n"
+                  "Headset: Connected: Oculus Quest3 via Virtual Desktop - 3072x3264 per eye\n"
+                  "Game: Steam, supported version 4.630.0.0\n"
+                  "GPU: NVIDIA GeForce RTX 4080 Laptop GPU, 12.0 GB\n"
+                  "RAM: 31.7 GB\n"
+                  "Commit limit: 50.7 GB (RAM plus page file), 34.2 GB free\n"
+                  "Upscaling: Quality (67%)\n"
+                  "Render resolution: 100%\n"
+                  "Web button: Grip\n"
+                  "Last session: Game closed. Session report: ~\\Documents\\Spidy-0.3.1\\reports\\"
+                  "game-vr-20261012-101500.json\n"
+                  "Last error: OSError: [WinError 299] Only part of a ReadProcessMemory or "
+                  "WriteProcessMemory request was completed\n"
+                  "```",
+              "every fact in its order, the report's path without the user name");
+        check(summary.size() < 700 && std::count(summary.begin(), summary.end(), '\n') == 13, "twelve lines");
+    });
+    test("what the launcher does not know reads unknown in a summary; no session, no lines for one", [&] {
+        SupportFacts facts;
+        facts.version = "0.3.1";
+        check(supportSummary(facts) ==
+                  "```\nSpidy 0.3.1 summary\nVR runtime: unknown\nHeadset: unknown\nGame: unknown\n"
+                  "GPU: unknown\nRAM: unknown\nCommit limit: unknown\nUpscaling: unknown\n"
+                  "Render resolution: unknown\nWeb button: unknown\n```",
+              "nothing known but the version");
+        facts = known;
+        facts.pc.gpuMemoryMb = 0;
+        facts.session.last.clear();
+        std::string summary = supportSummary(facts);
+        check(summary.find("\nGPU: NVIDIA GeForce RTX 4080 Laptop GPU\n") != std::string::npos,
+              "a card whose memory Windows did not say");
+        check(summary.find("Last session:") == std::string::npos &&
+                  summary.find("\nWeb button: Grip\nLast error: OSError: ") != std::string::npos,
+              "an error alone");
+        facts.session = {};
+        facts.headset = "not checked";
+        summary = supportSummary(facts);
+        check(summary.find("\nHeadset: not checked\n") != std::string::npos &&
+                  summary.rfind("\nWeb button: Grip\n```") == summary.size() - 21,
+              "no session yet: the block ends after the options");
+    });
+    test("a summary's values stay on their lines and inside the code block", [&] {
+        SupportFacts facts = known;
+        facts.headset = " Quest\r\n```3`\t";
+        facts.session.error = "Traceback:\n  File \"C:\\Users\\lianm\\Spidy\\tools\\x.py\"";
+        const std::string summary = supportSummary(facts);
+        check(summary.find("\nHeadset: Quest  '''3'\n") != std::string::npos, "line ends and code fences");
+        check(summary.find("\nLast error: Traceback:   File \"~\\Spidy\\tools\\x.py\"\n```") !=
+                  std::string::npos,
+              "an error of two lines, its path without the user name");
+        check(summary.find("lianm") == std::string::npos, "no user name");
+    });
+    test("a summary fits a Discord message: long values are cut, the session's lines first", [&] {
+        // One long line keeps 300 characters.
+        SupportFacts facts = known;
+        facts.session.error = std::string(1000, 'x');
+        std::string summary = supportSummary(facts);
+        check(summary.find("\nLast error: " + std::string(297, 'x') + "...\n```") != std::string::npos,
+              "a long error");
+        // Everything too long: every label still there, within the limit, no character cut in half.
+        const std::string accents = [] {
+            std::string text;
+            for (int i = 0; i < 2000; ++i)
+                text += "\xC3\xA9";
+            return text;
+        }();
+        facts.version = facts.runtime = facts.headset = facts.game = facts.pc.gpu = accents;
+        facts.upscaling = facts.renderResolution = facts.webButton = accents;
+        facts.session = {accents + "x", accents};
+        facts.pc.gpuMemoryMb = facts.pc.ramMb = facts.pc.commitLimitMb = facts.pc.commitFreeMb = ~uint64_t{};
+        summary = supportSummary(facts);
+        check(summary.size() <= kSummaryLimit && summary.size() > kSummaryLimit - 100, "the limit, used");
+        check(std::count(summary.begin(), summary.end(), '\n') == 13 &&
+                  summary.rfind("\n```") == summary.size() - 4,
+              "twelve lines and the block's end");
+        size_t at = 0;
+        for (const char* label :
+             {"```\nSpidy ", "\nVR runtime: ", "\nHeadset: ", "\nGame: ", "\nGPU: ", "\nRAM: ",
+              "\nCommit limit: ", "\nUpscaling: ", "\nRender resolution: ", "\nWeb button: ",
+              "\nLast session: ", "\nLast error: "}) {
+            at = summary.find(label, at);
+            check(at != std::string::npos, label);
+        }
+        for (size_t i = 0; i < summary.size(); ++i)
+            if (summary[i] == '\xC3')
+                check(summary[i + 1] == '\xA9', "half a character");
+            else if (summary[i] == '\xA9')
+                check(i && summary[i - 1] == '\xC3', "the other half");
+        const size_t last = summary.find("\nLast session: ") + 15, error = summary.find("\nLast error: ");
+        check(error - last >= 50 && summary.size() - error >= 50, "room for both of the session's lines");
     });
     std::cout << (total - failed) << '/' << total << " launcher checks passed\n";
     return failed ? 1 : 0;

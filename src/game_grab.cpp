@@ -6,6 +6,7 @@
 // would not fling, is steered through his mover, the game's rays keeping him
 // out of walls and the ground.
 #include "spidy/game_grab.hpp"
+#include "spidy/game_focus.hpp"
 #include "spidy/game_punch.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/native_movement.hpp"
@@ -629,6 +630,7 @@ void strike(Tracked& t, float dt, bool flung, const Vec3& gravity) {
                 if (blow(c.record, t.who.record, feet + Vec3{0, shape(c).lift, 0}, t.paced,
                          strikeBlow(speed, strikes))) {
                     ++struck;
+                    game_focus::earn(hero, game_focus::Kind::botFlungIntoBot);
                     impacts += blow(t.who.record, hero, t.position, t.paced * -1.f, impactBlow(speed * .6f, strikes));
                 }
             }
@@ -661,8 +663,10 @@ void strikeWith(const Tracked& t) {
         if (!game_targets::fighting(base, c) || !game_targets::position(c, feet) ||
             !touchesBot(t.position, shape(t.who).radius, c, feet, strikes))
             continue;
-        struck += blow(c.record, hero, feet + Vec3{0, shape(c).lift, 0}, t.velocity,
-                       strikeBlow(speed, strikes));
+        if (blow(c.record, hero, feet + Vec3{0, shape(c).lift, 0}, t.velocity, strikeBlow(speed, strikes))) {
+            ++struck;
+            game_focus::earn(hero, game_focus::Kind::throwObjectIntoBot);
+        }
     }
     if (struck) {
         AcquireSRWLockExclusive(&output);
@@ -687,6 +691,24 @@ void count(size_t from) {
     }
     InterlockedIncrement64(&SpidyGrabData.sequence);
     ReleaseSRWLockExclusive(&output);
+    // The game's Focus for a yank or a throw of an enemy in the fight, as for
+    // its own (game_focus.hpp), and its bonus for a yank into the air.
+    for (auto i = from; i < events.size(); ++i) {
+        const auto& e = events[i];
+        if (e.kind != GrabEventKind::Yank && e.kind != GrabEventKind::Throw)
+            continue;
+        if (std::none_of(candidates.begin(), candidates.end(), [&](const Candidate& c) {
+                return c.record == e.target && game_targets::fighting(base, c);
+            }))
+            continue;
+        if (e.kind == GrabEventKind::Throw) {
+            game_focus::earn(hero, game_focus::Kind::throwBot);
+        } else {
+            game_focus::earn(hero, game_focus::Kind::yankBot);
+            if (!heroBody.grounded)
+                game_focus::earn(hero, game_focus::Kind::yankBotIntoAirBonus);
+        }
+    }
     // A thug yanked by a player in the air comes to him (snatch()).
     for (auto i = from; i < events.size(); ++i)
         if (events[i].kind == GrabEventKind::Yank && !heroBody.grounded)

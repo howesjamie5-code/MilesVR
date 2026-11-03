@@ -408,7 +408,7 @@ uint32_t native_webs::start(uintptr_t gameBase, uintptr_t heroRecord) {
             heldHooked = MH_CreateHook(handPointsHook, reinterpret_cast<void*>(handPoints),
                                        reinterpret_cast<void**>(&originalHandPoints)) == MH_OK;
         }
-        if (heldHooked && MH_EnableHook(handPointsHook) != MH_OK)
+        if (heldHooked && MH_QueueEnableHook(handPointsHook) != MH_OK)
             heldHooked = false;
         stopping = false;
         AcquireSRWLockExclusive(&statusLock);
@@ -416,9 +416,17 @@ uint32_t native_webs::start(uintptr_t gameBase, uintptr_t heroRecord) {
         current.state = waiting;
         ReleaseSRWLockExclusive(&statusLock);
         enabled = true;
-        if (const auto s = MH_EnableHook(updateHook); s != MH_OK) {
+        // Both under one freeze of the game's threads (stereo_probe.cpp says why).
+        auto s = MH_QueueEnableHook(updateHook);
+        if (s == MH_OK)
+            s = MH_ApplyQueued();
+        if (s != MH_OK) {
             enabled = false;
             result = 6300 + s;
+            MH_QueueDisableHook(updateHook);
+            if (heldHooked)
+                MH_QueueDisableHook(handPointsHook);
+            MH_ApplyQueued();
         }
     } while (false);
     if (result) {
