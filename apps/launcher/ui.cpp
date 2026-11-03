@@ -1710,7 +1710,7 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"Click the left stick", "Slow motion on; click again to end it. The ring on your left wrist shows the "
                                    "focus left"},
           {"A", "Jump. Hold it on the ground for a charged leap: the longer, the higher"},
-          {"B", "Dodge, the way the left stick points"},
+          {"B", "Dodge, the way the left stick points. While swinging too: the game's air dodge"},
           {"Y", "Interact with what you look at (doors, backpacks, any button the game asks for). Hold it to step "
                 "up to the thing",
            "The game would not take that from here - come closer to it and press again"},
@@ -1718,10 +1718,11 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                 "(not the web button) fires it"},
           {"Right stick left / right", "Turn"},
           {"Right stick down (hold)", "Heal: the game's D-pad down"},
-          {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT. At something to throw "
-                                     "(the game marks it LB + RB): throw it - the game's LB + RB"},
-          {"Click the right stick", "Pull a door or a grate: the game's LB + RB. With a venom bar full it lets the "
-                                    "venom go instead (see VENOM POWERS)"},
+          {"Right stick up (hold)", "Zip to a point, enter a vent: the game's LT + RT"},
+          {"Click the right stick in and hold", "At something to throw (the game marks it): throw it - the game's "
+                                                "LB + RB. Away from one, with a venom bar full, it lets the venom go "
+                                                "(see VENOM POWERS)",
+           "Throw - hold the right stick clicked in"},
           {"Right hand to your temple, trigger", "Scan: the game's R3"},
           {"Left hand to your temple, trigger", "Camouflage: the game's D-pad up", "Camouflage"},
           {"Menu, or both sticks held in", "Pause. Settings > MILES VR has the VR settings"},
@@ -1750,7 +1751,10 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"An arrow into the ring", "A called blow: swing from the side the arrow comes from. It hits harder"},
           {"Blue Spider-Sense lines", "Throw a fist at him: the counter breaks his attack"},
           {"Red / yellow lines", "Dodge (B) / jump (A)"},
-          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"}}},
+          {"Yank a thug in the air", "He flies to you and floats there; time slows. Hit him"},
+          {"Lean or step out of a red-line attack", "A dodge by moving: the game's B the way you went. While a "
+                                                    "web carries you it dodges by itself"},
+          {"Both hands at your chest, both triggers", "The game's L3 + R3"}}},
         {"GADGETS",
          {{"Hold X", "The gadget wheel opens in front of that hand. Move the hand to a gadget, let go = equip it"},
           {"The wheel", "Web Shooter top, Remote Mine right, Gravity Well bottom, Holo Drone left (the ones you "
@@ -1774,6 +1778,10 @@ void App::controls(ImVec2 origin, ImVec2 size) {
          {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset. Controllers = Xbox controller. "
                           "Mouse: point at it + pull the trigger. Any button = controller again",
            "Game screen (menus, loading, cutscenes): the controllers work as an Xbox controller; ..."},
+          {"Cutscenes: Immersive (options)", "Cutscenes play around you from the game's camera; look around. "
+                                             "Prompts and subtitles float in front of you. The main menu stays "
+                                             "on the screen",
+           "Cutscene around you (Cutscenes: Immersive): look around with your head; ..."},
           {"Left stick  /  A  /  B", "Move  /  select  /  back"},
           {"Grips", "Switch menu tabs"},
           {"T-pose, hold both triggers", "Body calibration when VR starts (B skips it)",

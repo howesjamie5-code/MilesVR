@@ -6467,8 +6467,9 @@ DWORD WINAPI run(void*) {
                                 // 255 characters, all the message holds.
                                 : "VR active - A jumps (hold: Charge Jump), B dodges, Y interacts, X: game "
                                   "menu (hold: gadget wheel), menu or both sticks held: pause, left stick "
-                                  "click: slow time, trigger at temple: scan (left: camo); right stick: LB+RB "
-                                  "(venom full: let go), down: heal, up: zip; both grips at a throwable: throw");
+                                  "click: slow time, trigger at temple: scan (left: camo); right stick click: throw at a "
+                                  "throwable (venom full: let go), down: heal, up: zip; right hand on left forearm + "
+                                  "trigger: wrist menu");
                 }
             }
             {

@@ -1,6 +1,32 @@
-MilesVR 0.1.79 - TEST BUILD for Marvel's Spider-Man: Miles Morales
+MilesVR 0.1.80 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
+What changed since 0.1.79: THE BIG ONE
+--------------------------------------
+- HOLO WRIST MENU replaces the phone (from SM2VR): right hand on your LEFT
+  forearm + right trigger (or F8). Pages: VR SETTINGS, GRAPHICS, MUSIC,
+  GEAR, HOLOGRAM. It skips a bad frame instead of switching itself off.
+- FNSM APP on the wrist: GEAR > FNSM APP, over your left hand, tap it with
+  your right index finger, B closes it. The story's FNSM moment asks for it.
+- THROW = click the right stick in and hold at a throwable (both grips no
+  longer throw).
+- AIR DODGE: B while swinging is the game's dodge.
+- 3D CUTSCENES: launcher Cutscenes = Immersive puts cutscenes around you,
+  prompts and subtitles in front of you. The main menu stays on the screen.
+- SpidyVR 0.5.0, 0.6.0 and 0.7.0: web range/speed, smart anchor, elastic
+  web, soft release, swing assist, slingshot speed, two hand web zip, rope
+  steering, better climbing, dodge by moving, webs dodge for you, dives,
+  the game's own punch sounds, combat visuals off, suit power gesture,
+  height + seated, recording FOV up to 160 + smoothing, eye aim, sharper
+  city while swinging.
+- PICTURE / FPS (from SM2VR): eye FXAA, eye history, sharpening (wrist
+  GRAPHICS), sharper distant textures, FPS high/low/avg, AUTO TUNE (MAX FPS
+  / BALANCED / BEST LOOKS), launcher "Game's blur and grain".
+What to try: open the wrist and its pages; FNSM app; throw a trash can;
+B while swinging; a cutscene with Immersive on; the new MILES VR rows.
+
+Earlier: 0.1.79
+---------------
 What changed since 0.1.78: VENOM PUNCH NO LONGER TURNS INTO A DASH
 --------------------------------------------------
 After loading a save, a venom punch could come out as the game's Venom

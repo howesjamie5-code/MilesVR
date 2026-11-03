@@ -26,7 +26,7 @@ From SpidyVR:
 - Grab props and enemies with webs and throw them.
 - Fist fighting: punches, web strikes that fly you to an enemy, uppercuts, slams, combos,
   called blows, finishers, slow motion, Spider-Sense warnings and counters.
-- The phone from your back pocket, with a music player for your own songs.
+- A holo wrist menu (right hand on your left forearm + trigger): settings, graphics with auto tune, a music player for your own songs, your gadgets and the FNSM app.
 - Walk, run, jump and dodge with the controllers.
 
 New for Miles:
@@ -58,7 +58,7 @@ Keep the game window in front on the desktop: the game pauses behind other windo
 From 0.1.37 the launcher checks this page's releases as it starts and offers each new MilesVR
 with an **Update now** button: your settings, reports and songs stay.
 
-For the phone's music, put mp3, wav, wma, m4a or aac files in the `Music` folder next to
+For the wrist menu's music, put mp3, wav, wma, m4a or aac files in the `Music` folder next to
 `MilesVR Launcher.exe`.
 
 ## Community
@@ -89,7 +89,9 @@ The launcher's **Controls** tab lists every control. The basics:
 | Interact | **Y** |
 | Scan | **Right** hand to your temple, pull its **trigger** |
 | Camouflage | **Left** hand to your temple, pull its **trigger** |
-| Phone | Reach to your back pocket, squeeze the grip, bring it up in front of you; **B** puts it away |
+| Wrist menu | Right hand on your **left forearm** + right trigger (or F8); point and pull the trigger to press |
+| Throw | At a throwable, click the **right stick** in and hold |
+| Air dodge | **B** while swinging |
 | Pause | **Menu**, or hold both sticks in |
 
 ### Venom powers
