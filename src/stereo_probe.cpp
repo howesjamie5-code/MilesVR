@@ -693,8 +693,18 @@ FrameHead commandHead() {
     head.command = command;
     head.controlled = head.command.enabled && GetTickCount64() < commandDeadline;
     ReleaseSRWLockShared(&commandLock);
-    if (enabled && head.controlled && head.command.enabled == 1 && !retiring() &&
-        native_eyes::headView(head.command, head.pose, head.lens)) {
+    // A scene around the viewer (4, Cutscenes: Immersive, from SM2VR 0.0.107): its eyes on the game's
+    // camera now, so the HUD's panel, its prompts (a QTE's) and the game's subtitles follow the head as
+    // in play.
+    auto placed = head.command;
+    Descriptor main{};
+    const bool around = head.command.enabled == 4 && read(pointer(base + 0x83ea910), &main, sizeof(main)) &&
+                        native_view::valid(main);
+    if (around)
+        for (auto& eye : placed.eyes)
+            eye.world = native_eyes::onCamera(main.pose(), eye.world);
+    if (enabled && head.controlled && (head.command.enabled == 1 || around) && !retiring() &&
+        native_eyes::headView(placed, head.pose, head.lens)) {
         head.viewed = true;
         Quat relative{};
         head.followed = native_hud::followed(head.command.serial, relative, &head.pinned);
@@ -1303,7 +1313,7 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
     stockHalfWidth = (stock.values[0x404 / 4] - stock.values[0x400 / 4]) / 2;
     if (!(config.createViews & 8) || stopRequested || GetTickCount64() >= deadline || live.load() != 2)
         return false;
-    if (!head.controlled || head.command.enabled != 1)
+    if (!head.controlled || (head.command.enabled != 1 && head.command.enabled != 4))
         return false;
     const auto& pose = head.pose;
     const auto lens = viewLens(head.lens);
@@ -1643,8 +1653,7 @@ void placeEyes() {
     // that screen (placeScreenHud, earlier in the frame): without the panel
     // (a pause menu: the game places none) the movie stays in the game's own
     // frame, which the headset then shows.
-    // A scene around the viewer (4) leaves the movie in the game's own frame.
-    if (render && enabled && controlled && (config.createViews & 4) && desired.enabled != 4 &&
+    if (render && enabled && controlled && (config.createViews & 4) &&
         (desired.enabled != 3 || screenHudFrame == frameIndex))
         native_hud::eyesShown(desired.enabled == 3);
     latchedHide = latchedImmersive && !native_body::drawn();
@@ -2642,7 +2651,7 @@ uint32_t spidy::native_hud::eyes(Head& out) {
     const auto& head = earlyHead();
     if (!head.controlled)
         return 0;
-    if (head.command.enabled >= 2)
+    if (head.command.enabled == 2 || head.command.enabled == 3)
         return 2;
     if (!head.viewed)
         return 0;

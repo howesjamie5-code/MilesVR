@@ -5204,6 +5204,12 @@ DWORD WINAPI run(void*) {
                             eyes.eyes[i].fov[2] = f.down;
                             eyes.eyes[i].fov[3] = f.up;
                         }
+                        // The HUD's panel (the scene's prompts, a QTE's, and its subtitles) follows the
+                        // head as in play (SM2VR 0.0.107).
+                        {
+                            const Quat hudFacing = hudFollow.update(frame.head.orientation, frame.seconds);
+                            native_hud::follow(eyes.serial, frame.head.orientation.conjugate() * hudFacing);
+                        }
                         NativeEyeFrame saved;
                         saved.serial = eyes.serial;
                         saved.motion.predictedDisplayTime = frame.predictedDisplayTime;
