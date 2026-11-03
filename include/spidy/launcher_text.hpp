@@ -520,6 +520,9 @@ struct SessionOptions {
     // The game's own Depth of Field and Sharpness settings stay as they are in VR; off (the default), a
     // session turns the first off and the second to its lowest, and puts both back when the game closes.
     bool gameDepthOfField = false, gameSharpening = false;
+    // MilesVR 0.1.80 (SM2VR's COMFORT): the game's film grain, motion blur, colour fringes and vignette stay
+    // as they are in VR; off (the default) a session turns them off and puts them back when the game closes.
+    bool gameEffects = false;
     // Your T-pose calibration in the headset (body_calibration.hpp): the eye height and arm length Spider-Man's
     // body is sized to, millimetres. Both 0: none yet, and VR asks for one at the first gameplay unless
     // calibrationPrompt is off (you skipped it).
@@ -583,6 +586,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--game-depth-of-field");
     if (options.gameSharpening)
         args.emplace_back(L"--game-sharpening");
+    if (options.gameEffects)
+        args.emplace_back(L"--game-effects");
     if (calibrated(options)) {
         args.emplace_back(L"--eye-height");
         args.emplace_back(std::to_wstring(options.eyeHeightMm));

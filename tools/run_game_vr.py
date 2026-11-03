@@ -2230,6 +2230,9 @@ def main():
                         'headset the blur is not where you look)')
     p.add_argument('--game-sharpening', action='store_true',
                    help="Keep the game's own Sharpness setting; without it a session sets it to its lowest")
+    p.add_argument('--game-effects', action='store_true',
+                   help="Keep the game's motion blur, film grain, colour fringes and vignette; without it a "
+                        'session turns them off (they smear in a headset)')
     p.add_argument('--no-stand-on-walls', action='store_true',
                    help='Walking a wall or stopped on it, your view stays upright beside it instead of turning so '
                         'that the wall is your floor')
@@ -2380,7 +2383,8 @@ def session(a, startup):
 
     def prepare_display():
         try:
-            values = vr_display.prepare_launch(small=not a.full_desktop_view, keep=picture_kept(a))
+            values = vr_display.prepare_launch(small=not a.full_desktop_view, keep=picture_kept(a),
+                                               comfort=not getattr(a, 'game_effects', False))
         except OSError as error:
             # VR runs without them: the window only saves GPU time, and the two settings matter where
             # frame generation is on or under SteamVR.

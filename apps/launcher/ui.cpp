@@ -1410,6 +1410,10 @@ void App::optionsCard(ImVec2 size) {
     option("Game's sharpening",
            "Off: VR sets the game's Sharpness to its lowest while it runs. On: your game setting stays.", S(40),
            [&] { changed |= toggle("##sharpen", &o.gameSharpening); });
+    option("Game's blur and grain",
+           "Off: VR turns the game's motion blur, film grain, colour fringes and vignette off while it runs "
+           "(they smear in a headset). On: your game settings stay.",
+           S(40), [&] { changed |= toggle("##effects", &o.gameEffects); });
     option("Normal camera on the monitor", "Off: the monitor shows your left eye.", S(40),
            [&] { changed |= toggle("##stock", &o.stockMonitorView); });
     option("Monitor frame rate",

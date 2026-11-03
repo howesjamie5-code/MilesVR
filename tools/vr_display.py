@@ -79,8 +79,13 @@ ASPECT = 16/9
 #   Desktop and SteamVR alike, on every preset; the one session played here with Reflex on (October 10,
 #   Low Latency, without Boost) predates the held presents. Whether Reflex is the cause is not known.
 PICTURE = dict(depth_of_field='DOFQuality', sharpening='Sharpness')
+# - COMFORT (MilesVR 0.1.80, from SM2VR 0.0.100): film grain, motion blur, colour fringes and the
+#   vignette off, which smear or shimmer in a headset (the names are the same in Miles Morales's key).
+#   comfort=False in prepare_session leaves them as the player set them.
+COMFORT_OFF = ('FilmGrainStrength', 'MotionBlurScale', 'ChromaticAberration', 'Vignette')
 SESSION = ((KEY, dict(DLSSG=0, FrameGen=0, VSync=0, DOFQuality=0, Sharpness=1, RTReflections=0,
-                      ForcedAspectRatio=0, ReflexMode=0), False),
+                      ForcedAspectRatio=0, ReflexMode=0, FilmGrainStrength=0, MotionBlurScale=0,
+                      ChromaticAberration=0, Vignette=0), False),
            (INPUT_KEY, dict(EnableWindowsGamingInput=0), True))
 
 
@@ -220,12 +225,13 @@ def shrink(registry=None, backup=BACKUP, screen=None):
     return wanted
 
 
-def prepare_session(registry=None, backup=BACKUP, keep=()):
+def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True):
     """Turn off what SESSION lists, adding the user's values to the backup (made here if the window
     keeps the user's settings). keep: PICTURE names ('depth_of_field', 'sharpening') to leave as the
-    player has them. Returns the values written."""
+    player has them. comfort False leaves blur, grain, colour fringes and the vignette alone and does
+    not record them as replaced. Returns the values written."""
     registry = registry or Registry()
-    kept = {PICTURE[name] for name in keep}
+    kept = {PICTURE[name] for name in keep} | (set() if comfort else set(COMFORT_OFF))
     saved = _load(backup) or dict(key=KEY, values={})
     if 'session' not in saved:
         saved['session'] = []
@@ -237,14 +243,14 @@ def prepare_session(registry=None, backup=BACKUP, keep=()):
     before = {entry['key']: entry['values'] for entry in saved['session']}
     written = {}
     for key, wanted, _ in SESSION:
-        values = {name: value for name, value in wanted.items() if name in before.get(key, {})}
+        values = {name: value for name, value in wanted.items() if name in before.get(key, {}) and name not in kept}
         if values:
             registry.write(values, key)
             written.update(values)
     return written
 
 
-def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=()):
+def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(), comfort=True):
     """Called with the game closed, just before it starts. A previous session's values are restored
     first, so a backup always holds the user's own settings. keep: as prepare_session's. Returns the
     window's values written (None when the window keeps the user's settings).
@@ -255,7 +261,7 @@ def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(
     restore(registry, backup)
     try:
         window = shrink(registry, backup, screen) if small else None
-        prepare_session(registry, backup, keep)
+        prepare_session(registry, backup, keep, comfort)
     except OSError:
         try:
             restore(registry, backup)

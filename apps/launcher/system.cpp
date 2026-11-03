@@ -551,6 +551,7 @@ Settings loadSettings() {
         // longer read: the swing's walls and the view on them are always on.
         else if (key == "game_depth_of_field") o.gameDepthOfField = number() != 0;
         else if (key == "game_sharpening") o.gameSharpening = number() != 0;
+        else if (key == "game_effects") o.gameEffects = number() != 0;
         // physical_webs (before October 15) is no longer read: webs are always physical.
         // eye_size (a square size, before October 8) is no longer read: 2048 x 2048 rendered one player's game
         // below the 2496 x 2688 their headset asked for, and it looked blurry.
@@ -610,9 +611,10 @@ void saveSettings(const Settings& settings) {
     file << "game=" << narrow(settings.gameExe) << "\nxr_runtime=" << narrow(settings.runtime)
          << "\nsmall_window=" << o.smallWindow << "\nstock_monitor_view=" << o.stockMonitorView
          << "\naim_markers=" << o.aimMarkers << "\nair_webs=" << o.airWebs << "\nflips=" << o.flips
-         << "\ntrigger_webs=" << o.triggerWebs << "\narcade_webs=" << o.arcadeWebs
+         << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand
+         << "\nvenom_trigger=" << o.venomTrigger << "\narcade_webs=" << o.arcadeWebs
          << "\ngame_depth_of_field=" << o.gameDepthOfField
-         << "\ngame_sharpening=" << o.gameSharpening
+         << "\ngame_sharpening=" << o.gameSharpening << "\ngame_effects=" << o.gameEffects
          << "\nrender_scale=" << o.renderScale << "\nupscale=" << o.upscale
          << "\nmonitor_rate=" << o.monitorRate
          << "\nswing_speed=" << o.swingSpeed << "\ngravity_percent=" << o.weight << "\nsnap_turn=" << o.snapTurn
