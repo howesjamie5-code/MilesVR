@@ -86,7 +86,7 @@ class DisplayPermissionTests(unittest.TestCase):
                     with self.assertRaises(Prepared):
                         run_game_vr.session(args, startup)
                 prepare.assert_called_once_with(small=not full_desktop,
-                                                keep=('sharpening',) if full_desktop else ())
+                                                keep=('sharpening',) if full_desktop else (), comfort=True)
                 self.assertIn('Access is denied', startup.fields['game_settings_refused'])
                 self.assertIn('WARNING:', shown.getvalue())
                 self.assertIn('frame generation off', shown.getvalue())
