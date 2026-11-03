@@ -1402,6 +1402,10 @@ DWORD WINAPI run(void*) {
         // new player (a load or a respawn); once around, it stays through gaps shorter than sceneGapSeconds.
         float sceneSteady{}, sceneGap{};
         uint64_t scenePlayerAt{};
+        // And only once VR play has been seen since the last new player (the user: "3D cutscenes in the main
+        // menu are glitchy ... disable them for the main menu and use flat screen instead"): the title screen's
+        // scene, which never plays, stays on the game screen.
+        bool scenePlaySeen{};
         static constexpr float sceneSteadySeconds = 1.f, sceneGapSeconds = .4f;
         static constexpr uint64_t sceneAfterPlayerMs = 6000;
         Pose sceneStart{};
@@ -1877,6 +1881,7 @@ DWORD WINAPI run(void*) {
             if (!player.hero)
                 follow({});
             scenePlayerAt = GetTickCount64();
+            scenePlaySeen = false;
             native_appearance::setPlayerRecord(player.record);
             native_body::retarget(player.record);
             if (websStarted)
@@ -2819,8 +2824,9 @@ DWORD WINAPI run(void*) {
                     // Cutscenes: Immersive puts such a scene around the viewer
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
+                    scenePlaySeen = scenePlaySeen || (vrPlay && player.hero);
                     const bool aroundWanted = (config.options & 0x2000000) && screen && !flatScreen &&
-                                              player.hero && bridgeRunning && timeRuns &&
+                                              player.hero && bridgeRunning && timeRuns && scenePlaySeen &&
                                               GetTickCount64() - scenePlayerAt > sceneAfterPlayerMs;
                     {
                         const float dt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
