@@ -933,6 +933,9 @@ DWORD WINAPI run(void*) {
         auto_tune::Check tuneCheck;
         std::array<std::string, 3> tuneLines;
         bool wristApplyStarted{}, wristHudFault{}, wristMenuFault{}, wristKeyHeld{};
+        uint64_t wristUnfitFrames{}; // wrist frames left out as unfit (the first is reported)
+        uint64_t wristFaultMs{}; // when the wrist last failed
+        int wristRetries{};
         wrist_hud::Settings wristShown;
         uint32_t wristOff{};
         wrist_hud::FpsMeter wristFps;
@@ -1393,6 +1396,14 @@ DWORD WINAPI run(void*) {
         // viewer this frame. sceneStart: the level head when it began, which
         // is the game's camera from then on.
         bool sceneAround{};
+        // MilesVR 0.1.80 (the user: at a save's load "the camera was all glitchy and spammy" with 3D
+        // cutscenes): the load flipped the game screen and the scene around you back and forth. A scene
+        // goes around you only once it has stood sceneSteadySeconds, and not within sceneAfterPlayerMs of a
+        // new player (a load or a respawn); once around, it stays through gaps shorter than sceneGapSeconds.
+        float sceneSteady{}, sceneGap{};
+        uint64_t scenePlayerAt{};
+        static constexpr float sceneSteadySeconds = 1.f, sceneGapSeconds = .4f;
+        static constexpr uint64_t sceneAfterPlayerMs = 6000;
         Pose sceneStart{};
         uint32_t sceneCommands{};
         bool flatScreen{};
@@ -1865,6 +1876,7 @@ DWORD WINAPI run(void*) {
             player = follow(next) ? next : game_player::Player{};
             if (!player.hero)
                 follow({});
+            scenePlayerAt = GetTickCount64();
             native_appearance::setPlayerRecord(player.record);
             native_body::retarget(player.record);
             if (websStarted)
@@ -2111,6 +2123,13 @@ DWORD WINAPI run(void*) {
                     // menu's alone - no web, reel, scan or anything of the game's - until
                     // the trigger is let go; so is a pull begun on the panel.
                     uint32_t hudTriggers{};
+                    // A wrist that failed comes back 5 s later, up to 10 times a session.
+                    if ((wristHudFault || wristMenuFault) && wristRetries < 10 &&
+                        GetTickCount64() - wristFaultMs > 5000) {
+                        wristHudFault = wristMenuFault = false;
+                        ++wristRetries;
+                        message(3, 0, "Wrist menu back");
+                    }
                     if (!wristHudFault) {
                         const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
                         const bool hudPlay = gesturesPlay && !padLayer.latched() && !gadgetWheel.open();
@@ -2405,8 +2424,9 @@ DWORD WINAPI run(void*) {
                                     hudTriggers |= 1u << pointHand;
                             } catch (...) {
                                 wristMenuFault = true;
+                                wristFaultMs = GetTickCount64();
                                 wristPointer = {};
-                                message(3, 0, "Wrist menu controls failed and are off this session; everything "
+                                message(3, 0, "Wrist menu controls failed and are off for 5 s; everything "
                                               "else carries on");
                             }
                         }
@@ -2799,8 +2819,16 @@ DWORD WINAPI run(void*) {
                     // Cutscenes: Immersive puts such a scene around the viewer
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
-                    const bool aroundNow = (config.options & 0x2000000) && screen && !flatScreen &&
-                                           player.hero && bridgeRunning && timeRuns;
+                    const bool aroundWanted = (config.options & 0x2000000) && screen && !flatScreen &&
+                                              player.hero && bridgeRunning && timeRuns &&
+                                              GetTickCount64() - scenePlayerAt > sceneAfterPlayerMs;
+                    {
+                        const float dt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
+                        sceneSteady = aroundWanted ? sceneSteady + dt : 0.f;
+                        sceneGap = aroundWanted ? 0.f : sceneGap + dt;
+                    }
+                    const bool aroundNow = sceneAround ? (aroundWanted || (screen && sceneGap < sceneGapSeconds))
+                                                       : sceneSteady >= sceneSteadySeconds;
                     if (aroundNow && !sceneAround)
                         sceneStart = native_eyes::levelHead(frame.head);
                     sceneAround = aroundNow;
@@ -6209,19 +6237,43 @@ DWORD WINAPI run(void*) {
                                     }
                                 }
                                 wrist_hud::appendWristHud(translucent, hud, viewer, pixelAngle);
-                                if (!wrist_hud::sane(translucent, from, hud.emitter, 1.5f))
-                                    throw std::runtime_error("unfit vertices");
+                                // A frame that drew unfit (a tracking glitch: a head or hand pose not finite,
+                                // or a jump) is left out, that frame only. Until 0.0.128 one such frame turned
+                                // the wrist off for the session (the player: "it closes and can't be reopened").
+                                if (!wrist_hud::sane(translucent, from, hud.emitter, 1.5f)) {
+                                    if (!wristUnfitFrames++) {
+                                        float farthest = 0;
+                                        bool finiteAll = true;
+                                        for (size_t i = from; i < translucent.size(); ++i) {
+                                            const auto& x = translucent[i];
+                                            finiteAll = finiteAll && std::isfinite(x.position.x) &&
+                                                        std::isfinite(x.position.y) && std::isfinite(x.position.z);
+                                            if (std::isfinite(x.position.x))
+                                                farthest = std::max(farthest, length(x.position - hud.emitter));
+                                        }
+                                        char text[200];
+                                        std::snprintf(text, sizeof text,
+                                                      "Wrist menu: a frame drawn unfit was left out (%zu vertices, "
+                                                      "%s, farthest %.2f m); it carries on",
+                                                      translucent.size() - from, finiteAll ? "finite" : "not finite",
+                                                      static_cast<double>(farthest));
+                                        message(3, 0, text);
+                                    }
+                                    translucent.resize(from);
+                                }
                             } catch (const std::exception& e) {
                                 // SM2VR 0.0.56: with its reason (0.0.55 failed with none to read).
                                 translucent.resize(from);
                                 wristHudFault = true;
+                                wristFaultMs = GetTickCount64();
                                 message(3, 0, (std::string("Wrist menu failed (") + e.what() +
-                                               ") and is off this session; everything else carries on")
+                                               ") and is off for 5 s; everything else carries on")
                                                   .c_str());
                             } catch (...) {
                                 translucent.resize(from);
                                 wristHudFault = true;
-                                message(3, 0, "Wrist menu failed (unknown error) and is off this session; everything "
+                                wristFaultMs = GetTickCount64();
+                                message(3, 0, "Wrist menu failed (unknown error) and is off for 5 s; everything "
                                               "else carries on");
                             }
                         }

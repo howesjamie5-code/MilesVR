@@ -22034,6 +22034,41 @@ int main() {
             check(sane(out, 0, v.emitter, 1.5f), pageName(page));
         }
     });
+    test("wrist menu: every page stays fit to draw at every size, height, scroll and with long text", [] {
+        using namespace wrist_hud;
+        for (int page = 0; page < pages; ++page)
+            for (const float text : {.75f, 1.f, 1.75f})
+                for (const float scale : {.5f, 1.f, 2.f})
+                    for (const float height : {0.f, 9.f, 25.f})
+                        for (const float scroll : {0.f, 1.f}) {
+                            View v;
+                            v.emitter = {0, 1, -.4f};
+                            v.page = page;
+                            v.scale = scale;
+                            v.heightCm = height;
+                            v.textScale = text;
+                            v.scroll = scroll * maxScroll(page, text);
+                            v.note = std::string(200, 'W');
+                            v.music.tracks = 3;
+                            v.music.song = std::string(300, 'M');
+                            v.tune = {std::string(120, 'X'), std::string(120, 'Y'), std::string(120, 'Z')};
+                            v.tuneMode = 1;
+                            v.fps = 55;
+                            v.refreshHz = 90;
+                            v.pointing = true;
+                            v.tip = v.emitter + Vec3{.1f, .2f, .1f};
+                            std::vector<Vertex> out;
+                            appendWristHud(out, v, {0, 1.6f, 0}, .001f);
+                            float far = 0;
+                            for (const auto& x : out)
+                                far = std::max(far, length(x.position - v.emitter));
+                            if (!sane(out, 0, v.emitter, 1.5f))
+                                throw std::runtime_error(std::string(pageName(page)) + " text " + std::to_string(text) +
+                                                         " scale " + std::to_string(scale) + " height " +
+                                                         std::to_string(height) + ": " + std::to_string(out.size()) +
+                                                         " vertices, farthest " + std::to_string(far) + " m");
+                        }
+    });
     test("VR settings only the tab offers: kept as key=value lines, read back sanitized, the rest left", [] {
         using namespace vr_settings;
         const Values defaults;
