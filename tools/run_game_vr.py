@@ -24,7 +24,8 @@ from bridge_game import (ROOT, HOOKS, prepare, snapshot as bridge_snapshot, Game
 from inspect_game import PE, EXPECTED_VERSION
 from observe_game import call_remote, call_with_payload, modules
 from probe_stereo_gpu import MAX_EYE_SIZE, discover_queue, snapshot as gpu_snapshot, save_eye_images
-from probe_stereo import frame_snapshot, render_memory_snapshot, snapshot as stereo_snapshot
+from probe_stereo import (frame_snapshot, render_memory_snapshot, snapshot as stereo_snapshot, encode_mip_bias,
+                          mip_bias_snapshot)
 from probe_native_rays import snapshot as ray_snapshot
 from probe_game_swing import snapshot as swing_snapshot
 from probe_native_motion import snapshot as motion_snapshot
@@ -50,7 +51,7 @@ GAME_HOOKS = (*HOOKS, 0x338e1c0, 0x24cc6b0, 0x24cbda0, 0xc63ab0, 0x24abfe0,
 RENDER_SCALES = (50, 200)
 # Upscaling: the percent of the eye's size, per side, the eyes' scene is rendered at, and its default
 # (spidy::minimumEyeUpscale, maximumEyeUpscale and defaultEyeUpscale).
-UPSCALES, DEFAULT_UPSCALE = (50, 100), 67
+UPSCALES, DEFAULT_UPSCALE = (50, 100), 100
 # How often the game's window gets the left eye in immersive VR: presents a second, 0 for every frame
 # (include/spidy/monitor_rate.hpp).
 MONITOR_RATES, DEFAULT_MONITOR_RATE = (0, 240), 30
@@ -67,6 +68,13 @@ GAME_NAME = "Marvel's Spider-Man Miles Morales"  # its folder in Documents, and 
 GAME_MEMORY_FIELDS = {'Working set': 'working_set_mb', 'Page file': 'commit_mb', 'Video Usage': 'video_usage_mb',
                       'Video Budget': 'video_budget_mb', 'Tex Usage': 'texture_usage_mb',
                       'Tex Budget': 'texture_budget_mb', 'Demoted': 'demoted_mb', 'fps': 'fps'}
+
+
+def flat_fallback_line(reason):
+    """The one console line said whenever VR ends on an error and the game goes back to its flat screen (from the
+    SM2 port's Update 24.1)."""
+    reason = (reason or '').strip() or 'no reason given'
+    return f'VR STOPPED - the game is back on its flat screen. Reason: {reason}'
 
 
 def documents_folder():
@@ -1626,22 +1634,156 @@ def save_eye_snapshot(game, address, shot, folder, name, view=544, crop=512):
     return files
 
 
+HISTORY_BYTES = 64
+HISTORY_FAULTS = {1: 'root signature', 2: 'shader', 3: 'pipeline state', 4: 'descriptor heaps', 5: 'pictures'}
+
+
+def history_snapshot(game, address):
+    """The eye history (live.txt history): its percent at the end, pairs blended and started again, pairs
+    without a noted view, the GPU milliseconds a measured pass took, and why it could not be built."""
+    raw = game.read(address, HISTORY_BYTES)
+    if len(raw) != HISTORY_BYTES or struct.unpack_from('<3I', raw) != (0x53454844, 1, HISTORY_BYTES):
+        return None
+    percent, fault = struct.unpack_from('<2I', raw, 12)
+    blended, restarted, unviewed = struct.unpack_from('<3Q', raw, 24)
+    gpu_ms, timed = struct.unpack_from('<dQ', raw, 48)
+    return dict(percent=percent, fault=HISTORY_FAULTS.get(fault, fault) if fault else None, blended_pairs=blended,
+                restarted_pairs=restarted, unviewed_pairs=unviewed,
+                gpu_ms_mean=round(gpu_ms/timed, 3) if timed else None, measured=timed)
+
+
+def history_line(h):
+    """The console's word on the eye history (history_snapshot)."""
+    if h['fault']:
+        return f"Eye history: could not be built ({h['fault']}); the eyes were shown without it."
+    if not h['blended_pairs'] and not h['restarted_pairs']:
+        return 'Eye history: off all session (the wrist menu\'s GRAPHICS page turns it on).'
+    gpu = f", {h['gpu_ms_mean']:.2f} ms GPU a pair" if h['gpu_ms_mean'] is not None else ''
+    return (f"Eye history: {h['blended_pairs']} pairs blended, {h['restarted_pairs']} started again "
+            f"(a cut or fast turn){gpu}; {h['percent']}% at the end.")
+
+
+def eye_aa_line(aa, asked):
+    """The console's word on the eye anti-aliasing (timing_snapshot's eye_aa)."""
+    if aa['fault']:
+        return (f"Eye anti-aliasing: could not run ({aa['fault_reason']}); the eyes were shown as the game drew "
+                'them.')
+    if not aa['smoothed_pairs']:
+        return 'Eye anti-aliasing: off.' if asked == 'off' else 'Eye anti-aliasing: no eye pair was smoothed.'
+    cost = (f"{aa['gpu_ms_mean']:.2f} ms of GPU time per pair, both eyes (at most {aa['gpu_ms_max']:.2f})"
+            if aa['measured'] else 'GPU time not measured')
+    if aa['mode'] == 'downsample':
+        return (f"Eye supersampling: {aa['smoothed_pairs']} eye pairs filtered down to the headset's size "
+                f"(Mitchell-Netravali, linear light; no FXAA), {cost}.")
+    return f"Eye anti-aliasing: FXAA on {aa['smoothed_pairs']} eye pairs, {cost}; now {aa['mode']}."
+
+
+EYE_AA_MODES={0:'off',1:'fxaa',2:'downsample'}
+EYE_AA_FAULTS={1:'root signature',2:'shader compile (d3dcompiler_47)',3:'pipeline',4:'descriptor heaps',
+               5:'eye image not readable by shaders',6:'resources'}
+# Update 16: why the headset sharpening switched itself off (native_eye_gpu.hpp eyeSharpenFault).
+SHARPEN_FAULTS={1:'root signature',2:'shader compile (d3dcompiler_47)',3:'pipeline',4:'descriptor heaps',
+                5:'eye image not readable by shaders',6:'headset image not drawable'}
+
+
+def sharpen_line(sharp):
+    """One console line on the headset sharpening (Update 16)."""
+    if sharp['fault']:
+        return (f"Headset sharpening: switched off ({sharp['fault_reason']}); the eyes were copied unsharpened, "
+                f"{sharp['sharpened_pairs']} pairs sharpened before.")
+    if not sharp['percent']:
+        return 'Headset sharpening: off (no pass).'
+    cost = (f"GPU {sharp['gpu_ms_mean']:.2f} ms mean, {sharp['gpu_ms_max']:.2f} max over {sharp['measured']} pairs"
+            if sharp['measured'] else 'GPU time not measured')
+    return f"Headset sharpening: {sharp['percent']}%, {sharp['sharpened_pairs']} pairs sharpened; {cost}."
+
+
 def timing_snapshot(game, address):
-    names=('frame','wait_frame','tracking','prepare','acquire','copy_wait','hand_overlay','release','end_frame','display_period')
+    """The XR loop's stage times (XrTimingData, xr_timing.hpp). Version 2 adds copy_gpu (the headset copy's GPU
+    finish after its submission) and pair_to_copy (after the game submitted the eye pair it copied); version 3
+    the eye AA pass, version 4 (Update 16) the headset sharpening pass."""
+    names=('frame','wait_frame','tracking','prepare','acquire','copy_wait','hand_overlay','release','end_frame',
+           'display_period','copy_gpu','pair_to_copy','eye_aa_gpu')
     for _ in range(8):
-        raw=game.read(address,344)
-        if len(raw)!=344:
+        raw=game.read(address,504)
+        if len(raw)<24:
             return None
-        if struct.unpack_from('<3I',raw)!=(0x5358544d,1,344):
+        layout=struct.unpack_from('<3I',raw)
+        if layout not in ((0x5358544d,1,344),(0x5358544d,2,408),(0x5358544d,3,456),(0x5358544d,4,504)):
             raise RuntimeError('XR timing protocol mismatch')
+        if len(raw)<layout[2]:
+            return None
         if struct.unpack_from('<Q',raw,16)[0]&1 or raw[16:24]!=game.read(address+16,8):
             continue
         result={}
-        for i,name in enumerate(names):
+        for i,name in enumerate(names[:min(layout[2]-24,13*32)//32]):
             count,total,maximum,last=struct.unpack_from('<Q3d',raw,24+32*i)
             result[name]=dict(count=count,mean_ms=total/count if count else 0,max_ms=maximum,last_ms=last)
+        if layout[1]>=3:
+            # The eye AA pass (native_eye_gpu.hpp eyeAATiming): mode now, why it stopped, pairs smoothed.
+            mode,fault,pairs=struct.unpack_from('<2IQ',raw,24+13*32)
+            result['eye_aa']=dict(mode=EYE_AA_MODES.get(mode,mode),fault=fault,
+                                  fault_reason=EYE_AA_FAULTS.get(fault,f'code {fault}') if fault else None,
+                                  smoothed_pairs=pairs,gpu_ms_mean=result['eye_aa_gpu']['mean_ms'],
+                                  gpu_ms_max=result['eye_aa_gpu']['max_ms'],measured=result['eye_aa_gpu']['count'])
+        if layout[1]>=4:
+            # The headset sharpening (eyeSharpenTiming): percent now, why it stopped, pairs sharpened.
+            count,total,maximum,last=struct.unpack_from('<Q3d',raw,456)
+            percent,fault,pairs=struct.unpack_from('<2IQ',raw,488)
+            result['sharpen']=dict(percent=percent,fault=fault,
+                                   fault_reason=SHARPEN_FAULTS.get(fault,f'code {fault}') if fault else None,
+                                   sharpened_pairs=pairs,gpu_ms_mean=total/count if count else 0,
+                                   gpu_ms_max=maximum,measured=count)
         return result
     return None
+
+
+SESSION_FPS_BYTES = 40
+
+
+def session_fps_snapshot(game, address):
+    """The session's frame rate (game_xr.cpp SessionFpsData): new eye pairs a second, HIGH (the fastest whole
+    second), LOW (the slowest, loads and pauses left out), AVG, over the tracked seconds (from 10 s in)."""
+    for _ in range(8):
+        raw = game.read(address, SESSION_FPS_BYTES)
+        if len(raw) != SESSION_FPS_BYTES or struct.unpack_from('<3I', raw) != (0x53465053, 1, SESSION_FPS_BYTES):
+            return None
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        high, low, average, seconds = struct.unpack_from('<4f', raw, 24)
+        if not seconds:
+            return None
+        return dict(high=round(high, 1), low=round(low, 1), average=round(average, 1), seconds=round(seconds))
+    return None
+
+
+WRIST_BYTES = 56
+
+
+def wrist_snapshot(game, address):
+    """The wrist menu (game_xr.cpp WristData): times opened or closed (by the gesture or F8), F8's share, buttons
+    pressed, GRAPHICS/HOLOGRAM settings changed, VR SETTINGS rows changed, open now, its page, and its faults
+    (1 drawing, 2 controls)."""
+    for _ in range(8):
+        raw = game.read(address, WRIST_BYTES)
+        if len(raw) != WRIST_BYTES or struct.unpack_from('<3I', raw) != (0x53575244, 1, WRIST_BYTES):
+            return None
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        faults, = struct.unpack_from('<I', raw, 12)
+        toggles, keys, presses, graphics, rows, open_, page = struct.unpack_from('<7I', raw, 24)
+        return dict(toggles=toggles, key_toggles=keys, presses=presses, graphics_changes=graphics,
+                    setting_rows=rows, open=bool(open_), page=page,
+                    drawing_failed=bool(faults & 1), controls_failed=bool(faults & 2))
+    return None
+
+
+def session_fps_line(fps):
+    """The console's word at the end on session_fps_snapshot (None: nothing tracked)."""
+    if not fps:
+        return 'Session FPS: not enough VR play to count (it starts 10 s after the first eye pair).'
+    return (f"Session FPS (new eye pairs a second): HIGH {fps['high']:.1f}, LOW {fps['low']:.1f}, "
+            f"AVG {fps['average']:.1f} over {fps['seconds']} s.")
 
 
 # Slow motion's counters (SlowMotionData in game_xr.cpp); a change of one is a sample.
@@ -2030,6 +2172,17 @@ def main():
                    help="Percent of the eye's size, per side, the eyes' scene is rendered at (50..100; default "
                         "%d): the game's temporal anti-aliasing brings it to the eye's size. 100 only "
                         'anti-aliases; lower is faster and softer.' % DEFAULT_UPSCALE)
+    p.add_argument('--mip-bias', default='0.5',
+                   help="Texture mip bias for the samplers the game biases negatively for its upscaler or "
+                        "anti-aliasing, which the eyes do not get (-2..1; default 0.5; 'game' keeps the game's own "
+                        'and only reports it). Higher is calmer and softer: less moire and sparkle on distant '
+                        'textures. Takes effect only when the launcher starts the game.')
+    p.add_argument('--anisotropy', type=int, default=16,
+                   help="Anisotropic filtering (1-16; default 16; 0 keeps the game's) for the same samplers: steadier "
+                        'roofs, streets and walls seen at a slant. Takes effect only when the launcher starts the game.')
+    p.add_argument('--no-eye-fxaa', action='store_true',
+                   help="No FXAA on the eye images on their way to the headset (default on: FXAA 3.11 quality, once "
+                        "per new eye pair; the game's own TAA/DLAA never runs in the eye views)")
     p.add_argument('--no-eye-antialiasing', action='store_true',
                    help='The eyes get no anti-aliasing and no upscaling: each is its scene as rendered, at the '
                         "eye's size (builds before October 10's eighth did; jagged and slower)")
@@ -2159,6 +2312,8 @@ def main():
         p.error('Use a render scale of %d..%d%%, and not with --size' % RENDER_SCALES)
     if not UPSCALES[0] <= a.upscale <= UPSCALES[1]:
         p.error('Use an upscale of %d..%d%%' % UPSCALES)
+    try: encode_mip_bias(a.mip_bias, a.anisotropy)
+    except ValueError: p.error("--mip-bias must be 'game' or a number from -2 to 1, --anisotropy 0 to 16")
     if not 50 <= a.building_reach <= 400:
         p.error('Use a building reach of 50..400% of the game\'s distance')
     if not MONITOR_RATES[0] <= a.monitor_rate <= MONITOR_RATES[1]:
@@ -2265,7 +2420,7 @@ def session(a, startup):
         # In time only in a game that has just started: it creates its render memory once. That is the graphics
         # card's memory for each frame's drawing, not the PC's (a player with 32 GB read it so on October 16).
         try:
-            render_module.update(enlarge_render_memory(pid))
+            render_module.update(enlarge_render_memory(pid, mip_bias=encode_mip_bias(a.mip_bias, a.anisotropy)))
         except GameNeedsRestart:
             raise
         except (OSError, RuntimeError) as error:
@@ -2345,7 +2500,8 @@ def session(a, startup):
                                            'SpidyStereoFrames', 'SpidyXrSnapshot', 'SpidyStereoData',
                                            'SpidyBodyData', 'SpidySlowMotionData', 'SpidyHudData',
                                            'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData', 'SpidyImpostorReach',
-                                           'SpidyHapticsData', 'SpidyStreamData'))
+                                           'SpidyHapticsData', 'SpidyStreamData', 'SpidyEyeHistoryData',
+                                           'SpidySessionFpsData', 'SpidyWristData'))
         stage_haptics(xr_hash)
 
         saved = vr_display.Registry().read(('ScreenSpaceReflections', 'RTReflections'))
@@ -2367,7 +2523,7 @@ def session(a, startup):
                              (0x20000 if a.own_shadows else 0) | (0 if reflections else 0x40000) |
                              (0x100000 if a.no_prompt_help else 0) | (0x80000 if a.eye_lens_distances else 0) |
                              (0x200000 if a.venom_left_hand else 0) | (0x400000 if a.arcade_webs else 0) |
-                             (0x800000 if a.venom_trigger else 0)) + \
+                             (0x800000 if a.venom_trigger else 0) | (0x1000000 if a.no_eye_fxaa else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
                                                  a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth,
@@ -2729,6 +2885,9 @@ def session(a, startup):
                     if state != previous:
                         print(sample['message'], flush=True)
                         previous = state
+                    if sample['status'] == 5 or (sample['status'] == 4 and 'runtime closed' in sample['message']):
+                        # Say plainly that VR has ended and why (the line above is the reason).
+                        print(flat_fallback_line(sample['message']), flush=True)
                     if sample['status'] in (4, 5):
                         break
                 time.sleep(.05)
@@ -2798,6 +2957,12 @@ def session(a, startup):
             prompts=prompt_snapshot(game, xr['SpidyPromptData']),
             eye_jobs=frame_snapshot(game, xr['SpidyStereoFrames']) or eye_jobs,
             render_memory=final_render_memory or render_memory, render_stop=render_stop,
+            mip_bias=dict(mip_bias_snapshot(game, render_module['SpidyMipBiasData']) or {},
+                          start_code=render_module.get('mip_bias_start'))
+            if render_module.get('SpidyMipBiasData') else None,
+            eye_history=history_snapshot(game, xr['SpidyEyeHistoryData']),
+            session_fps=session_fps_snapshot(game, xr['SpidySessionFpsData']),
+            wrist_menu=wrist_snapshot(game, xr['SpidyWristData']),
             free_commit_mb=dict(start=start_commit, lowest=lowest_commit),
             swing=swing_snapshot(game,rays['SpidySwingData']),
             samples=list(samples), final=snapshot(game, xr['SpidyXrData']), gpu=gpu_snapshot(game, xr['SpidyGpuData']),
@@ -2819,7 +2984,36 @@ def session(a, startup):
         print(json.dumps(dict(final=final, gpu=result['gpu'], appearance=result['appearance'],
                               xr_stop=xr_stop, bridge_stop=bridge_stop), indent=2))
         if result['timing']:
-            print('Mean milliseconds after warmup: '+', '.join(f'{k}={v["mean_ms"]:.2f}' for k,v in result['timing'].items()),flush=True)
+            print('Mean milliseconds after warmup: '+', '.join(f'{k}={v["mean_ms"]:.2f}' for k,v in result['timing'].items()
+                                                                if 'mean_ms' in v),flush=True)
+            if (smoothing := result['timing'].get('eye_aa')):
+                print(eye_aa_line(smoothing, 'off' if a.no_eye_fxaa else 'fxaa'), flush=True)
+            if (sharp := result['timing'].get('sharpen')):
+                print(sharpen_line(sharp), flush=True)
+        if result.get('eye_history'):
+            print(history_line(result['eye_history']), flush=True)
+        print(session_fps_line(result.get('session_fps')), flush=True)
+        if (wrist := result.get('wrist_menu')):
+            print(f"Wrist menu: opened or closed {wrist['toggles']} time(s) ({wrist['key_toggles']} with F8), "
+                  f"{wrist['presses']} press(es), {wrist['graphics_changes']} graphics and "
+                  f"{wrist['setting_rows']} VR setting change(s)"
+                  + ('; its drawing failed' if wrist['drawing_failed'] else '')
+                  + ('; its controls failed' if wrist['controls_failed'] else '') + '.', flush=True)
+        if (seen := result.get('mip_bias')) and 'status' in seen:
+            if seen['status'] == 'late':
+                print('Texture mip bias: the game made its graphics device before Spidy started, so it was not '
+                      'seen or changed; start the game with this launcher.', flush=True)
+            elif seen['samplers'] or seen['static_samplers']:
+                negative = seen['negative_samplers'] + seen['negative_static_samplers']
+                print(f"Texture mip bias: the game's most negative was {seen['most_negative']:+.2f} "
+                      f"({negative} of {seen['samplers'] + seen['static_samplers']} samplers below 0); "
+                      + (f"{seen['changed_samplers']} samplers and {seen['changed_root_signatures']} root "
+                         f"signatures got {seen['bias']:+.2f}." if seen['bias'] != 'game' else 'kept as the game made it.'),
+                      flush=True)
+                print(f"Texture filtering of those: {seen['anisotropic_samplers']} anisotropic (up to "
+                      f"{seen['most_anisotropy']}x), {seen['trilinear_samplers']} trilinear; "
+                      + (f"{seen['raised_samplers']} raised to {seen['anisotropy']}x anisotropic."
+                         if seen['anisotropy'] != 'game' else "kept as the game made them."), flush=True)
         if result['frame_rates']:
             rates=result['frame_rates']
             print(f"New native scene pairs: {rates['new_scene_fps']:.1f}/s; "

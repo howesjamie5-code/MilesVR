@@ -252,7 +252,7 @@ def ready_player(game):
                                  for h in candidates)==1
 
 
-def enlarge_render_memory(pid,megabytes=RENDER_RING_MB,patience=2.5):
+def enlarge_render_memory(pid,megabytes=RENDER_RING_MB,patience=2.5,mip_bias=None):
     """Load Spidy's render memory module into the game and ask for a larger frame ring.
 
     The game creates its ring about three seconds after its process starts, and the ring cannot
@@ -261,14 +261,22 @@ def enlarge_render_memory(pid,megabytes=RENDER_RING_MB,patience=2.5):
 
     A process that is still being set up refuses module listings and remote calls for a moment;
     those are retried for `patience` seconds. The module's own refusal is final.
+
+    `mip_bias` (spidy/mip_bias.hpp encode: bits 0-15 0 only reports, else 1000 + hundredths; bits 16-23
+    anisotropy) also watches the game's D3D12 device for the mip bias of its texture samplers, which only
+    works before the game creates its device; None leaves it out. Its start code is returned as
+    'mip_bias_start'; it never stops the frame ring.
     """
     started=time.monotonic()
     while True:
         process=open_process(0x0400|0x0010|0x0020|0x0008|0x0002,False,pid)
         try:
             if not process: raise c.WinError(c.get_last_error())
-            exports,_=load_module(pid,process,RENDER_MEMORY_DLL,ROOT/'reports/render-memory-modules',
-                                  ('SpidyRenderMemoryStart','SpidyRenderMemoryStop','SpidyRenderMemoryData'))
+            names=('SpidyRenderMemoryStart','SpidyRenderMemoryStop','SpidyRenderMemoryData')
+            if mip_bias is not None: names+=('SpidyMipBiasStart','SpidyMipBiasData')
+            exports,_=load_module(pid,process,RENDER_MEMORY_DLL,ROOT/'reports/render-memory-modules',names)
+            if mip_bias is not None:  # first: the game makes its device about two seconds in
+                exports['mip_bias_start']=call_remote(process,exports['SpidyMipBiasStart'],mip_bias)
             code=call_remote(process,exports['SpidyRenderMemoryStart'],megabytes)
         except GameNeedsRestart:
             raise  # another build's module in the game: only a new game process changes that

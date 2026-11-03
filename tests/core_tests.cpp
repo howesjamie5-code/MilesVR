@@ -10,6 +10,7 @@
 #include "spidy/native_webs.hpp"
 #include "spidy/native_render_memory.hpp"
 #include "spidy/enclosure.hpp"
+#include "spidy/wrist_hud.hpp"
 #include "spidy/game_pad.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/phone.hpp"
@@ -22314,6 +22315,116 @@ int main() {
         for (int i = 0; i < 16; ++i)
             near(off[i], target[i]);
     });
+    test("wrist menu: no two things drawn on a page overlap, at every text size", [] {
+        using namespace wrist_hud;
+        for (int page = 0; page < pages; ++page)
+            for (const float text : {.75f, 1.f, 1.25f, 1.75f}) {
+                const auto areas = pageAreas(page, text);
+                check(!areas.empty(), "a page has content");
+                for (size_t i = 0; i < areas.size(); ++i)
+                    for (size_t j = i + 1; j < areas.size(); ++j) {
+                        const auto& a = areas[i];
+                        const auto& b = areas[j];
+                        const bool apart = a.u1 <= b.u0 || b.u1 <= a.u0 || a.v1 <= b.v0 || b.v1 <= a.v0;
+                        if (!apart)
+                            throw std::runtime_error(std::string("overlap on ") + pageName(page) + ": " + a.what +
+                                                     " / " + b.what);
+                    }
+            }
+    });
+    test("wrist menu: every VR SETTINGS row is there and can be pointed at once scrolled to", [] {
+        using namespace wrist_hud;
+        const auto& rows = vr_settings::rows();
+        for (size_t r = 0; r < rows.size(); ++r) {
+            if (rows[r].item == vr_settings::Item::none)
+                continue;
+            const auto c = vrControl(r);
+            const Spot top = controlSpot(0, c, 0, 1);
+            check(top.found == shownRow(rows[r]), rows[r].title);
+            if (!top.found)
+                continue;
+            // Scrolled so the row sits mid-panel, the pointer there finds it.
+            const float scroll = clampScroll(0, -top.v, 1);
+            const Spot seen = controlSpot(0, c, scroll, 1);
+            check(seen.visible, rows[r].title);
+            check(controlAt(0, seen.u, seen.v, scroll, 1) == c, rows[r].title);
+        }
+        check(!controlSpot(0, vrControl(0), 0, 1).found, "a section heading is not a control");
+        check(vrRow(Control::aa) < 0 && vrRow(vrControl(3)) == 3, "rows by control and back");
+    });
+    test("wrist menu: a press on a VR SETTINGS row steps its choice, < back and > forward, a switch flips", [] {
+        using namespace wrist_hud;
+        const auto& rows = vr_settings::rows();
+        const auto rowOf = [&](vr_settings::Item item) {
+            for (size_t r = 0; r < rows.size(); ++r)
+                if (rows[r].item == item)
+                    return r;
+            throw std::runtime_error("no row");
+        };
+        vr_settings::Values values;
+        const auto press = [&](vr_settings::Item item, bool left) {
+            const auto c = vrControl(rowOf(item));
+            const float scroll = clampScroll(0, -controlSpot(0, c, 0, 1).v, 1);
+            const Spot at = controlSpot(0, c, scroll, 1);
+            Menu menu;
+            menu.setScroll(0, scroll, 1);
+            Settings s;
+            Menu::Input in;
+            in.active = true;
+            in.pointer.hit = true;
+            in.pointer.u = left ? at.u - .05f : at.u + .05f;
+            in.pointer.v = at.v;
+            in.vr = &values;
+            in.trigger = .2f; // touched on the panel: claimed
+            menu.update(in, s);
+            in.trigger = 1; // pressed
+            return menu.update(in, s);
+        };
+        values.snapTurn = 30;
+        auto r = press(vr_settings::Item::snapTurn, false);
+        check(r.pressed && r.vrItem == vr_settings::Item::snapTurn, "the row was pressed");
+        check(r.vrChoice == vr_settings::choice(vr_settings::Item::snapTurn, values) + 1, "> steps forward");
+        r = press(vr_settings::Item::snapTurn, true);
+        check(r.vrChoice == vr_settings::choice(vr_settings::Item::snapTurn, values) - 1, "< steps back");
+        values.aimMarkers = true;
+        r = press(vr_settings::Item::aimMarkers, true);
+        check(r.vrItem == vr_settings::Item::aimMarkers && r.vrChoice == 0, "a switch flips");
+        check(vrValueText(static_cast<int>(rowOf(vr_settings::Item::snapTurn)), values) == "30 DEG",
+              "the degree sign as DEG");
+    });
+    test("wrist menu: the other hand's trigger on the left forearm opens it, and that pull is the menu's", [] {
+        using namespace wrist_hud;
+        Toggle toggle;
+        Pose grips[2]{};
+        grips[0].position = {0, 1, 0};
+        grips[1].position = {0, 1.08f, .02f}; // the right hand by the left forearm
+        const bool tracked[2]{true, true};
+        float triggers[2]{0, 0};
+        check(!toggle.update(.01f, true, 0, grips, tracked, triggers), "nothing pulled");
+        triggers[1] = .2f;
+        toggle.update(.01f, true, 0, grips, tracked, triggers);
+        check(toggle.hands() == 2, "the pull is claimed from its start");
+        triggers[1] = 1;
+        check(toggle.update(.01f, true, 0, grips, tracked, triggers) && toggle.on(), "a pull in reach opens it");
+        triggers[1] = 0;
+        toggle.update(.5f, true, 0, grips, tracked, triggers);
+        check(toggle.hands() == 0 && toggle.opacity() > 0, "let go: the trigger is the game's again");
+        grips[1].position = {.6f, 1, 0}; // far off
+        triggers[1] = 1;
+        check(!toggle.update(.01f, true, 0, grips, tracked, triggers) && toggle.on(), "a pull out of reach: nothing");
+    });
+    test("wrist menu: the panel draws on every page within its bounds", [] {
+        using namespace wrist_hud;
+        for (int page = 0; page < pages; ++page) {
+            View v;
+            v.emitter = {0, 1, -.4f};
+            v.page = page;
+            std::vector<Vertex> out;
+            appendWristHud(out, v, {0, 1.6f, 0}, .001f);
+            check(!out.empty() && out.size() % 3 == 0, pageName(page));
+            check(sane(out, 0, v.emitter, 1.5f), pageName(page));
+        }
+    });
     test("VR settings only the tab offers: kept as key=value lines, read back sanitized, the rest left", [] {
         using namespace vr_settings;
         const Values defaults;
@@ -22328,7 +22439,9 @@ int main() {
                                        "web_slingshot=0\nbetter_climbing=0\nheight_cm=0\nseated=0\neye_aim=0\n"
                                        "smart_anchor=0\nelastic_web=0\nsoft_release=0\nswing_assist=0\n"
                                        "slingshot_speed=0\nrecording_smoothing=0\n"
-                                       "two_hand_zip=0\nrope_steering=0\nweb_range_m=100\nweb_speed=0\n",
+                                       "two_hand_zip=0\nrope_steering=0\nweb_range_m=100\nweb_speed=0\n"
+                                       "eye_aa=1\neye_history=0\neye_sharpen=0\nhud_height_cm=9\nhud_scale=100\n"
+                                       "hud_text=100\nhud_theme=0\nhud_text_color=0\n",
               "the defaults' text");
         Values changed = defaults;
         changed.recordingFov = 140;

@@ -37,6 +37,8 @@
 #include "spidy/native_eye_frame.hpp"
 #include "spidy/native_eye_gpu.hpp"
 #include "spidy/native_eye_history.hpp"
+#include "spidy/fps_meter.hpp"
+#include "spidy/wrist_hud.hpp"
 #include "spidy/native_hud.hpp"
 #include "spidy/native_webs.hpp"
 #include "spidy/near_clip.hpp"
@@ -512,17 +514,44 @@ struct HapticsData {
     uint32_t groups{};
 };
 static_assert(sizeof(HapticsData) == 116 + 4 * body_haptics::kindCount && body_haptics::kindCount == 35);
+// The session's frame rate (fps_meter.hpp FpsSession): new eye pairs a second, in whole
+// 1-second windows from 10 s after the first pair; HIGH the fastest, LOW the slowest
+// (seconds of a load or pause left out), AVG over all tracked seconds. Read by the
+// launcher for the report and its line at the end (from the SM2 port's Update 24).
+struct SessionFpsData {
+    uint32_t magic = 0x53465053, version = 1, bytes = sizeof(SessionFpsData), reserved{};
+    int64_t sequence{};
+    float high{}, low{}, average{}, seconds{};
+};
+static_assert(sizeof(SessionFpsData) == 40);
+// The wrist menu (wrist_hud.hpp), for the report: opened and closed (by the
+// gesture and by F8), buttons pressed, settings changed (its GRAPHICS and
+// HOLOGRAM pages and its VR SETTINGS rows), and whether it failed (1 drawing,
+// 2 its controls).
+struct WristData {
+    uint32_t magic = 0x53575244, version = 1, bytes = sizeof(WristData), faults{};
+    int64_t sequence{};
+    uint32_t toggles{}, keyToggles{}, presses{}, graphicsChanges{}, settingRows{}, open{}, page{}, reserved{};
+};
+static_assert(sizeof(WristData) == 56);
 extern "C" {
 __declspec(dllexport) XrData SpidyXrData;
 __declspec(dllexport) PromptData SpidyPromptData;
 __declspec(dllexport) SlowMotionData SpidySlowMotionData;
 __declspec(dllexport) HapticsData SpidyHapticsData;
 __declspec(dllexport) XrTimingData SpidyXrTimingData;
+__declspec(dllexport) SessionFpsData SpidySessionFpsData;
+__declspec(dllexport) WristData SpidyWristData;
 __declspec(dllexport) EyeSnapshot SpidyXrSnapshot;
 DWORD WINAPI SpidyStart(void*);
 DWORD WINAPI SpidyEyeTemporal(void*);
 DWORD WINAPI SpidyEyeShadows(void*);
 DWORD WINAPI SpidyMonitorRate(void*);
+DWORD WINAPI SpidyEyeAA(void*);
+DWORD WINAPI SpidyEyeHistory(void*);
+DWORD WINAPI SpidyEyeSharpen(void*);
+DWORD WINAPI SpidyImpostorReach(void*);
+uint32_t SpidyImpostorReachNow();
 DWORD WINAPI SpidyStop(void*);
 DWORD WINAPI SpidySetEyes(void*);
 float SpidyFlatAspect();
@@ -845,6 +874,39 @@ DWORD WINAPI run(void*) {
         }
         D3D12Renderer overlay;
         overlay.initialize(device.Get(), queue);
+        wrist_hud::FpsSession sessionFps;
+        uint64_t fpsSerial{}, fpsGeneration{}, fpsPublishMs{};
+        // The wrist menu (wrist_hud.hpp): its toggle, pages and the values they set,
+        // the FPS monitor it shows, and whether its drawing or its controls failed
+        // (then only it goes off; everything else carries on).
+        wrist_hud::Toggle wristToggle;
+        wrist_hud::Menu wristMenu;
+        wrist_hud::Applier wristApply;
+        bool wristApplyStarted{}, wristHudFault{}, wristMenuFault{}, wristKeyHeld{};
+        wrist_hud::Settings wristShown;
+        uint32_t wristOff{};
+        wrist_hud::FpsMeter wristFps;
+        wrist_hud::Pointer wristPointer;
+        std::string wristNote;
+        double wristClock{};
+        constexpr unsigned wristHand = 0; // the hologram's wrist: the left
+        // A drawing of Spidy's that fails (hands, webs, marks, the phone) never ends VR: Spidy's
+        // drawings go off for the session and the headset keeps showing the game (from the SM2
+        // port's Update 24.1, where a failed shader compile at the first drawing dropped VR).
+        bool overlayFault = false;
+        const auto drawSafely = [&](auto&& draw) {
+            if (overlayFault)
+                return;
+            try {
+                draw();
+            } catch (const std::exception& e) {
+                overlayFault = true;
+                // (The message holds 255 characters: the reason first.)
+                const auto text = std::string("VR continues; Spidy's drawings are off this session: ") + e.what();
+                message(3, 0, text.c_str());
+                OutputDebugStringA(text.c_str());
+            }
+        };
         // The session report's copies of the left eye live in the overlay's
         // readback buffer; withdraw the last one before the overlay goes.
         struct WithdrawSnapshot {
@@ -2026,10 +2088,230 @@ DWORD WINAPI run(void*) {
                                                frame.hands[1].valid && validTrackedPose(frame.hands[1].grip)};
                     const bool gesturesPlay = viewing && gameplay && !flatScreen && !calibrationInput &&
                                               validTrackedPose(frame.head);
+                    // The wrist menu: the other hand on the left forearm and its trigger
+                    // pulled there turns it on or off (or F8), and that pull is the
+                    // menu's alone - no web, reel, scan or anything of the game's - until
+                    // the trigger is let go; so is a pull begun on the panel.
+                    uint32_t hudTriggers{};
+                    if (!wristHudFault) {
+                        const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                        const bool hudPlay = gesturesPlay && !padLayer.latched() && !phone.open() && !gadgetWheel.open();
+                        const unsigned hudHand = wristHand, pointHand = 1 - wristHand;
+                        // Where the other hand points on the panel, found before the
+                        // toggle so a pull on the panel never toggles it.
+                        wristPointer = {};
+                        const float scale = static_cast<float>(values.hudScalePercent) / 100.f;
+                        const float hudDt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
+                        wristClock += hudDt;
+                        bool hudStick = false;
+                        if (hudPlay && wristToggle.opacity() > 0 && gripsTracked[hudHand] && gripsTracked[pointHand]) {
+                            wrist_hud::View placed;
+                            placed.emitter = wrist_hud::emitter(grips[hudHand], hudHand);
+                            placed.headUp = frame.head.orientation.rotate({0, 1, 0});
+                            placed.scale = scale;
+                            placed.heightCm = static_cast<float>(values.hudHeightCm);
+                            wristPointer = wrist_hud::point(wrist_hud::place(placed, frame.head.position), scale,
+                                                            grips[pointHand], pointHand);
+                        }
+                        const bool onPanel =
+                            wristPointer.hit && wrist_hud::onPanel(wristMenu.page(), wristPointer.u, wristPointer.v);
+                        float toggleTriggers[2]{triggers[0], triggers[1]};
+                        if (!wristMenuFault && (wristMenu.claims() || (onPanel && wristToggle.opacity() > 0)))
+                            toggleTriggers[pointHand] = 0;
+                        if (wristToggle.update(frame.seconds, hudPlay, hudHand, grips, gripsTracked, toggleTriggers)) {
+                            runtime.haptic(static_cast<int>(pointHand), .35f);
+                            runtime.haptic(static_cast<int>(hudHand), .2f);
+                        }
+                        hudTriggers = wristToggle.hands();
+                        // F8 on the PC's keyboard: the same toggle without the gesture.
+                        const bool key = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+                        bool keyToggled = false;
+                        if (key && !wristKeyHeld && hudPlay && wristToggle.flip()) {
+                            keyToggled = true;
+                            runtime.haptic(static_cast<int>(hudHand), .2f);
+                        }
+                        wristKeyHeld = key;
+                        // The pages: a pull begun on the panel is the panel's. Values go
+                        // through wristApply (a GPU-side one at most four times a second
+                        // while dragged), applied here, before anything is submitted; a
+                        // refused one is put back with a red note. Should any of it throw,
+                        // only the controls go off.
+                        uint32_t pressed{}, graphicsChanged{}, rowsChanged{};
+                        if (!wristMenuFault) {
+                            try {
+                                wrist_hud::Settings live;
+                                live.aa = static_cast<float>(native_gpu::eyeAA());
+                                live.history = static_cast<float>(native_gpu::eyeHistory());
+                                live.reach = static_cast<float>(SpidyImpostorReachNow());
+                                live.monitor = static_cast<float>(native_gpu::monitorRateNow());
+                                live.sharpen = static_cast<float>(native_gpu::eyeSharpen());
+                                live.eyeTest = static_cast<float>(native_gpu::eyeDebug());
+                                live.hudHeight = static_cast<float>(values.hudHeightCm);
+                                live.hudScale = static_cast<float>(values.hudScalePercent) / 100.f;
+                                live.hudText = static_cast<float>(values.hudTextPercent);
+                                live.hudTheme = static_cast<float>(values.hudTheme);
+                                live.hudTextColor = static_cast<float>(values.hudTextColor);
+                                if (!wristApplyStarted) {
+                                    wristApply.start(live);
+                                    wristApplyStarted = true;
+                                }
+                                wristShown = wristApply.shown(live);
+                                wrist_hud::Menu::Input in;
+                                in.active = hudPlay && wristToggle.opacity() > .9f &&
+                                            !(hudTriggers & (1u << pointHand)) && gripsTracked[pointHand];
+                                in.pointer = wristPointer;
+                                in.trigger = gripsTracked[pointHand] ? triggers[pointHand] : 0.f;
+                                // Sharpening that could not be built is UNAVAILABLE at once.
+                                wristOff = wristApply.disabled() |
+                                           (native_gpu::eyeSharpenFault()
+                                                ? 1u << static_cast<unsigned>(wrist_hud::Control::sharpen)
+                                                : 0u);
+                                in.disabled = wristOff;
+                                in.stick = gripsTracked[pointHand] ? frame.hands[pointHand].stickY : 0.f;
+                                in.seconds = hudDt;
+                                in.text = static_cast<float>(values.hudTextPercent) / 100.f;
+                                in.layout = std::min<uint32_t>(static_cast<uint32_t>(values.hudHeightCm), 31) |
+                                            std::min<uint32_t>(static_cast<uint32_t>(values.hudScalePercent), 255) << 5 |
+                                            std::min<uint32_t>(static_cast<uint32_t>(values.hudTextPercent), 255) << 13;
+                                in.vr = &values;
+                                const auto result = wristMenu.update(in, wristShown);
+                                hudStick = result.stick;
+                                for (unsigned c = 0; c < wrist_hud::maskedControls; ++c)
+                                    if (result.changed >> c & 1)
+                                        wristApply.want(static_cast<wrist_hud::Control>(c),
+                                                        wristShown[static_cast<wrist_hud::Control>(c)]);
+                                if (result.fpsReset) {
+                                    sessionFps.reset(); // from the next frame
+                                    wristFps = {};
+                                }
+                                if (result.pressed) {
+                                    ++pressed;
+                                    runtime.haptic(static_cast<int>(pointHand), .3f);
+                                } else if (result.changed) {
+                                    runtime.haptic(static_cast<int>(pointHand), .06f);
+                                } else if (result.hovered) {
+                                    runtime.haptic(static_cast<int>(pointHand), .1f);
+                                }
+                                // A VR SETTINGS row: as the MILES VR tab's change would be.
+                                bool keep = false;
+                                if (result.vrItem != vr_settings::Item::none &&
+                                    vr_settings::choose(result.vrItem, result.vrChoice, values)) {
+                                    values = vr_settings::sanitized(values);
+                                    ++settingChanges;
+                                    ++rowsChanged;
+                                    applySettings();
+                                    keep = true;
+                                }
+                                // The values due, applied and kept for the next session
+                                // (all but the reach, the window's rate and the eye test).
+                                const auto apply = [&](wrist_hud::Control c, float value) {
+                                    using wrist_hud::Control;
+                                    value = wrist_hud::clampTo(c, value);
+                                    const auto whole = static_cast<uintptr_t>(std::lround(value));
+                                    const auto number = static_cast<int>(whole);
+                                    switch (c) {
+                                    case Control::aa:
+                                        values.eyeAA = number;
+                                        return std::pair{SpidyEyeAA(reinterpret_cast<void*>(whole)) == 0,
+                                                         static_cast<float>(native_gpu::eyeAA())};
+                                    case Control::history:
+                                        values.eyeHistory = number;
+                                        return std::pair{SpidyEyeHistory(reinterpret_cast<void*>(whole)) == 0,
+                                                         static_cast<float>(native_gpu::eyeHistory())};
+                                    case Control::sharpen:
+                                        values.eyeSharpen = number;
+                                        return std::pair{SpidyEyeSharpen(reinterpret_cast<void*>(whole)) == 0,
+                                                         static_cast<float>(native_gpu::eyeSharpen())};
+                                    case Control::reach:
+                                        return std::pair{SpidyImpostorReach(reinterpret_cast<void*>(whole)) == 0,
+                                                         static_cast<float>(SpidyImpostorReachNow())};
+                                    case Control::monitor:
+                                        return std::pair{SpidyMonitorRate(reinterpret_cast<void*>(whole)) == 0,
+                                                         static_cast<float>(native_gpu::monitorRateNow())};
+                                    case Control::eyeTest:
+                                        // Only the copy to the headset changes, never the game's rendering.
+                                        return std::pair{native_gpu::setEyeDebug(whole ? 1u : 0u),
+                                                         static_cast<float>(native_gpu::eyeDebug())};
+                                    case Control::hudHeight:
+                                        values.hudHeightCm = number;
+                                        return std::pair{true, static_cast<float>(values.hudHeightCm)};
+                                    case Control::hudScale:
+                                        values.hudScalePercent = static_cast<int>(std::clamp(std::lround(value * 100), 50l, 200l));
+                                        return std::pair{true, static_cast<float>(values.hudScalePercent) / 100.f};
+                                    case Control::hudText:
+                                        values.hudTextPercent = number;
+                                        return std::pair{true, static_cast<float>(values.hudTextPercent)};
+                                    case Control::hudTheme:
+                                        values.hudTheme = number;
+                                        return std::pair{true, static_cast<float>(values.hudTheme)};
+                                    case Control::hudTextColor:
+                                        values.hudTextColor = number;
+                                        return std::pair{true, static_cast<float>(values.hudTextColor)};
+                                    default:
+                                        return std::pair{false, 0.f};
+                                    }
+                                };
+                                const uint32_t due = wristApply.due(wristClock, wristMenu.held());
+                                for (unsigned c = 0; c < wrist_hud::maskedControls; ++c) {
+                                    if (!(due >> c & 1))
+                                        continue;
+                                    const auto control = static_cast<wrist_hud::Control>(c);
+                                    const auto [ok, actual] = apply(control, wristShown[control]);
+                                    if (wristApply.result(control, ok, actual, wristClock)) {
+                                        ++graphicsChanged;
+                                        keep = true;
+                                    } else {
+                                        apply(control, wristApply.revert(control));
+                                    }
+                                }
+                                values = vr_settings::sanitized(values);
+                                if (keep && wristMenu.held() == wrist_hud::Control::none) {
+                                    if (auto text = vr_settings::tabOnlyText(values); text != tabOnlySaved) {
+                                        if (!writeTabOnly(text))
+                                            message(3, 0, "VR settings: the wrist menu's settings were not saved");
+                                        tabOnlySaved = std::move(text);
+                                    }
+                                }
+                                wristNote = wristApply.note(wristClock);
+                                if (wristMenu.claims())
+                                    hudTriggers |= 1u << pointHand;
+                            } catch (...) {
+                                wristMenuFault = true;
+                                wristPointer = {};
+                                message(3, 0, "Wrist menu controls failed and are off this session; everything "
+                                              "else carries on");
+                            }
+                        }
+                        {
+                            auto& t = SpidyWristData;
+                            InterlockedIncrement64(&t.sequence);
+                            t.toggles = wristToggle.toggles();
+                            t.keyToggles += keyToggled ? 1u : 0u;
+                            t.presses += pressed;
+                            t.graphicsChanges += graphicsChanged;
+                            t.settingRows += rowsChanged;
+                            t.open = wristToggle.on() ? 1u : 0u;
+                            t.page = static_cast<uint32_t>(wristMenu.page());
+                            t.faults = (wristHudFault ? 1u : 0u) | (wristMenuFault ? 2u : 0u);
+                            InterlockedIncrement64(&t.sequence);
+                        }
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (hudTriggers & (1u << i))
+                                controller.hands[i].trigger = 0;
+                        // The stick the panel scrolls with is not the game's (no turn or
+                        // move) while the pointer is on it.
+                        if (hudStick) {
+                            frame.hands[pointHand].stickX = frame.hands[pointHand].stickY = 0;
+                            controller.hands[pointHand].stickX = controller.hands[pointHand].stickY = 0;
+                        }
+                    }
                     // A trigger pulled with its hand at the temple is the game's
                     // scan, and no web ball or reel meanwhile.
                     {
-                        const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                        float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                        for (unsigned i = 0; i < 2; ++i)
+                            if (hudTriggers & (1u << i))
+                                triggers[i] = 0;
                         templePress.update(frame.seconds, gesturesPlay, frame.head, grips, gripsTracked,
                                            triggers);
                         for (unsigned i = 0; i < 2; ++i)
@@ -2111,7 +2393,7 @@ DWORD WINAPI run(void*) {
                         named.buttons = frame.buttons;
                         // The temple's scan has a trigger, the pocket's draw a grip.
                         const uint32_t gestures =
-                            values.triggerWebs ? pocketDraw.hands() : templePress.hands() | suitPress.hands();
+                            values.triggerWebs ? pocketDraw.hands() : templePress.hands() | suitPress.hands() | hudTriggers;
                         for (unsigned i = 0; i < 2; ++i) {
                             const auto& hand = frame.hands[i];
                             named.balls[i] = values.triggerWebs ? hand.squeeze : hand.trigger;
@@ -4871,7 +5153,19 @@ DWORD WINAPI run(void*) {
                         gpu.durationMs = moduleDuration;
                         gpu.copyToXr = 2;
                         gpu.captureImages = config.options & 1;
+                        // Options 0x1000000 (--no-eye-fxaa): the eyes reach the headset as the
+                        // game drew them; otherwise through FXAA (native_eye_gpu.hpp). The game's
+                        // own TAA/DLAA never runs in the eye views.
+                        gpu.eyeAA = (config.options & 0x1000000) ? 0u : static_cast<uint32_t>(values.eyeAA);
+                        // The headset's eye size, which the eye passes write (no supersampling:
+                        // the eyes are rendered at it).
+                        native_gpu::setEyeOutput(dimensions[0], dimensions[1]);
                         check(native_gpu::start(&gpu), "Start native GPU bridge");
+                        // The wrist menu's eye history and sharpening, as the last session left them.
+                        if (values.eyeHistory && !native_gpu::setEyeHistory(static_cast<uint32_t>(values.eyeHistory)))
+                            message(3, 0, "Eye history refused; it stays off");
+                        if (values.eyeSharpen && !native_gpu::setEyeSharpen(static_cast<uint32_t>(values.eyeSharpen)))
+                            message(3, 0, "Eye sharpening refused; it stays off");
                         gpuStarted = true;
                         nativeDeadline =
                             config.durationMs ? GetTickCount64() + config.durationMs : UINT64_MAX;
@@ -5118,6 +5412,17 @@ DWORD WINAPI run(void*) {
                         eyes.eyes[i].fov[2] = f.down;
                         eyes.eyes[i].fov[3] = f.up;
                     }
+                    if (!flatScreen) {
+                        // The views the eye history turns the last pair to this one with.
+                        std::array<eye_history::EyeView, 2> views{};
+                        for (unsigned i = 0; i < 2; ++i) {
+                            views[i].world = motion.eyes[i];
+                            const auto& f = motion.fovs[i];
+                            views[i].tangents = {std::tan(f.left), std::tan(f.right), std::tan(f.down),
+                                                 std::tan(f.up)};
+                        }
+                        native_gpu::noteEyeViews(eyes.serial, views);
+                    }
                     // The HUD panel for this command's frame, as the head sees it:
                     // fixed in the room, so a reused image the headset turns to a
                     // newer head shows it where it was.
@@ -5262,12 +5567,14 @@ DWORD WINAPI run(void*) {
                         appendPhoneBody(phoneBody, phoneAppDraw.phone);
                         appendPhoneTouch(marks, phoneAppDraw.phone, phoneAppDraw.touch, phoneAppDraw.tip,
                                          phoneAppDraw.head);
-                        overlay.renderViews(views, phoneBody, false, false);
-                        const auto corners = phoneAppCorners(phoneAppDraw.phone, aspect);
-                        for (const auto& view : views)
-                            overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
-                        if (!marks.empty())
-                            overlay.renderViews(views, marks, true, false);
+                        drawSafely([&] {
+                            overlay.renderViews(views, phoneBody, false, false);
+                            const auto corners = phoneAppCorners(phoneAppDraw.phone, aspect);
+                            for (const auto& view : views)
+                                overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
+                            if (!marks.empty())
+                                overlay.renderViews(views, marks, true, false);
+                        });
                         copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                                            copyStart)
                                      .count();
@@ -5348,6 +5655,28 @@ DWORD WINAPI run(void*) {
                     uint64_t imageSerial{}, imageGeneration{};
                     bool copied = native_gpu::copyLatest(targets[0].texture, targets[1].texture, imageSerial,
                                                          imageGeneration);
+                    {
+                        // A headset frame showing an eye pair it has not shown before is a new frame.
+                        const bool newPair =
+                            copied && (imageSerial != fpsSerial || imageGeneration != fpsGeneration);
+                        if (newPair) {
+                            fpsSerial = imageSerial;
+                            fpsGeneration = imageGeneration;
+                        }
+                        const double frameSeconds = std::chrono::duration<double>(copyStart.time_since_epoch()).count();
+                        sessionFps.frame(frameSeconds, newPair);
+                        wristFps.frame(frameSeconds, newPair, runtime.lastFrameTiming().period);
+                        if (GetTickCount64() >= fpsPublishMs) {
+                            fpsPublishMs = GetTickCount64() + 1000;
+                            auto& d = SpidySessionFpsData;
+                            InterlockedIncrement64(&d.sequence);
+                            d.high = sessionFps.high();
+                            d.low = sessionFps.low();
+                            d.average = sessionFps.average();
+                            d.seconds = static_cast<float>(sessionFps.trackedSeconds());
+                            InterlockedIncrement64(&d.sequence);
+                        }
+                    }
                     check(native_gpu::error(), "GPU eye bridge");
                     const auto* saved = copied ? history.find(imageSerial, displayTime) : nullptr;
                     copied = copied && saved;
@@ -5662,6 +5991,65 @@ DWORD WINAPI run(void*) {
                             auto& panel = saved->uiStyle == UiStyle::tech ? translucent : vertices;
                             body_calibration::appendView(panel, view, viewer, saved->uiStyle);
                         }
+                        // The wrist menu over the left wrist, drawn from this image's hand.
+                        if (!saved->flatScreen && !wristHudFault && wristToggle.opacity() > 0 &&
+                            validTrackedPose(rendered.grips[wristHand])) {
+                            const size_t from = translucent.size();
+                            try {
+                                auto grip = rendered.grips[wristHand];
+                                grip.position += travel;
+                                wrist_hud::View hud;
+                                hud.emitter = wrist_hud::emitter(grip, wristHand);
+                                hud.headUp = rendered.headPose.orientation.rotate({0, 1, 0});
+                                hud.opacity = wristToggle.opacity();
+                                hud.scale = static_cast<float>(values.hudScalePercent) / 100.f;
+                                hud.heightCm = static_cast<float>(values.hudHeightCm);
+                                hud.textScale = static_cast<float>(values.hudTextPercent) / 100.f;
+                                hud.theme = values.hudTheme;
+                                hud.textColor = values.hudTextColor;
+                                hud.seconds = static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 3600.));
+                                hud.page = wristMenu.page();
+                                hud.scroll = wristMenu.scroll();
+                                hud.vr = values;
+                                hud.settings = wristShown;
+                                hud.fps = wristFps.fps();
+                                hud.refreshHz = wristFps.refreshHz();
+                                hud.fpsTrail = wristFps.trail();
+                                hud.fpsHigh = sessionFps.high();
+                                hud.fpsLow = sessionFps.low();
+                                hud.fpsAvg = sessionFps.average();
+                                hud.eyeGpuMs = native_gpu::eyePassesGpuMs();
+                                if (!wristMenuFault) {
+                                    hud.hover = wristMenu.hover();
+                                    hud.held = wristMenu.held();
+                                    hud.disabled = wristOff;
+                                    hud.note = wristNote;
+                                    const unsigned pointHand = 1 - wristHand;
+                                    if (wristPointer.hit &&
+                                        (wrist_hud::onPanel(wristMenu.page(), wristPointer.u, wristPointer.v) ||
+                                         wristMenu.held() != wrist_hud::Control::none) &&
+                                        validTrackedPose(rendered.grips[pointHand])) {
+                                        auto pointGrip = rendered.grips[pointHand];
+                                        pointGrip.position += travel;
+                                        const auto f = wrist_hud::place(hud, viewer);
+                                        const auto now = wrist_hud::point(f, hud.scale, pointGrip, pointHand);
+                                        if (now.hit) {
+                                            hud.pointing = true;
+                                            hud.tip = now.tip;
+                                            hud.pointU = now.u;
+                                            hud.pointV = now.v;
+                                        }
+                                    }
+                                }
+                                wrist_hud::appendWristHud(translucent, hud, viewer, pixelAngle);
+                                if (!wrist_hud::sane(translucent, from, hud.emitter, 1.5f))
+                                    throw std::runtime_error("unfit vertices");
+                            } catch (...) {
+                                translucent.resize(from);
+                                wristHudFault = true;
+                                message(3, 0, "Wrist menu failed and is off this session; everything else carries on");
+                            }
+                        }
                         // The gadget wheel in front of its hand, moved with the
                         // player to this image as the hands are: printed, so
                         // laid down in order over all the rest.
@@ -5741,17 +6129,20 @@ DWORD WINAPI run(void*) {
                             overlayViews[eye] = {target.texture, target.format, target.width, target.height,
                                                  vp};
                         }
-                        if (!saved->flatScreen)
-                            overlay.renderViews(overlayViews, vertices, true, false, translucent, &grade);
-                        if (native_gpu::Screen app; finite(phoneGlass.centre) &&
-                                                    native_gpu::latestHud(app, imageHoldMs)) {
-                            const auto corners = phoneAppCorners(
-                                phoneGlass, static_cast<float>(app.width) / static_cast<float>(app.height));
-                            for (const auto& view : overlayViews)
-                                overlay.quad(app.texture.Get(), app.view, app.linear, view, corners, phoneAppPart);
-                        }
-                        if (!phoneMarks.empty())
-                            overlay.renderViews(overlayViews, phoneMarks, true, false);
+                        drawSafely([&] {
+                            if (!saved->flatScreen)
+                                overlay.renderViews(overlayViews, vertices, true, false, translucent, &grade);
+                            if (native_gpu::Screen app; finite(phoneGlass.centre) &&
+                                                        native_gpu::latestHud(app, imageHoldMs)) {
+                                const auto corners = phoneAppCorners(
+                                    phoneGlass, static_cast<float>(app.width) / static_cast<float>(app.height));
+                                for (const auto& view : overlayViews)
+                                    overlay.quad(app.texture.Get(), app.view, app.linear, view, corners,
+                                                 phoneAppPart);
+                            }
+                            if (!phoneMarks.empty())
+                                overlay.renderViews(overlayViews, phoneMarks, true, false);
+                        });
                         overlayMs = std::chrono::duration<double, std::milli>(
                                         std::chrono::steady_clock::now() - overlayStart)
                                         .count();
@@ -5813,6 +6204,11 @@ DWORD WINAPI run(void*) {
                 InterlockedIncrement64(&SpidyXrTimingData.sequence);
                 for (unsigned i = 0; i < 10; ++i)
                     SpidyXrTimingData.stages[i].add(stages[i]);
+                native_gpu::copyTiming(SpidyXrTimingData.stages[10], SpidyXrTimingData.stages[11]);
+                native_gpu::eyeAATiming(SpidyXrTimingData.stages[12], SpidyXrTimingData.eyeAA,
+                                        SpidyXrTimingData.eyeAAFault, SpidyXrTimingData.eyeAAPairs);
+                native_gpu::eyeSharpenTiming(SpidyXrTimingData.eyeSharpen, SpidyXrTimingData.sharpen,
+                                             SpidyXrTimingData.sharpenFault, SpidyXrTimingData.sharpenPairs);
                 InterlockedIncrement64(&SpidyXrTimingData.sequence);
             }
             // Count only a successful xrEndFrame containing a projection layer.

@@ -84,6 +84,52 @@ def render_memory_snapshot(game, address):
     return None
 
 
+MIP_BIAS_STATUS = {0: 'off', 1: 'waiting_for_device', 2: 'watching', 3: 'late', 4: 'unavailable'}
+
+
+def encode_mip_bias(value, anisotropy=0):
+    """run_game_vr's --mip-bias and --anisotropy for SpidyMipBiasStart (spidy/mip_bias.hpp encode): bias
+    'game' only reports, else -2.0..+1.0; anisotropy 0 keeps the game's, else 1..16 for the samplers the
+    game biases negatively."""
+    anisotropy = int(anisotropy or 0)
+    if not 0 <= anisotropy <= 16:
+        raise ValueError('anisotropy must be 0..16')
+    if value in (None, 'game'):
+        return anisotropy << 16
+    hundredths = round(float(value) * 100)
+    if not -200 <= hundredths <= 100:
+        raise ValueError('mip bias must be game or -2..1')
+    return (1000 + hundredths) | anisotropy << 16
+
+
+def mip_bias_snapshot(game, address):
+    """The game's texture sampler mip bias as its D3D12 device saw it (spidy::mip_bias::Data).
+
+    `most_negative` is the most negative bias the game gave any sampler; `changed_*` count the
+    ones that got `bias` instead. A sampler with a bias of 0 or more is never changed.
+    'late' means the module started after the game made its device, so nothing is seen.
+    """
+    raw = game.read(address, 152)
+    if len(raw) != 152:
+        return None
+    if struct.unpack_from('<3I', raw) != (0x534d4244, 2, 152):
+        raise RuntimeError('Mip bias protocol mismatch')
+    status, change = struct.unpack_from('<2I', raw, 12)
+    bias, most_negative = struct.unpack_from('<2f', raw, 20)
+    error, = struct.unpack_from('<I', raw, 28)
+    names = ('samplers', 'negative_samplers', 'changed_samplers', 'root_signatures', 'static_samplers',
+             'negative_static_samplers', 'changed_root_signatures', 'embedded_root_signatures',
+             'negative_embedded_samplers', 'failed_root_signatures', 'devices')
+    counts = dict(zip(names, struct.unpack_from('<11Q', raw, 32)))
+    # Version 2: the negatively biased (material) samplers' filtering, and how many got `anisotropy`.
+    anisotropy, most_anisotropy = struct.unpack_from('<2I', raw, 120)
+    filtering = dict(zip(('anisotropic_samplers', 'trilinear_samplers', 'raised_samplers'),
+                         struct.unpack_from('<3Q', raw, 128)))
+    return dict(status=MIP_BIAS_STATUS.get(status, status), bias=round(bias, 2) if change else 'game',
+                most_negative=round(most_negative, 3), error=error, **counts,
+                anisotropy=anisotropy or 'game', most_anisotropy=most_anisotropy, **filtering)
+
+
 def motion_command(main,serial,seconds,travel=0.):
     # Exercise the same paired world-pose command used by tracked eyes. This is
     # a deterministic diagnostic motion, not a substitute for headset tracking.

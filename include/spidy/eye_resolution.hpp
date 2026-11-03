@@ -22,7 +22,7 @@ inline bool validRenderScale(uint64_t percent) {
 // The engine's temporal anti-aliasing gathers the frames' jittered samples
 // into the eye's full size, so 67 renders 45% of the pixels (the ratio of the
 // game's own "Quality" upscaling) and 100 only anti-aliases.
-inline constexpr uint32_t minimumEyeUpscale = 50, maximumEyeUpscale = 100, defaultEyeUpscale = 67;
+inline constexpr uint32_t minimumEyeUpscale = 50, maximumEyeUpscale = 100, defaultEyeUpscale = 100;
 inline bool validEyeUpscale(uint64_t percent) {
     return percent >= minimumEyeUpscale && percent <= maximumEyeUpscale;
 }

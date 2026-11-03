@@ -1,6 +1,9 @@
 #include "spidy/native_eye_gpu.hpp"
 #include "spidy/copy_eye_texture.hpp"
 #include "spidy/eye_pair_state.hpp"
+#include "spidy/native_hud.hpp"
+#include "spidy/eye_sharpen.hpp"
+#include "spidy/eye_debug.hpp"
 #include "spidy/monitor_rate.hpp"
 #include "spidy/presentation_gate.hpp"
 #include <MinHook.h>
@@ -11,6 +14,7 @@
 #include <cstring>
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -23,6 +27,7 @@ extern "C" IMAGE_DOS_HEADER __ImageBase;
 extern "C" {
 __declspec(dllexport) native_gpu::Data SpidyGpuData;
 __declspec(dllexport) native_gpu::ScreenData SpidyScreenData;
+__declspec(dllexport) native_gpu::HistoryData SpidyEyeHistoryData;
 }
 namespace spidy::native_gpu {
 namespace {
@@ -87,6 +92,14 @@ ComPtr<ID3D12GraphicsCommandList> command;
 ComPtr<ID3D12Fence> fence;
 HANDLE fenceEvent{};
 UINT width{}, height{};
+// The headset's eye size (setEyeOutput; 0: the eyes' own). Above it the eyes
+// are supersampled and the staged images are filtered down to it (drawAa).
+std::atomic<uint32_t> wantedOutWidth{}, wantedOutHeight{};
+UINT outWidth{}, outHeight{};
+bool downsampling() { return outWidth != width || outHeight != height; }
+// The size of the images read back (captureImage) and published (Data).
+UINT imageWidth() { return staged ? outWidth : width; }
+UINT imageHeight() { return staged ? outHeight : height; }
 struct CopyCommands {
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -97,6 +110,47 @@ std::array<CopyCommands, 3> captureCommands, presentCommands, screenCommands, mi
 std::array<ComPtr<ID3D12Resource>, 2> stagedEyes;
 EyePairState::Stamp capturedStamp;
 uint64_t capturedPairs{}, reusedPairs{}, capturedMs{};
+// copyTiming (submission lock): headset copies not yet seen finished, with
+// when they and their pair were submitted (QueryPerformanceCounter).
+int64_t capturedQpc{};
+struct PendingCopy {
+    uint64_t fence{};
+    int64_t submitted{}, paired{};
+};
+std::array<PendingCopy, 16> pendingCopies;
+unsigned pendingCount{};
+TimingMetric copyGpu, copyPair;
+std::mutex copyTimingLock;
+double qpcMs(int64_t from, int64_t to) {
+    static const double perMs = [] {
+        LARGE_INTEGER f{};
+        QueryPerformanceFrequency(&f);
+        return static_cast<double>(f.QuadPart) / 1000.0;
+    }();
+    return static_cast<double>(to - from) / perMs;
+}
+int64_t qpcNow() {
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+void noteCopies(uint64_t completed) { // submission lock held by caller
+    if (!pendingCount || completed == UINT64_MAX)
+        return;
+    const auto now = qpcNow();
+    unsigned kept = 0;
+    std::lock_guard lock(copyTimingLock);
+    for (unsigned i = 0; i < pendingCount; ++i) {
+        const auto& p = pendingCopies[i];
+        if (p.fence <= completed) {
+            copyGpu.add(qpcMs(p.submitted, now));
+            if (p.paired)
+                copyPair.add(qpcMs(p.paired, now));
+        } else
+            pendingCopies[kept++] = p;
+    }
+    pendingCount = kept;
+}
 // The game's presented frame (submission lock). A texture replaced by a new
 // size stays alive for a few seconds, for draws still reading it.
 std::atomic<bool> screenWanted{};
@@ -193,8 +247,10 @@ void publish() { // submission and recording held by caller
     d.generation = lastGeneration;
     d.fence = fenceValue;
     d.completed = fence ? fence->GetCompletedValue() : 0;
-    d.width = width;
-    d.height = height;
+    if (fence)
+        noteCopies(d.completed);
+    d.width = imageWidth();
+    d.height = imageHeight();
     d.captured = capturedPairs;
     d.reused = reusedPairs;
     d.capturedSerial = capturedStamp.serial;
@@ -309,10 +365,16 @@ bool makeReadbacks() {
         }
         width = static_cast<UINT>(desc.Width);
         height = desc.Height;
+        outWidth = wantedOutWidth.load() ? wantedOutWidth.load() : width;
+        outHeight = wantedOutHeight.load() ? wantedOutHeight.load() : height;
         if (!captureImages)
             continue;
+        // Staged, the images read back are the headset's (copyLatest), at its size.
+        auto image = desc;
+        image.Width = imageWidth();
+        image.Height = imageHeight();
         UINT64 bytes{};
-        device->GetCopyableFootprints(&desc, 0, 1, 0, &layouts[i], nullptr, nullptr, &bytes);
+        device->GetCopyableFootprints(&image, 0, 1, 0, &layouts[i], nullptr, nullptr, &bytes);
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC buffer{};
@@ -329,7 +391,7 @@ bool makeReadbacks() {
             fault = 3203;
             return false;
         }
-        pixels[i].resize(static_cast<size_t>(width) * height * 4);
+        pixels[i].resize(static_cast<size_t>(imageWidth()) * imageHeight() * 4);
     }
     return true;
 }
@@ -375,13 +437,1011 @@ bool submitCommands(CopyCommands& slot) {
     }
     return true;
 }
+// Update 16: each eye pass's newest GPU time, for the wrist hologram's FPS
+// page (eyePassesGpuMs): plain atomics, so reading it takes no lock.
+struct PassClock {
+    std::atomic<float> ms{};
+    std::atomic<uint64_t> tick{}; // GetTickCount64 when noted; 0 never
+    void note(double value) {
+        ms = static_cast<float>(value);
+        tick = GetTickCount64();
+    }
+};
+PassClock aaClock, historyClock, sharpenClock;
+// Eye anti-aliasing (native_eye_gpu.hpp, setEyeAA). The pass is built on the
+// first pair that wants it, under the submission and recording locks.
+std::atomic<uint32_t> aaMode{}, aaFault{};
+struct AaPipeline {
+    ComPtr<ID3D12RootSignature> root;
+    ComPtr<ID3D12PipelineState> state, down; // FXAA; the downsample filter
+    ComPtr<ID3D12DescriptorHeap> views, targets;
+    ComPtr<ID3D12QueryHeap> queries;
+    ComPtr<ID3D12Resource> stamps; // readback, mapped while the bridge lives
+    const volatile uint64_t* stampData{};
+    double ticksPerMs{};
+    std::array<bool, 3> timed{}; // a captureCommands slot holds a measured pass
+    bool ready{};
+} aa;
+TimingMetric aaGpu; // copyTimingLock
+std::atomic<uint64_t> aaPairs{};
+// FXAA 3.11 quality (Timothy Lottes, NVIDIA), PC path, preset 29 steps, luma
+// computed from RGB. The eyes hold display-encoded values, as FXAA expects.
+const char* fxaaShader = R"(
+Texture2D source : register(t0);
+SamplerState bilinear : register(s0);
+cbuffer Frame : register(b0) { float2 rcpFrame; float subpix; float edgeThreshold; };
+static const float edgeThresholdMin = 0.0625;
+static const float steps[12] = {1.0, 1.5, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 4.0, 8.0};
+float luma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+float lumaAt(float2 p) { return luma(source.SampleLevel(bilinear, p, 0).rgb); }
+float lumaOff(float2 p, int2 o) { return luma(source.SampleLevel(bilinear, p, 0, o).rgb); }
+float4 vs(uint id : SV_VertexID) : SV_POSITION {
+    const float2 corner = float2((id << 1) & 2, id & 2);
+    return float4(corner * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 ps(float4 position : SV_POSITION) : SV_TARGET {
+    float2 posM = position.xy * rcpFrame;
+    const float4 rgbyM = source.SampleLevel(bilinear, posM, 0);
+    const float lumaM = luma(rgbyM.rgb);
+    float lumaS = lumaOff(posM, int2(0, 1));
+    const float lumaE = lumaOff(posM, int2(1, 0));
+    float lumaN = lumaOff(posM, int2(0, -1));
+    const float lumaW = lumaOff(posM, int2(-1, 0));
+    const float rangeMax = max(max(lumaN, lumaW), max(lumaE, max(lumaS, lumaM)));
+    const float rangeMin = min(min(lumaN, lumaW), min(lumaE, min(lumaS, lumaM)));
+    const float range = rangeMax - rangeMin;
+    if (range < max(edgeThresholdMin, rangeMax * edgeThreshold))
+        return rgbyM;
+    const float lumaNW = lumaOff(posM, int2(-1, -1));
+    const float lumaSE = lumaOff(posM, int2(1, 1));
+    const float lumaNE = lumaOff(posM, int2(1, -1));
+    const float lumaSW = lumaOff(posM, int2(-1, 1));
+    const float lumaNS = lumaN + lumaS;
+    const float lumaWE = lumaW + lumaE;
+    const float subpixRcpRange = 1.0 / range;
+    const float subpixNSWE = lumaNS + lumaWE;
+    const float edgeHorz1 = -2.0 * lumaM + lumaNS;
+    const float edgeVert1 = -2.0 * lumaM + lumaWE;
+    const float lumaNESE = lumaNE + lumaSE;
+    const float lumaNWNE = lumaNW + lumaNE;
+    const float edgeHorz2 = -2.0 * lumaE + lumaNESE;
+    const float edgeVert2 = -2.0 * lumaN + lumaNWNE;
+    const float lumaNWSW = lumaNW + lumaSW;
+    const float lumaSWSE = lumaSW + lumaSE;
+    const float edgeHorz4 = abs(edgeHorz1) * 2.0 + abs(edgeHorz2);
+    const float edgeVert4 = abs(edgeVert1) * 2.0 + abs(edgeVert2);
+    const float edgeHorz3 = -2.0 * lumaW + lumaNWSW;
+    const float edgeVert3 = -2.0 * lumaS + lumaSWSE;
+    const float edgeHorz = abs(edgeHorz3) + edgeHorz4;
+    const float edgeVert = abs(edgeVert3) + edgeVert4;
+    const float subpixNWSWNESE = lumaNWSW + lumaNESE;
+    float lengthSign = rcpFrame.x;
+    const bool horzSpan = edgeHorz >= edgeVert;
+    const float subpixA = subpixNSWE * 2.0 + subpixNWSWNESE;
+    if (!horzSpan) {
+        lumaN = lumaW;
+        lumaS = lumaE;
+    } else
+        lengthSign = rcpFrame.y;
+    const float subpixB = subpixA * (1.0 / 12.0) - lumaM;
+    const float gradientN = lumaN - lumaM;
+    const float gradientS = lumaS - lumaM;
+    float lumaNN = lumaN + lumaM;
+    const float lumaSS = lumaS + lumaM;
+    const bool pairN = abs(gradientN) >= abs(gradientS);
+    const float gradient = max(abs(gradientN), abs(gradientS));
+    if (pairN)
+        lengthSign = -lengthSign;
+    const float subpixC = saturate(abs(subpixB) * subpixRcpRange);
+    float2 posB = posM;
+    const float2 offNP = horzSpan ? float2(rcpFrame.x, 0.0) : float2(0.0, rcpFrame.y);
+    if (!horzSpan)
+        posB.x += lengthSign * 0.5;
+    else
+        posB.y += lengthSign * 0.5;
+    float2 posN = posB - offNP * steps[0];
+    float2 posP = posB + offNP * steps[0];
+    const float subpixD = -2.0 * subpixC + 3.0;
+    float lumaEndN = lumaAt(posN);
+    const float subpixE = subpixC * subpixC;
+    float lumaEndP = lumaAt(posP);
+    if (!pairN)
+        lumaNN = lumaSS;
+    const float gradientScaled = gradient * 0.25;
+    const float lumaMM = lumaM - lumaNN * 0.5;
+    const float subpixF = subpixD * subpixE;
+    const bool lumaMLTZero = lumaMM < 0.0;
+    lumaEndN -= lumaNN * 0.5;
+    lumaEndP -= lumaNN * 0.5;
+    bool doneN = abs(lumaEndN) >= gradientScaled;
+    bool doneP = abs(lumaEndP) >= gradientScaled;
+    if (!doneN)
+        posN -= offNP * steps[1];
+    if (!doneP)
+        posP += offNP * steps[1];
+    for (int i = 2; i < 12; ++i) {
+        if (doneN && doneP)
+            break;
+        if (!doneN)
+            lumaEndN = lumaAt(posN) - lumaNN * 0.5;
+        if (!doneP)
+            lumaEndP = lumaAt(posP) - lumaNN * 0.5;
+        doneN = abs(lumaEndN) >= gradientScaled;
+        doneP = abs(lumaEndP) >= gradientScaled;
+        if (!doneN)
+            posN -= offNP * steps[i];
+        if (!doneP)
+            posP += offNP * steps[i];
+    }
+    float dstN = posM.x - posN.x;
+    float dstP = posP.x - posM.x;
+    if (!horzSpan) {
+        dstN = posM.y - posN.y;
+        dstP = posP.y - posM.y;
+    }
+    const bool goodSpanN = (lumaEndN < 0.0) != lumaMLTZero;
+    const bool goodSpanP = (lumaEndP < 0.0) != lumaMLTZero;
+    const float spanLengthRcp = 1.0 / (dstP + dstN);
+    const bool directionN = dstN < dstP;
+    const float dst = min(dstN, dstP);
+    const bool goodSpan = directionN ? goodSpanN : goodSpanP;
+    const float subpixG = subpixF * subpixF;
+    const float pixelOffset = dst * -spanLengthRcp + 0.5;
+    const float subpixH = subpixG * subpix;
+    const float pixelOffsetGood = goodSpan ? pixelOffset : 0.0;
+    const float pixelOffsetSubpix = max(pixelOffsetGood, subpixH);
+    if (!horzSpan)
+        posM.x += pixelOffsetSubpix * lengthSign;
+    else
+        posM.y += pixelOffsetSubpix * lengthSign;
+    return float4(source.SampleLevel(bilinear, posM, 0).rgb, rgbyM.a);
+}
+)";
+// The downsample for supersampled eyes (setEyeOutput): each headset pixel is
+// the Mitchell-Netravali (B = C = 1/3) filtered average of the eye's pixels
+// under it, out to `reach` headset pixels from its centre, in linear light
+// (the eyes hold sRGB-encoded values). A plain or bilinear copy at that ratio
+// keeps the aliasing of patterns finer than the headset's pixels (the curved
+// moire on rows of fins); this filter removes them with little blur.
+const char* downsampleShader = R"(
+Texture2D source : register(t0);
+cbuffer Frame : register(b0) { float2 scale; float reach; float unused; };
+float4 vs(uint id : SV_VertexID) : SV_POSITION {
+    const float2 corner = float2((id << 1) & 2, id & 2);
+    return float4(corner * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float mitchell(float x) {
+    x = abs(x);
+    if (x >= 2.0)
+        return 0.0;
+    const float x2 = x * x, x3 = x2 * x;
+    if (x < 1.0)
+        return (7.0 * x3 - 12.0 * x2 + 16.0 / 3.0) / 6.0;
+    return (-7.0 / 3.0 * x3 + 12.0 * x2 - 20.0 * x + 32.0 / 3.0) / 6.0;
+}
+float3 toLinear(float3 c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+float3 toDisplay(float3 c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+float4 ps(float4 position : SV_POSITION) : SV_TARGET {
+    uint w, h;
+    source.GetDimensions(w, h);
+    const float2 centre = position.xy * scale;     // in the eye's pixels
+    const float2 step = max(scale, 1.0);           // eye pixels per filter unit
+    const float2 radius = min(reach, 2.0) * step;
+    const int2 lo = max(int2(floor(centre - radius)), 0);
+    const int2 hi = min(int2(ceil(centre + radius)), int2(w, h) - 1);
+    float3 sum = 0;
+    float total = 0;
+    [loop] for (int y = lo.y; y <= hi.y; ++y) {
+        const float wy = mitchell((y + 0.5 - centre.y) / step.y);
+        if (wy == 0.0)
+            continue;
+        [loop] for (int x = lo.x; x <= hi.x; ++x) {
+            const float weight = wy * mitchell((x + 0.5 - centre.x) / step.x);
+            sum += weight * toLinear(source.Load(int3(x, y, 0)).rgb);
+            total += weight;
+        }
+    }
+    const float3 colour = total > 0.0 ? saturate(sum / total) : toLinear(source.Load(int3(min(int2(centre), int2(w, h) - 1), 0)).rgb);
+    return float4(toDisplay(colour), source.Load(int3(min(int2(centre), int2(w, h) - 1), 0)).a);
+}
+)";
+// The Mitchell filter's full reach, in headset pixels.
+constexpr float downsampleRadius = 2.f;
+// FXAA's quality settings: sub-pixel smoothing 0.5 (its default 0.75 softens
+// the eyes' fine detail more than a headset wants) and edge threshold 0.125
+// (its "high quality" value).
+constexpr float aaSubpix = 0.5f, aaEdgeThreshold = 0.125f;
+bool failAa(uint32_t code) {
+    aaFault = code;
+    aa.ready = false;
+    return false;
+}
+// The AA pass for the eye images and stagedEyes (both fixed for the bridge's
+// life, so the descriptors are written once). Submission and recording held.
+bool prepareAa() {
+    if (aaFault)
+        return false;
+    if (aa.ready)
+        return true;
+    for (unsigned i = 0; i < 2; ++i)
+        if (resources[i]->GetDesc().Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
+            return failAa(5);
+    D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+    D3D12_ROOT_PARAMETER parameters[2]{};
+    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[0].DescriptorTable = {1, &range};
+    parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameters[1].Constants.Num32BitValues = 4;
+    parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC rs{2, parameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ComPtr<ID3DBlob> signature, error;
+    if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error)) ||
+        FAILED(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+                                           IID_PPV_ARGS(&aa.root))))
+        return failAa(1);
+    // FXAA or, for supersampled eyes, the downsample filter: the same root.
+    const bool down = downsampling();
+    const char* shader = down ? downsampleShader : fxaaShader;
+    const char* name = down ? "spidy_eye_downsample" : "spidy_eye_fxaa";
+    ComPtr<ID3DBlob> vs, ps;
+    if (FAILED(D3DCompile(shader, std::strlen(shader), name, nullptr, nullptr, "vs", "vs_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vs, &error)) ||
+        FAILED(D3DCompile(shader, std::strlen(shader), name, nullptr, nullptr, "ps", "ps_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &ps, &error)))
+        return failAa(2);
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+    d.pRootSignature = aa.root.Get();
+    d.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    d.NumRenderTargets = 1;
+    d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.SampleMask = UINT_MAX;
+    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    d.RasterizerState.DepthClipEnable = TRUE;
+    auto& blend = d.BlendState.RenderTarget[0];
+    blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(down ? &aa.down : &aa.state))))
+        return failAa(3);
+    D3D12_DESCRIPTOR_HEAP_DESC views{};
+    views.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    views.NumDescriptors = 2;
+    views.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC targetViews{};
+    targetViews.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    targetViews.NumDescriptors = 2;
+    if (FAILED(device->CreateDescriptorHeap(&views, IID_PPV_ARGS(&aa.views))) ||
+        FAILED(device->CreateDescriptorHeap(&targetViews, IID_PPV_ARGS(&aa.targets))))
+        return failAa(4);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    for (unsigned i = 0; i < 2; ++i) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sv.Texture2D.MipLevels = 1;
+        auto view = aa.views->GetCPUDescriptorHandleForHeapStart();
+        view.ptr += static_cast<SIZE_T>(viewStep) * i;
+        device->CreateShaderResourceView(resources[i].Get(), &sv, view);
+        D3D12_RENDER_TARGET_VIEW_DESC rv{};
+        rv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        auto target = aa.targets->GetCPUDescriptorHandleForHeapStart();
+        target.ptr += static_cast<SIZE_T>(targetStep) * i;
+        device->CreateRenderTargetView(stagedEyes[i].Get(), &rv, target);
+    }
+    // The GPU time is optional: without timestamps the pass still runs.
+    UINT64 frequency{};
+    D3D12_QUERY_HEAP_DESC qd{};
+    qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    qd.Count = 2 * static_cast<UINT>(captureCommands.size());
+    D3D12_HEAP_PROPERTIES readback{};
+    readback.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = sizeof(uint64_t) * qd.Count;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    void* mapped{};
+    if (SUCCEEDED(queue->GetTimestampFrequency(&frequency)) && frequency &&
+        SUCCEEDED(device->CreateQueryHeap(&qd, IID_PPV_ARGS(&aa.queries))) &&
+        SUCCEEDED(device->CreateCommittedResource(&readback, D3D12_HEAP_FLAG_NONE, &buffer,
+                                                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                  IID_PPV_ARGS(&aa.stamps))) &&
+        SUCCEEDED(aa.stamps->Map(0, nullptr, &mapped))) {
+        aa.stampData = static_cast<const volatile uint64_t*>(mapped);
+        aa.ticksPerMs = static_cast<double>(frequency) / 1000.0;
+    } else {
+        aa.queries.Reset();
+        aa.stamps.Reset();
+    }
+    aa.ready = true;
+    return true;
+}
+// The measured pass that last used this slot, now that its fence passed.
+void noteAaTime(size_t slot) {
+    if (!aa.timed[slot] || !aa.stampData)
+        return;
+    aa.timed[slot] = false;
+    const uint64_t begin = aa.stampData[2 * slot], end = aa.stampData[2 * slot + 1];
+    if (end > begin) {
+        std::lock_guard lock(copyTimingLock);
+        aaGpu.add(static_cast<double>(end - begin) / aa.ticksPerMs);
+    }
+    if (end > begin)
+        aaClock.note(static_cast<double>(end - begin) / aa.ticksPerMs);
+}
+// Both eyes through FXAA, or the supersampled eyes through the downsample
+// filter, into stagedEyes, which enter and leave COPY_SOURCE;
+// the eye images return to the states the game left them in.
+void drawAa(ID3D12GraphicsCommandList* list, size_t slot) {
+    const auto first = static_cast<UINT>(2 * slot);
+    if (aa.queries)
+        originalEndQuery(list, aa.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first);
+    D3D12_RESOURCE_BARRIER b[4]{};
+    UINT count = 0;
+    for (unsigned i = 0; i < 2; ++i) {
+        if (!(states[i] & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)) {
+            b[count].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b[count++].Transition = {resources[i].Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, states[i],
+                                     D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+        }
+        b[count].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b[count++].Transition = {stagedEyes[i].Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                                 D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET};
+    }
+    originalBarrier(list, count, b);
+    // FXAA: one over the eye's size, and its settings. The downsample: the
+    // eye's pixels per headset pixel across and down, and the filter's reach.
+    const bool down = downsampling();
+    const float frame[4] = {down ? static_cast<float>(width) / static_cast<float>(outWidth)
+                                 : 1.f / static_cast<float>(width),
+                            down ? static_cast<float>(height) / static_cast<float>(outHeight)
+                                 : 1.f / static_cast<float>(height),
+                            down ? downsampleRadius : aaSubpix, down ? 0.f : aaEdgeThreshold};
+    list->SetPipelineState(down ? aa.down.Get() : aa.state.Get());
+    list->SetGraphicsRootSignature(aa.root.Get());
+    ID3D12DescriptorHeap* heaps[] = {aa.views.Get()};
+    list->SetDescriptorHeaps(1, heaps);
+    list->SetGraphicsRoot32BitConstants(1, 4, frame, 0);
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(outWidth), static_cast<float>(outHeight), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+    list->RSSetViewports(1, &viewport);
+    list->RSSetScissorRects(1, &rect);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    for (unsigned i = 0; i < 2; ++i) {
+        auto view = aa.views->GetGPUDescriptorHandleForHeapStart();
+        view.ptr += static_cast<UINT64>(viewStep) * i;
+        auto target = aa.targets->GetCPUDescriptorHandleForHeapStart();
+        target.ptr += static_cast<SIZE_T>(targetStep) * i;
+        list->SetGraphicsRootDescriptorTable(0, view);
+        list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        list->DrawInstanced(3, 1, 0, 0);
+    }
+    for (UINT n = 0; n < count; ++n)
+        std::swap(b[n].Transition.StateBefore, b[n].Transition.StateAfter);
+    originalBarrier(list, count, b);
+    if (aa.queries) {
+        originalEndQuery(list, aa.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first + 1);
+        list->ResolveQueryData(aa.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, 2, aa.stamps.Get(),
+                               sizeof(uint64_t) * first);
+        aa.timed[slot] = true;
+    }
+}
+// Update 16: eye sharpening (native_eye_gpu.hpp, setEyeSharpen;
+// eye_sharpen.hpp). For the headset only: instead of copying stagedEyes into
+// the headset's images (copyLatest), the pass draws them there sharpened, so
+// it adds no copy of its own, and the web/HUD overlay is drawn over it as
+// before. Built on the first headset frame that wants it, under the
+// submission and recording locks. If anything is missing (the compile, the
+// pipeline, a headset image that is not a render target) it stops for the
+// session (sharpenFault) and copyLatest copies as before: the eyes never go
+// without a picture.
+std::atomic<uint32_t> sharpenPercent{}, sharpenFault{};
+std::atomic<bool> sharpening{}; // the last headset frame was drawn sharpened
+// Update 24: live.txt eye_debug (eye_debug.hpp): 1 both headset images from the left eye's picture.
+std::atomic<uint32_t> eyeDebugMode{};
+struct SharpenPipeline {
+    ComPtr<ID3D12RootSignature> root;
+    ComPtr<ID3D12PipelineState> state, srgb; // to UNORM targets; to UNORM_SRGB ones
+    ComPtr<ID3D12DescriptorHeap> views, targets;
+    ComPtr<ID3D12QueryHeap> queries;
+    ComPtr<ID3D12Resource> stamps;
+    const volatile uint64_t* stampData{};
+    double ticksPerMs{};
+    std::array<bool, 3> timed{}; // a presentCommands slot holds a measured pass
+    bool ready{};
+} sharp;
+TimingMetric sharpenGpu; // copyTimingLock
+std::atomic<uint64_t> sharpenPairs{};
+// CAS (eye_sharpen.hpp sharpenChannel, the same arithmetic): the eyes hold
+// display-encoded values and are sharpened as such, like FXAA. To a typed
+// sRGB target (whose writes are encoded by the GPU) the result goes out as
+// light (linearOut), so the stored bytes are the same as a UNORM target's.
+// No vector ?: (dxc's HLSL 2021 rejects it; checked with dxc on the box).
+const char* sharpenShader = R"(
+Texture2D source : register(t0);
+cbuffer Frame : register(b0) { float peak; float linearOut; float lift; float unused; };
+float4 vs(uint id : SV_VertexID) : SV_POSITION {
+    const float2 corner = float2((id << 1) & 2, id & 2);
+    return float4(corner * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float3 toLinear(float3 c) {
+    return lerp(pow((c + 0.055) / 1.055, 2.4), c / 12.92, step(c, 0.04045));
+}
+float4 ps(float4 position : SV_POSITION) : SV_TARGET {
+    uint w, h;
+    source.GetDimensions(w, h);
+    const int2 p = int2(position.xy);
+    const int2 hi = int2(w, h) - 1;
+    const float3 a = source.Load(int3(clamp(p + int2(-1, -1), 0, hi), 0)).rgb;
+    const float3 b = source.Load(int3(clamp(p + int2(0, -1), 0, hi), 0)).rgb;
+    const float3 c = source.Load(int3(clamp(p + int2(1, -1), 0, hi), 0)).rgb;
+    const float3 d = source.Load(int3(clamp(p + int2(-1, 0), 0, hi), 0)).rgb;
+    const float4 centre = source.Load(int3(clamp(p, 0, hi), 0));
+    const float3 e = centre.rgb;
+    const float3 f = source.Load(int3(clamp(p + int2(1, 0), 0, hi), 0)).rgb;
+    const float3 g = source.Load(int3(clamp(p + int2(-1, 1), 0, hi), 0)).rgb;
+    const float3 hh = source.Load(int3(clamp(p + int2(0, 1), 0, hi), 0)).rgb;
+    const float3 i = source.Load(int3(clamp(p + int2(1, 1), 0, hi), 0)).rgb;
+    float3 mn = min(min(min(d, e), min(f, b)), hh);
+    const float3 mn2 = min(min(mn, a), min(min(c, g), i));
+    mn += mn2;
+    float3 mx = max(max(max(d, e), max(f, b)), hh);
+    const float3 mx2 = max(max(mx, a), max(max(c, g), i));
+    mx += mx2;
+    const float3 guard = sqrt(saturate(min(mn, 2.0 - mx) / max(mx, 1e-5)));
+    const float3 amp = guard + (1.0 - guard) * saturate(lift); // Update 21: 101-200%
+    const float3 wt = amp * peak;
+    const float3 o = saturate((b * wt + d * wt + f * wt + hh * wt + e) / (1.0 + 4.0 * wt));
+    return float4(lerp(o, toLinear(o), linearOut), centre.a);
+}
+)";
+bool failSharpen(uint32_t code) {
+    sharpenFault = code;
+    sharpenPercent = 0; // the copy from now on; the slider shows UNAVAILABLE
+    sharp.ready = false;
+    sharpening = false;
+    return false;
+}
+// The pass, for stagedEyes into whichever headset images copyLatest is given
+// (their target views are written each frame). Submission and recording held.
+bool prepareSharpen() {
+    if (sharpenFault)
+        return false;
+    if (sharp.ready)
+        return true;
+    for (unsigned i = 0; i < 2; ++i)
+        if (!stagedEyes[i] || (stagedEyes[i]->GetDesc().Flags & D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE))
+            return failSharpen(5);
+    D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+    D3D12_ROOT_PARAMETER parameters[2]{};
+    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[0].DescriptorTable = {1, &range};
+    parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameters[1].Constants.Num32BitValues = 4;
+    parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC rs{2, parameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ComPtr<ID3DBlob> signature, error;
+    if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error)) ||
+        FAILED(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+                                           IID_PPV_ARGS(&sharp.root))))
+        return failSharpen(1);
+    ComPtr<ID3DBlob> vs, ps;
+    const char* shader = sharpenShader;
+    if (FAILED(D3DCompile(shader, std::strlen(shader), "spidy_eye_sharpen", nullptr, nullptr, "vs", "vs_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vs, &error)) ||
+        FAILED(D3DCompile(shader, std::strlen(shader), "spidy_eye_sharpen", nullptr, nullptr, "ps", "ps_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &ps, &error)))
+        return failSharpen(2);
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+    d.pRootSignature = sharp.root.Get();
+    d.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    d.NumRenderTargets = 1;
+    d.SampleDesc.Count = 1;
+    d.SampleMask = UINT_MAX;
+    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    d.RasterizerState.DepthClipEnable = TRUE;
+    auto& blend = d.BlendState.RenderTarget[0];
+    blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&sharp.state))))
+        return failSharpen(3);
+    d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&sharp.srgb))))
+        return failSharpen(3);
+    D3D12_DESCRIPTOR_HEAP_DESC views{};
+    views.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    views.NumDescriptors = 2;
+    views.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC targetViews{};
+    targetViews.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    targetViews.NumDescriptors = 2;
+    if (FAILED(device->CreateDescriptorHeap(&views, IID_PPV_ARGS(&sharp.views))) ||
+        FAILED(device->CreateDescriptorHeap(&targetViews, IID_PPV_ARGS(&sharp.targets))))
+        return failSharpen(4);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    for (unsigned i = 0; i < 2; ++i) {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sv.Texture2D.MipLevels = 1;
+        auto view = sharp.views->GetCPUDescriptorHandleForHeapStart();
+        view.ptr += static_cast<SIZE_T>(viewStep) * i;
+        device->CreateShaderResourceView(stagedEyes[i].Get(), &sv, view);
+    }
+    // The GPU time is optional, as the AA pass's.
+    UINT64 frequency{};
+    D3D12_QUERY_HEAP_DESC qd{};
+    qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    qd.Count = 2 * static_cast<UINT>(presentCommands.size());
+    D3D12_HEAP_PROPERTIES readback{};
+    readback.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = sizeof(uint64_t) * qd.Count;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    void* mapped{};
+    if (SUCCEEDED(queue->GetTimestampFrequency(&frequency)) && frequency &&
+        SUCCEEDED(device->CreateQueryHeap(&qd, IID_PPV_ARGS(&sharp.queries))) &&
+        SUCCEEDED(device->CreateCommittedResource(&readback, D3D12_HEAP_FLAG_NONE, &buffer,
+                                                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                  IID_PPV_ARGS(&sharp.stamps))) &&
+        SUCCEEDED(sharp.stamps->Map(0, nullptr, &mapped))) {
+        sharp.stampData = static_cast<const volatile uint64_t*>(mapped);
+        sharp.ticksPerMs = static_cast<double>(frequency) / 1000.0;
+    } else {
+        sharp.queries.Reset();
+        sharp.stamps.Reset();
+    }
+    sharp.ready = true;
+    return true;
+}
+void noteSharpenTime(size_t slot) {
+    if (slot >= sharp.timed.size() || !sharp.timed[slot] || !sharp.stampData)
+        return;
+    sharp.timed[slot] = false;
+    const uint64_t begin = sharp.stampData[2 * slot], end = sharp.stampData[2 * slot + 1];
+    if (end > begin) {
+        std::lock_guard lock(copyTimingLock);
+        sharpenGpu.add(static_cast<double>(end - begin) / sharp.ticksPerMs);
+    }
+    if (end > begin)
+        sharpenClock.note(static_cast<double>(end - begin) / sharp.ticksPerMs);
+}
+// The target view for a headset image: its own UNORM or UNORM_SRGB, the
+// UNORM one for a typeless image; UNKNOWN when it cannot be drawn to.
+DXGI_FORMAT sharpenTarget(const D3D12_RESOURCE_DESC& desc) {
+    if (!(desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) || desc.MipLevels > 1 ||
+        desc.DepthOrArraySize != 1 || desc.SampleDesc.Count != 1)
+        return DXGI_FORMAT_UNKNOWN;
+    switch (desc.Format) {
+    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    default:
+        return DXGI_FORMAT_UNKNOWN;
+    }
+}
+// Both staged eyes, sharpened, into the headset's images (RENDER_TARGET, as
+// the copy leaves them). stagedEyes leave and re-enter COPY_SOURCE. False
+// (nothing recorded) when an image cannot be drawn to: then the copy.
+bool drawSharpen(ID3D12GraphicsCommandList* list, size_t slot, ID3D12Resource* const* incoming, uint32_t percent,
+                 uint32_t debug) {
+    DXGI_FORMAT formats[2]{};
+    for (unsigned i = 0; i < 2; ++i)
+        if ((formats[i] = sharpenTarget(incoming[i]->GetDesc())) == DXGI_FORMAT_UNKNOWN)
+            return failSharpen(6);
+    if (formats[0] != formats[1])
+        return failSharpen(6);
+    const auto first = static_cast<UINT>(2 * slot);
+    if (sharp.queries)
+        originalEndQuery(list, sharp.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first);
+    D3D12_RESOURCE_BARRIER b[2]{};
+    for (unsigned i = 0; i < 2; ++i) {
+        b[i].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b[i].Transition = {stagedEyes[i].Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+    }
+    originalBarrier(list, 2, b);
+    const bool srgb = formats[0] == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    const float frame[4] = {eye_sharpen::peak(eye_sharpen::sharpness(percent)), srgb ? 1.f : 0.f,
+                            eye_sharpen::boost(percent), 0};
+    list->SetPipelineState(srgb ? sharp.srgb.Get() : sharp.state.Get());
+    list->SetGraphicsRootSignature(sharp.root.Get());
+    ID3D12DescriptorHeap* heaps[] = {sharp.views.Get()};
+    list->SetDescriptorHeaps(1, heaps);
+    list->SetGraphicsRoot32BitConstants(1, 4, frame, 0);
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(outWidth), static_cast<float>(outHeight), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+    list->RSSetViewports(1, &viewport);
+    list->RSSetScissorRects(1, &rect);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    for (unsigned i = 0; i < 2; ++i) {
+        // Render target views are read when recorded: rewriting them next
+        // frame, for that frame's images, is safe.
+        D3D12_RENDER_TARGET_VIEW_DESC rv{};
+        rv.Format = formats[i];
+        rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+        auto target = sharp.targets->GetCPUDescriptorHandleForHeapStart();
+        target.ptr += static_cast<SIZE_T>(targetStep) * i;
+        device->CreateRenderTargetView(incoming[i], &rv, target);
+        auto view = sharp.views->GetGPUDescriptorHandleForHeapStart();
+        // Update 24: eye_debug same reads the left eye's picture for both.
+        view.ptr += static_cast<UINT64>(viewStep) * eye_debug::eyeDebugSource(debug, i);
+        list->SetGraphicsRootDescriptorTable(0, view);
+        list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        list->DrawInstanced(3, 1, 0, 0);
+    }
+    for (auto& barrier : b)
+        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    originalBarrier(list, 2, b);
+    if (sharp.queries) {
+        originalEndQuery(list, sharp.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first + 1);
+        list->ResolveQueryData(sharp.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, 2, sharp.stamps.Get(),
+                               sizeof(uint64_t) * first);
+        sharp.timed[slot] = true;
+    }
+    return true;
+}
+// Eye history (native_eye_gpu.hpp, setEyeHistory; eye_history.hpp): each new
+// staged pair blended with the one before it, turned to the new pair's view.
+// Built on the first pair that wants it, under the submission and recording
+// locks, like the AA pass.
+std::atomic<uint32_t> historyPercent{}, historyFault{};
+std::mutex viewLock;
+struct NotedViews {
+    uint64_t serial{};
+    std::array<eye_history::EyeView, 2> eyes{};
+};
+std::array<NotedViews, 32> notedViews{}; // viewLock
+unsigned nextNoted{};                    // viewLock
+struct HistoryPipeline {
+    ComPtr<ID3D12RootSignature> root;
+    ComPtr<ID3D12PipelineState> state;
+    ComPtr<ID3D12DescriptorHeap> views, targets;
+    ComPtr<ID3D12QueryHeap> queries;
+    ComPtr<ID3D12Resource> stamps;
+    const volatile uint64_t* stampData{};
+    double ticksPerMs{};
+    std::array<bool, 3> timed{};
+    // Per eye, the picture so far and the one being drawn (parity is read).
+    std::array<std::array<ComPtr<ID3D12Resource>, 2>, 2> pictures;
+    unsigned parity{};
+    bool ready{}, valid{}; // valid: pictures[*][parity] hold `shown`
+    std::array<eye_history::EyeView, 2> shown{};
+} history;
+const char* historyShader = R"(
+Texture2D current : register(t0);
+Texture2D previous : register(t1);
+SamplerState bilinear : register(s0);
+cbuffer Frame : register(b0) { float4 row0; float4 row1; float4 row2; float4 extra; };
+float4 vs(uint id : SV_VertexID) : SV_POSITION {
+    const float2 corner = float2((id << 1) & 2, id & 2);
+    return float4(corner * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float4 ps(float4 position : SV_POSITION) : SV_TARGET {
+    uint w, h;
+    current.GetDimensions(w, h);
+    const int2 p = int2(position.xy);
+    const int2 last = int2(w, h) - 1;
+    const float4 here = current.Load(int3(p, 0));
+    float3 lo = here.rgb, hi = here.rgb;
+    [unroll] for (int y = -1; y <= 1; ++y)
+        [unroll] for (int x = -1; x <= 1; ++x) {
+            const float3 n = current.Load(int3(clamp(p + int2(x, y), int2(0, 0), last), 0)).rgb;
+            lo = min(lo, n);
+            hi = max(hi, n);
+        }
+    const float3 uv = float3(position.xy * extra.yz, 1);
+    const float3 q = float3(dot(row0.xyz, uv), dot(row1.xyz, uv), dot(row2.xyz, uv));
+    float keep = extra.x;
+    float2 old = float2(-1, -1);
+    if (q.z > 1e-5)
+        old = q.xy / q.z;
+    if (keep <= 0 || any(old < 0) || any(old > 1))
+        return here;
+    // Update 21: extra.w widens the clamp (eye_history.hpp historyLoosen).
+    const float3 give = (hi - lo) * saturate(extra.w);
+    const float3 before = clamp(previous.SampleLevel(bilinear, old, 0).rgb, max(lo - give, 0), hi + give);
+    return float4(lerp(here.rgb, before, keep), here.a);
+}
+)";
+bool failHistory(uint32_t code) {
+    historyFault = code;
+    history.ready = false;
+    std::lock_guard lock(copyTimingLock);
+    SpidyEyeHistoryData.fault = code;
+    return false;
+}
+bool prepareHistory() {
+    if (historyFault)
+        return false;
+    if (history.ready)
+        return true;
+    D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0};
+    D3D12_ROOT_PARAMETER parameters[2]{};
+    parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    parameters[0].DescriptorTable = {1, &range};
+    parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    parameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameters[1].Constants.Num32BitValues = 16;
+    parameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.MaxLOD = D3D12_FLOAT32_MAX;
+    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_ROOT_SIGNATURE_DESC rs{2, parameters, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ComPtr<ID3DBlob> signature, error;
+    if (FAILED(D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error)) ||
+        FAILED(device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+                                           IID_PPV_ARGS(&history.root))))
+        return failHistory(1);
+    ComPtr<ID3DBlob> vs, ps;
+    const auto length = std::strlen(historyShader);
+    if (FAILED(D3DCompile(historyShader, length, "spidy_eye_history", nullptr, nullptr, "vs", "vs_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vs, &error)) ||
+        FAILED(D3DCompile(historyShader, length, "spidy_eye_history", nullptr, nullptr, "ps", "ps_5_0",
+                          D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &ps, &error)))
+        return failHistory(2);
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC d{};
+    d.pRootSignature = history.root.Get();
+    d.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};
+    d.PS = {ps->GetBufferPointer(), ps->GetBufferSize()};
+    d.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    d.NumRenderTargets = 1;
+    d.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.SampleMask = UINT_MAX;
+    d.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    d.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    d.RasterizerState.DepthClipEnable = TRUE;
+    auto& blend = d.BlendState.RenderTarget[0];
+    blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+    blend.BlendOp = blend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&history.state))))
+        return failHistory(3);
+    // Two pictures an eye, the headset's size, in the staged images' format.
+    for (unsigned i = 0; i < 2; ++i)
+        for (unsigned k = 0; k < 2; ++k) {
+            auto desc = stagedEyes[i]->GetDesc();
+            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            D3D12_HEAP_PROPERTIES heap{};
+            heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+            if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
+                                                       IID_PPV_ARGS(&history.pictures[i][k]))))
+                return failHistory(5);
+        }
+    // Views: for eye i read from picture k, the table at (2i + k) * 2 holds
+    // the staged image (t0) and that picture (t1). Targets: picture (i, k) at 2i + k.
+    D3D12_DESCRIPTOR_HEAP_DESC views{};
+    views.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    views.NumDescriptors = 8;
+    views.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    D3D12_DESCRIPTOR_HEAP_DESC targetViews{};
+    targetViews.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    targetViews.NumDescriptors = 4;
+    if (FAILED(device->CreateDescriptorHeap(&views, IID_PPV_ARGS(&history.views))) ||
+        FAILED(device->CreateDescriptorHeap(&targetViews, IID_PPV_ARGS(&history.targets))))
+        return failHistory(4);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
+    sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    D3D12_RENDER_TARGET_VIEW_DESC rv{};
+    rv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    rv.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    for (unsigned i = 0; i < 2; ++i)
+        for (unsigned k = 0; k < 2; ++k) {
+            auto view = history.views->GetCPUDescriptorHandleForHeapStart();
+            view.ptr += static_cast<SIZE_T>(viewStep) * ((2 * i + k) * 2);
+            device->CreateShaderResourceView(stagedEyes[i].Get(), &sv, view);
+            view.ptr += viewStep;
+            device->CreateShaderResourceView(history.pictures[i][k].Get(), &sv, view);
+            auto target = history.targets->GetCPUDescriptorHandleForHeapStart();
+            target.ptr += static_cast<SIZE_T>(targetStep) * (2 * i + k);
+            device->CreateRenderTargetView(history.pictures[i][k].Get(), &rv, target);
+        }
+    UINT64 frequency{};
+    D3D12_QUERY_HEAP_DESC qd{};
+    qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    qd.Count = 2 * static_cast<UINT>(captureCommands.size());
+    D3D12_HEAP_PROPERTIES readback{};
+    readback.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC buffer{};
+    buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    buffer.Width = sizeof(uint64_t) * qd.Count;
+    buffer.Height = 1;
+    buffer.DepthOrArraySize = 1;
+    buffer.MipLevels = 1;
+    buffer.SampleDesc.Count = 1;
+    buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    void* mapped{};
+    if (SUCCEEDED(queue->GetTimestampFrequency(&frequency)) && frequency &&
+        SUCCEEDED(device->CreateQueryHeap(&qd, IID_PPV_ARGS(&history.queries))) &&
+        SUCCEEDED(device->CreateCommittedResource(&readback, D3D12_HEAP_FLAG_NONE, &buffer,
+                                                  D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                  IID_PPV_ARGS(&history.stamps))) &&
+        SUCCEEDED(history.stamps->Map(0, nullptr, &mapped))) {
+        history.stampData = static_cast<const volatile uint64_t*>(mapped);
+        history.ticksPerMs = static_cast<double>(frequency) / 1000.0;
+    } else {
+        history.queries.Reset();
+        history.stamps.Reset();
+    }
+    history.ready = true;
+    history.valid = false;
+    return true;
+}
+void noteHistoryTime(size_t slot) {
+    if (!history.timed[slot] || !history.stampData)
+        return;
+    history.timed[slot] = false;
+    const uint64_t begin = history.stampData[2 * slot], end = history.stampData[2 * slot + 1];
+    if (end > begin) {
+        std::lock_guard lock(copyTimingLock);
+        SpidyEyeHistoryData.gpuMs += static_cast<double>(end - begin) / history.ticksPerMs;
+        ++SpidyEyeHistoryData.timed;
+    }
+    if (end > begin)
+        historyClock.note(static_cast<double>(end - begin) / history.ticksPerMs);
+}
+bool findViews(uint64_t serial, std::array<eye_history::EyeView, 2>& out) {
+    std::lock_guard lock(viewLock);
+    for (const auto& noted : notedViews)
+        if (noted.serial == serial && serial) {
+            out = noted.eyes;
+            return true;
+        }
+    return false;
+}
+// The staged pair (in COPY_SOURCE) blended with the history, turned to its
+// view: drawn into the other picture, which is copied back into the staged
+// image and kept for the next pair.
+void drawHistory(ID3D12GraphicsCommandList* list, size_t slot, uint64_t serial) {
+    std::array<eye_history::EyeView, 2> now{};
+    const bool viewed = findViews(serial, now);
+    const uint32_t percent = historyPercent.load();
+    float frame[2][16]{};
+    bool blended = false;
+    for (unsigned i = 0; i < 2; ++i) {
+        std::array<float, 9> h{};
+        const bool both = viewed && history.valid &&
+                          eye_history::historyReprojection(history.shown[i], now[i], h);
+        const float turn = both ? eye_history::historyTurn(history.shown[i], now[i]) : 0;
+        // Update 23: less of the old picture, held less loosely, while the head turns.
+        const float keep = eye_history::turnedWeight(eye_history::historyWeight(percent, both, turn), turn);
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c)
+                frame[i][r * 4 + c] = h[r * 3 + c];
+        frame[i][12] = keep;
+        frame[i][13] = 1.f / static_cast<float>(outWidth);
+        frame[i][14] = 1.f / static_cast<float>(outHeight);
+        frame[i][15] = eye_history::turnedLoosen(eye_history::historyLoosen(percent), turn);
+        blended = blended || keep > 0;
+    }
+    const unsigned read = history.parity, write = 1 - read;
+    const auto first = static_cast<UINT>(2 * slot);
+    if (history.queries)
+        originalEndQuery(list, history.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first);
+    D3D12_RESOURCE_BARRIER b[4]{};
+    auto transition = [&](unsigned n, ID3D12Resource* r, D3D12_RESOURCE_STATES from, D3D12_RESOURCE_STATES to) {
+        b[n].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b[n].Transition = {r, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, from, to};
+    };
+    for (unsigned i = 0; i < 2; ++i) {
+        transition(2 * i, stagedEyes[i].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        transition(2 * i + 1, history.pictures[i][write].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                   D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+    originalBarrier(list, 4, b);
+    list->SetPipelineState(history.state.Get());
+    list->SetGraphicsRootSignature(history.root.Get());
+    ID3D12DescriptorHeap* heaps[] = {history.views.Get()};
+    list->SetDescriptorHeaps(1, heaps);
+    const D3D12_VIEWPORT viewport{0, 0, static_cast<float>(outWidth), static_cast<float>(outHeight), 0, 1};
+    const D3D12_RECT rect{0, 0, static_cast<LONG>(outWidth), static_cast<LONG>(outHeight)};
+    list->RSSetViewports(1, &viewport);
+    list->RSSetScissorRects(1, &rect);
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    const auto viewStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const auto targetStep = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    for (unsigned i = 0; i < 2; ++i) {
+        auto view = history.views->GetGPUDescriptorHandleForHeapStart();
+        view.ptr += static_cast<UINT64>(viewStep) * ((2 * i + read) * 2);
+        auto target = history.targets->GetCPUDescriptorHandleForHeapStart();
+        target.ptr += static_cast<SIZE_T>(targetStep) * (2 * i + write);
+        list->SetGraphicsRootDescriptorTable(0, view);
+        list->SetGraphicsRoot32BitConstants(1, 16, frame[i], 0);
+        list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        list->DrawInstanced(3, 1, 0, 0);
+    }
+    for (unsigned i = 0; i < 2; ++i) {
+        transition(2 * i, stagedEyes[i].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                   D3D12_RESOURCE_STATE_COPY_DEST);
+        transition(2 * i + 1, history.pictures[i][write].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+    }
+    originalBarrier(list, 4, b);
+    for (unsigned i = 0; i < 2; ++i)
+        list->CopyResource(stagedEyes[i].Get(), history.pictures[i][write].Get());
+    for (unsigned i = 0; i < 2; ++i) {
+        transition(2 * i, stagedEyes[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        transition(2 * i + 1, history.pictures[i][write].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+    originalBarrier(list, 4, b);
+    if (history.queries) {
+        originalEndQuery(list, history.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first + 1);
+        list->ResolveQueryData(history.queries.Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, 2, history.stamps.Get(),
+                               sizeof(uint64_t) * first);
+        history.timed[slot] = true;
+    }
+    history.parity = write;
+    // Without its view the picture is still kept, but it cannot be turned to
+    // the next pair's: that one starts again.
+    history.valid = viewed;
+    history.shown = now;
+    std::lock_guard lock(copyTimingLock);
+    if (blended)
+        ++SpidyEyeHistoryData.blended;
+    else
+        ++SpidyEyeHistoryData.restarted;
+    if (!viewed)
+        ++SpidyEyeHistoryData.unviewed;
+}
 void stagePair(EyePairState::Stamp stamp) {
     if (!known[0] || !known[1] || !makeReadbacks())
         return;
     for (unsigned i = 0; i < 2; ++i)
         if (!stagedEyes[i]) {
             auto desc = resources[i]->GetDesc();
-            desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+            // A render target too, for the AA pass (drawAa); the headset's
+            // size, which is smaller than the eye's when it is supersampled.
+            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            desc.Width = outWidth;
+            desc.Height = outHeight;
             D3D12_HEAP_PROPERTIES heap{};
             heap.Type = D3D12_HEAP_TYPE_DEFAULT;
             if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
@@ -394,13 +1454,36 @@ void stagePair(EyePairState::Stamp stamp) {
     auto* slot = readyCommands(captureCommands);
     if (!slot)
         return;
-    for (unsigned i = 0; i < 2; ++i)
-        copyEyeTexture(slot->list.Get(), resources[i].Get(), states[i], stagedEyes[i].Get(), originalBarrier,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE);
-    if (!submitCommands(*slot))
+    const auto index = static_cast<size_t>(slot - captureCommands.data());
+    noteAaTime(index);
+    noteHistoryTime(index);
+    // Supersampled eyes cannot be copied: they are always filtered down,
+    // without FXAA (the extra samples already smooth the edges).
+    const bool down = downsampling();
+    const bool smooth = (down || aaMode.load() == 1) && prepareAa();
+    if (down && !smooth) {
+        fault = 3806; // the headset would get nothing: say why (aaFault)
         return;
+    }
+    if (smooth)
+        drawAa(slot->list.Get(), index);
+    else
+        for (unsigned i = 0; i < 2; ++i)
+            copyEyeTexture(slot->list.Get(), resources[i].Get(), states[i], stagedEyes[i].Get(), originalBarrier,
+                           D3D12_RESOURCE_STATE_COPY_SOURCE);
+    // The history after AA: it blends what the headset is shown.
+    if (historyPercent.load() && prepareHistory())
+        drawHistory(slot->list.Get(), index, stamp.serial);
+    else
+        history.valid = false;
+    if (!submitCommands(*slot)) {
+        history.valid = false;
+        return;
+    }
+    aaPairs += smooth;
     capturedStamp = stamp;
     capturedMs = GetTickCount64();
+    capturedQpc = qpcNow();
     ++capturedPairs;
 }
 void captureImage(ID3D12GraphicsCommandList* list, ID3D12Resource* image, unsigned eye) {
@@ -514,6 +1597,8 @@ void STDMETHODCALLTYPE execute(ID3D12CommandQueue* q, UINT count, ID3D12CommandL
         return;
     }
     std::lock_guard submitLock(submission);
+    if (pendingCount && fence)
+        noteCopies(fence->GetCompletedValue());
     originalExecute(q, count, commands);
     std::lock_guard recordLock(recording);
     ++executes;
@@ -778,7 +1863,9 @@ void mirrorEye(IDXGISwapChain* swapchain) {
     auto* slot = readyCommands(mirrorCommands);
     if (!slot)
         return; // earlier draws still in flight: this present keeps what the buffer holds
-    const bool shown = shownEye && shownEyeFresh(shownMs, now, mirrorRate.load());
+    // Update 16: while sharpening, the unsharpened stagedEyes[0] (the monitor
+    // gets no sharpening and no copy is added for it).
+    const bool shown = !sharpening && shownEye && shownEyeFresh(shownMs, now, mirrorRate.load());
     auto* eye = shown ? shownEye.Get() : stagedEyes[0].Get();
     D3D12_SHADER_RESOURCE_VIEW_DESC sv{};
     sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -801,7 +1888,7 @@ void mirrorEye(IDXGISwapChain* swapchain) {
     originalBarrier(list, 2, b);
     // The part of the eye with the window's shape, about its middle.
     const float window = static_cast<float>(desc.Width) / static_cast<float>(desc.Height);
-    const float image = static_cast<float>(width) / static_cast<float>(height);
+    const float image = static_cast<float>(outWidth) / static_cast<float>(outHeight);
     const float across = window < image ? window / image : 1, down = window < image ? 1 : image / window;
     const float part[8] = {1.f / static_cast<float>(desc.Width), 1.f / static_cast<float>(desc.Height),
                            (1 - across) / 2, (1 - down) / 2, across, down, 0, 0};
@@ -1168,8 +2255,117 @@ void enterMarker(unsigned eye, uint64_t serial, uint64_t generation, bool ended)
 void leaveMarker() {
     currentMarker = {};
 }
+void copyTiming(TimingMetric& gpu, TimingMetric& pair) {
+    std::lock_guard lock(copyTimingLock);
+    gpu = copyGpu;
+    pair = copyPair;
+}
 uint32_t error() {
     return fault.load();
+}
+std::atomic<uint32_t> supersamplePercent{100};
+bool setSupersample(uint32_t percent) {
+    if (percent < minimumSupersample || percent > maximumSupersample || enabled)
+        return false;
+    supersamplePercent = percent;
+    return true;
+}
+uint32_t supersample() {
+    return supersamplePercent.load();
+}
+void setEyeOutput(uint32_t outputWidth, uint32_t outputHeight) {
+    wantedOutWidth = outputWidth;
+    wantedOutHeight = outputHeight;
+}
+bool setEyeAA(uint32_t mode) {
+    if (mode > 1)
+        return false;
+    aaMode = staged ? mode : 0;
+    return true;
+}
+// Update 15: the wrist hologram's GRAPHICS page reads what is in force.
+uint32_t eyeAA() {
+    return aaMode.load();
+}
+uint32_t eyeHistory() {
+    return historyPercent.load();
+}
+bool setEyeSharpen(uint32_t percent) {
+    if (percent > eye_sharpen::maximumPercent || (percent && sharpenFault))
+        return false;
+    sharpenPercent = staged ? percent : 0;
+    if (!sharpenPercent)
+        sharpening = false;
+    return true;
+}
+bool setEyeDebug(uint32_t mode) {
+    if (!eye_debug::validEyeDebug(mode))
+        return false;
+    eyeDebugMode = mode;
+    return true;
+}
+uint32_t eyeDebug() {
+    return eyeDebugMode.load();
+}
+uint32_t eyeSharpen() {
+    return sharpenPercent.load();
+}
+uint32_t eyeSharpenFault() {
+    return sharpenFault.load();
+}
+void eyeSharpenTiming(TimingMetric& gpu, uint32_t& percent, uint32_t& code, uint64_t& sharpened) {
+    {
+        std::lock_guard lock(copyTimingLock);
+        gpu = sharpenGpu;
+    }
+    percent = sharpenPercent.load();
+    code = sharpenFault.load();
+    sharpened = sharpenPairs.load();
+}
+float eyePassesGpuMs() {
+    const uint64_t now = GetTickCount64();
+    float total = 0;
+    bool known = true, any = false;
+    const auto add = [&](bool on, const PassClock& clock) {
+        if (!on)
+            return;
+        any = true;
+        const uint64_t tick = clock.tick.load();
+        if (!tick || now - tick > 1000)
+            known = false;
+        else
+            total += clock.ms.load();
+    };
+    add(staged && !aaFault.load() && (downsampling() || aaMode.load() == 1), aaClock);
+    add(staged && !historyFault.load() && historyPercent.load(), historyClock);
+    add(sharpening.load(), sharpenClock);
+    return !any ? 0.f : known ? total : std::numeric_limits<float>::quiet_NaN();
+}
+uint32_t monitorRateNow() {
+    return mirrorRate.load();
+}
+bool setEyeHistory(uint32_t percent) {
+    if (percent > eye_history::maximumPercent)
+        return false;
+    historyPercent = percent;
+    std::lock_guard lock(copyTimingLock);
+    SpidyEyeHistoryData.percent = percent;
+    return true;
+}
+void noteEyeViews(uint64_t serial, const std::array<eye_history::EyeView, 2>& views) {
+    std::lock_guard lock(viewLock);
+    notedViews[nextNoted] = {serial, views};
+    nextNoted = (nextNoted + 1) % notedViews.size();
+}
+void eyeAATiming(TimingMetric& gpu, uint32_t& mode, uint32_t& code, uint64_t& smoothed) {
+    {
+        std::lock_guard lock(copyTimingLock);
+        gpu = aaGpu;
+    }
+    // 2: the supersampled eyes' downsample filter, whatever FXAA is set to.
+    mode = width && downsampling() ? 2 : aaMode.load();
+    code = aaFault.load();
+    smoothed = aaPairs.load();
 }
 void registerEye(unsigned eye, ID3D12Resource* resource) {
     if (!enabled || eye >= 2 || !resource)
@@ -1243,7 +2439,7 @@ bool copyLatest(ID3D12Resource* left, ID3D12Resource* right, uint64_t& serial, u
             return false;
         }
         const auto desc = incoming[i]->GetDesc();
-        if (!rgba8CopyTarget(desc) || desc.Width != width || desc.Height != height) {
+        if (!rgba8CopyTarget(desc) || desc.Width != outWidth || desc.Height != outHeight) {
             fault = 3703;
             return false;
         }
@@ -1258,14 +2454,34 @@ bool copyLatest(ID3D12Resource* left, ID3D12Resource* right, uint64_t& serial, u
     auto* slot = readyCommands(presentCommands);
     if (!slot)
         return false;
+    const auto slotIndex = static_cast<size_t>(slot - presentCommands.data());
+    noteSharpenTime(slotIndex);
+    // Update 16: the headset's images sharpened (in place of the copy), or
+    // copied as before when sharpening is off or cannot run.
+    const uint32_t percent = sharpenPercent.load();
+    // Update 24: read once, so both images of this pair follow the same mode.
+    const uint32_t debug = eyeDebugMode.load();
+    const bool sharpened =
+        percent && prepareSharpen() && drawSharpen(slot->list.Get(), slotIndex, incoming, percent, debug);
     for (unsigned i = 0; i < 2; ++i) {
-        copyEyeTexture(slot->list.Get(), stagedEyes[i].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, incoming[i],
-                       originalBarrier);
+        if (!sharpened)
+            copyEyeTexture(slot->list.Get(), stagedEyes[eye_debug::eyeDebugSource(debug, i)].Get(),
+                           D3D12_RESOURCE_STATE_COPY_SOURCE, incoming[i], originalBarrier);
         if (captureImages)
             captureImage(slot->list.Get(), incoming[i], i);
     }
-    if (!submitCommands(*slot))
+    if (!submitCommands(*slot)) {
+        if (sharpened)
+            sharp.timed[slotIndex] = false;
         return false;
+    }
+    sharpening = sharpened;
+    sharpenPairs += sharpened;
+    if (pendingCount == pendingCopies.size()) { // not seen finishing: drop the oldest
+        std::move(pendingCopies.begin() + 1, pendingCopies.end(), pendingCopies.begin());
+        --pendingCount;
+    }
+    pendingCopies[pendingCount++] = {slot->fence, qpcNow(), capturedQpc};
     reusedPairs += capturedStamp.generation == lastGeneration;
     lastSerial = serial = capturedStamp.serial;
     lastGeneration = generation = capturedStamp.generation;
@@ -1274,14 +2490,16 @@ bool copyLatest(ID3D12Resource* left, ID3D12Resource* right, uint64_t& serial, u
     return true;
 }
 void keepShownEye(ID3D12Resource* left) {
-    if (!left || !mirrorWanted || screenWanted || !shownWanted)
+    // Update 16: while the headset's images are sharpened, the window shows
+    // stagedEyes[0] (before sharpening, without Spidy's drawings): no copy.
+    if (!left || !mirrorWanted || screenWanted || !shownWanted || sharpening)
         return;
     std::lock_guard submitLock(submission);
     std::lock_guard recordLock(recording);
     if (!enabled || !staged || fault || shownFailed || !stagedEyes[0] || GetTickCount64() >= deadline)
         return;
     const auto desc = left->GetDesc();
-    if (!rgba8CopyTarget(desc) || desc.Width != width || desc.Height != height)
+    if (!rgba8CopyTarget(desc) || desc.Width != outWidth || desc.Height != outHeight)
         return;
     if (!shownEye) {
         const auto own = stagedEyes[0]->GetDesc();
@@ -1328,12 +2546,15 @@ DWORD start(void* input) {
         c.bytes != sizeof(c) || c.pid != GetCurrentProcessId() ||
         c.base != reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) ||
         !GetModuleHandleW(L"MilesMorales.exe") || (c.durationMs && c.durationMs < 500) ||
-        c.durationMs > 30000 || c.copyToXr > 2 || c.captureImages > 1 || c.reserved ||
+        c.durationMs > 30000 || c.copyToXr > 2 || c.captureImages > 1 || c.eyeAA > 1 ||
         (!c.copyToXr && !c.captureImages) || !c.queue)
         return 1001;
     copyToXr = c.copyToXr != 0;
     staged = c.copyToXr == 2;
     captureImages = c.captureImages != 0;
+    // Only the staged images (copyToXr 2) pass through the AA pass.
+    aaMode = staged ? c.eyeAA : 0;
+    pendingCount = 0; // a new fence starts at 0
     queue = reinterpret_cast<ID3D12CommandQueue*>(c.queue);
     if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT ||
         FAILED(queue->GetDevice(IID_PPV_ARGS(&device))))
@@ -1407,6 +2628,7 @@ DWORD start(void* input) {
     return 0;
 }
 bool readPixels() { // submission and recording held by caller; GPU work complete
+    const UINT width = imageWidth(), height = imageHeight();
     for (unsigned i = 0; i < 2; ++i) {
         void* data{};
         const auto& layout = layouts[i];
@@ -1505,6 +2727,50 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyMonitorRate(void* rate) {
         return 3911;
     native_gpu::monitorRate(static_cast<uint32_t>(value));
     return 0;
+}
+// Eye anti-aliasing now (live.txt "aa"): 0 off, 1 FXAA. Takes effect with the
+// next eye pair; refused (3960) for another value.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeAA(void* mode) {
+    return native_gpu::setEyeAA(static_cast<uint32_t>(std::min<uintptr_t>(reinterpret_cast<uintptr_t>(mode), 2)))
+               ? 0
+               : 3960;
+}
+// Eye history (live.txt history): this percent of each pair is the pair
+// before it, turned to the new view (0 off, at most 95 since Update 21, the
+// clamp widened from 50 on); refused (3962) above.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeHistory(void* percent) {
+    return native_gpu::setEyeHistory(
+               static_cast<uint32_t>(std::min<uintptr_t>(reinterpret_cast<uintptr_t>(percent), 1000)))
+               ? 0
+               : 3962;
+}
+// Update 16: eye sharpening (live.txt sharpen): 0 off (no pass), 1-100 the
+// headset's images sharpened (CAS), 101-200 (Update 21) the strong mode past
+// CAS's top (eye_sharpen.hpp boost); refused (3963) above 200 or once the pass
+// could not be built (its code: SpidyXrTimingData's eyeSharpenFault).
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeSharpen(void* percent) {
+    return native_gpu::setEyeSharpen(
+               static_cast<uint32_t>(std::min<uintptr_t>(reinterpret_cast<uintptr_t>(percent), 1000)))
+               ? 0
+               : 3963;
+}
+// Update 24: live.txt eye_debug (eye_debug.hpp): 0 off, 1 both headset images
+// from the left eye's picture (a flicker test; the world looks flat). Only the
+// copy to the headset changes; refused (3991) for anything else.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeDebug(void* mode) {
+    return native_gpu::setEyeDebug(
+               static_cast<uint32_t>(std::min<uintptr_t>(reinterpret_cast<uintptr_t>(mode), 1000)))
+               ? 0
+               : 3991;
+}
+// Eye supersampling (launcher -Supersample): the eyes are rendered at this
+// percent of the headset's eye size, per side (100-200; 100 none), and filtered
+// down to it. Only before SpidyXrStart; refused (3961) otherwise.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeSupersample(void* percent) {
+    return native_gpu::setSupersample(
+               static_cast<uint32_t>(std::min<uintptr_t>(reinterpret_cast<uintptr_t>(percent), 1000)))
+               ? 0
+               : 3961;
 }
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyGpuFreeze(void*) {
     return native_gpu::freeze();

@@ -200,9 +200,9 @@ int main() {
         check(args.size() == 9 && args[7] == L"--render-scale" && args[8] == L"50", "the render scale at least 50%");
         // Upscaling: the default goes unsaid, another choice is passed, within its range.
         options = {};
-        options.upscale = 100;
+        options.upscale = 67;
         args = sessionArguments(options, L"r.json", L"", L"");
-        check(args.size() == 9 && args[7] == L"--upscale" && args[8] == L"100", "no upscaling");
+        check(args.size() == 9 && args[7] == L"--upscale" && args[8] == L"67", "an upscale other than none");
         options.upscale = 20;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 9 && args[7] == L"--upscale" && args[8] == L"50", "the upscale at least 50%");
@@ -587,8 +587,9 @@ int main() {
         size_t lines = 0;
         for (size_t line = 0; line < tabOnly.size(); line = tabOnly.find('\n', line) + 1) {
             const std::string key = tabOnly.substr(line, tabOnly.find('=', line) - line);
+            // The monitor's recording FOV and the wrist menu's graphics and hologram suit one PC.
             if (key == "recording_fov" || key == "recording_smoothing" || key == "height_cm" ||
-                key == "eye_aim")
+                key == "eye_aim" || key.starts_with("eye_") || key.starts_with("hud_"))
                 continue;
             ++lines;
             check(at(key) < std::size(profileSettings) &&

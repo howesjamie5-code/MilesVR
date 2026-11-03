@@ -2,13 +2,17 @@
 #include <cstdint>
 #include <d3d12.h>
 #include <wrl/client.h>
+#include "xr_timing.hpp"
+#include "eye_history.hpp"
 
 namespace spidy::native_gpu {
 struct Config {
     uint32_t magic = 0x53475043, version = 3, bytes = sizeof(Config), pid{};
     uint64_t base{}, queue{};
     uint32_t durationMs = 10000, copyToXr{}; // 0 capture, 1 direct, 2 staged
-    uint32_t captureImages = 1, reserved{};
+    // eyeAA (was reserved, 0): 1 smooths each staged eye pair with FXAA 3.11
+    // quality on its way to the headset (eyeAntiAliasing); 0 copies it as is.
+    uint32_t captureImages = 1, eyeAA{};
 };
 struct Data {
     uint32_t magic = 0x53475044, version = 2, bytes = sizeof(Data), status{};
@@ -35,6 +39,84 @@ bool waitCopy(uint64_t serial, uint32_t timeoutMs);
 // exact poses required for projection-layer submission, including on reuse.
 bool copyLatest(ID3D12Resource* left, ID3D12Resource* right, uint64_t& serial, uint64_t& generation);
 uint32_t error();
+// Eye anti-aliasing (staged mode only): no game addresses, only the eye images
+// the bridge already copies. Each new eye pair is drawn through an FXAA 3.11
+// quality pass (luma from RGB, display-encoded values) into the staged images
+// the headset copies come from, so its cost is paid once a pair, not once a
+// headset frame, and the overlay drawn later on the swapchain images stays
+// sharp. A pass that cannot be built (no d3dcompiler_47, an eye image that is
+// not readable by shaders) leaves the plain copy and records why (aaFault).
+// setEyeAA: 0 off, 1 FXAA; false for another value.
+bool setEyeAA(uint32_t mode);
+// Eye history (eye_history.hpp): each new pair blended with the pair before
+// it, turned to the new pair's view, this percent the old one (0 off, at most
+// eye_history::maximumPercent; false above it). After AA, at the headset's size.
+bool setEyeHistory(uint32_t percent);
+// Update 15: the eye AA mode, history percent and monitor rate in force.
+uint32_t eyeAA();
+uint32_t eyeHistory();
+uint32_t monitorRateNow();
+// The views the eyes of the pair with this serial were rendered from (the
+// eyes command's serial), for the history pass to turn the old pair to the new.
+void noteEyeViews(uint64_t serial, const std::array<eye_history::EyeView, 2>& views);
+// SpidyEyeHistoryData, for the launcher's report.
+struct HistoryData {
+    uint32_t magic = 0x53454844; // SEHD
+    uint32_t version = 1;
+    uint32_t bytes = 64;
+    uint32_t percent{};
+    uint32_t fault{};            // the pass could not be built: 1 root, 2 shader, 3 state, 4 views, 5 pictures
+    uint32_t reserved{};
+    uint64_t blended{};          // pairs blended with the one before
+    uint64_t restarted{};        // pairs shown as they came (a cut, a fast turn, the first)
+    uint64_t unviewed{};         // pairs without a noted view
+    double gpuMs{};              // GPU time of the timed passes, summed
+    uint64_t timed{};
+};
+static_assert(sizeof(HistoryData) == 64);
+// Eye supersampling: the eyes are rendered at `percent` of the headset's eye
+// size per side (minimumSupersample-maximumSupersample; 100 none) and, staged,
+// each pair is filtered down to the headset's size (a Mitchell-Netravali
+// filter in linear light) instead of FXAA. setSupersample only before start;
+// false for another value. setEyeOutput gives the headset's eye size (its
+// swapchain images); 0 x 0, or the eyes' own size, copies them as before.
+inline constexpr uint32_t minimumSupersample = 100, maximumSupersample = 200;
+bool setSupersample(uint32_t percent);
+uint32_t supersample();
+void setEyeOutput(uint32_t width, uint32_t height);
+// The AA pass's GPU time for both eyes (timestamps on the game's queue), the
+// mode now (0 off, 1 FXAA, 2 the supersampled eyes' downsample), why it stopped (0 none; 1 root signature, 2 shader compile,
+// 3 pipeline, 4 descriptor heaps, 5 eye image not readable by shaders,
+// 6 resources), and how many pairs it smoothed.
+void eyeAATiming(TimingMetric& gpu, uint32_t& mode, uint32_t& aaFault, uint64_t& smoothed);
+// Update 16: sharpening of the headset's images (CAS, eye_sharpen.hpp), in
+// place of copyLatest's copy. setEyeSharpen: 0 off (no pass), 1-200 its
+// strength (101-200 Update 21's strong mode); false above 200, or for 1-200
+// once the pass has failed. Not in
+// the screen-copy mode (it stays 0). The window is then shown from the
+// unsharpened image, without Spidy's drawings (no copy is added for it).
+bool setEyeSharpen(uint32_t percent);
+uint32_t eyeSharpen();
+// Update 24: live.txt eye_debug (eye_debug.hpp): 0 off, 1 both headset images
+// made from the left eye's picture. False for any other value.
+bool setEyeDebug(uint32_t mode);
+uint32_t eyeDebug();
+// 0, or why the pass stopped for the session: 1 root signature, 2 shader
+// compile, 3 pipeline, 4 descriptor heaps, 5 staged eyes not readable,
+// 6 headset images not drawable. The copy is used instead.
+uint32_t eyeSharpenFault();
+void eyeSharpenTiming(TimingMetric& gpu, uint32_t& percent, uint32_t& fault, uint64_t& sharpened);
+// Update 16: the newest GPU time, in ms, of the eye passes now on (AA or the
+// supersample filter, history, sharpening) summed; 0 when none is on; NaN
+// when one is on but not measured in the last second. Lock-free.
+float eyePassesGpuMs();
+// When the headset's copies (copyLatest) finished on the GPU, measured on the
+// CPU the first time the fence is seen passed (every execute the hooks see,
+// and every copy): `gpu` from the copy's submission, `pair` from the game's
+// submission of the eye pair it copied (stagePair). Both on the game's queue,
+// which the OpenXR session is bound to, so a copy finishes only after the game
+// work queued before it. Diagnostic, for the session report.
+void copyTiming(TimingMetric& gpu, TimingMetric& pair);
 // Capture mode only: copies the newest captured pair into the pixel buffers
 // that Data publishes, without stopping. Returns 0, or why nothing was copied.
 DWORD freeze();

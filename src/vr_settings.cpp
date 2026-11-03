@@ -327,6 +327,14 @@ Values sanitized(Values v) {
     v.blowSounds = std::clamp(v.blowSounds, blowSoundSteps[0], std::end(blowSoundSteps)[-1]);
     v.heightCm = v.heightCm <= 0 ? 0 : std::clamp(v.heightCm, seated::minHeightCm, seated::maxHeightCm);
     v.eyeAim = std::clamp(v.eyeAim, 0, eyeAimShots | eyeAimZips);
+    v.eyeAA = std::clamp(v.eyeAA, 0, 1);
+    v.eyeHistory = std::clamp(v.eyeHistory, 0, 95);
+    v.eyeSharpen = std::clamp(v.eyeSharpen, 0, 200);
+    v.hudHeightCm = std::clamp(v.hudHeightCm, 0, 25);
+    v.hudScalePercent = std::clamp(v.hudScalePercent, 50, 200);
+    v.hudTextPercent = std::clamp(v.hudTextPercent, 75, 175);
+    v.hudTheme = std::clamp(v.hudTheme, 0, 4);
+    v.hudTextColor = std::clamp(v.hudTextColor, 0, 3);
     // The realistic flips' ranges, as RealisticFlip takes them.
     v.automaticStrength = std::clamp(v.automaticStrength, 25, 100);
     v.automaticSpeed = std::clamp(v.automaticSpeed, 90, 360);
@@ -676,6 +684,14 @@ constexpr TabOnly tabOnly[] = {
     {"rope_steering", &Values::ropeSteering, nullptr},
     {"web_range_m", nullptr, &Values::webRange},
     {"web_speed", nullptr, &Values::webSpeed},
+    {"eye_aa", nullptr, &Values::eyeAA},
+    {"eye_history", nullptr, &Values::eyeHistory},
+    {"eye_sharpen", nullptr, &Values::eyeSharpen},
+    {"hud_height_cm", nullptr, &Values::hudHeightCm},
+    {"hud_scale", nullptr, &Values::hudScalePercent},
+    {"hud_text", nullptr, &Values::hudTextPercent},
+    {"hud_theme", nullptr, &Values::hudTheme},
+    {"hud_text_color", nullptr, &Values::hudTextColor},
 };
 } // namespace
 std::string tabOnlyText(const Values& v) {

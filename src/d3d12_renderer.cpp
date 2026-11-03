@@ -19,6 +19,28 @@ D3D12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE type) {
     h.CreationNodeMask = h.VisibleNodeMask = 1;
     return h;
 }
+// The compiler's own words (D3DCompile's error blob), one line (from the SM2 port's Update 24.1).
+std::string compilerText(ID3DBlob* error) {
+    if (!error || !error->GetBufferSize())
+        return "no compiler message";
+    std::string text(static_cast<const char*>(error->GetBufferPointer()), error->GetBufferSize());
+    while (!text.empty() && (text.back() == '\0' || text.back() == '\n' || text.back() == '\r'))
+        text.pop_back();
+    for (char& c : text)
+        if (c == '\n' || c == '\r')
+            c = ' ';
+    return text.size() > 700 ? text.substr(0, 700) + "..." : text;
+}
+// Compiles one entry point; a failure throws with the HRESULT and the compiler's message.
+void compile(const char* source, const char* name, const char* entry, const char* target, ComPtr<ID3DBlob>& out,
+             const char* what) {
+    ComPtr<ID3DBlob> error;
+    const HRESULT result = D3DCompile(source, std::strlen(source), name, nullptr, nullptr, entry, target,
+                                      D3DCOMPILE_ENABLE_STRICTNESS, 0, &out, &error);
+    if (FAILED(result) || !out)
+        throw std::runtime_error(std::string(what) + " HRESULT=" + std::to_string(static_cast<unsigned long>(result)) +
+                                 ": " + compilerText(error.Get()));
+}
 void triangle(std::vector<Vertex>& v, Vec3 a, Vec3 b, Vec3 c, Vec3 color) {
     v.push_back({a, color});
     v.push_back({b, color});
@@ -249,12 +271,8 @@ Out vs(In i) { Out o; o.position=mul(vp,float4(i.position,1)); o.color=i.color; 
 float4 ps(Out i):SV_TARGET { return i.color; }
 )";
     ComPtr<ID3DBlob> vs, ps, error;
-    hr(D3DCompile(shader, std::strlen(shader), "spidy_lab", nullptr, nullptr, "vs", "vs_5_0",
-                  D3DCOMPILE_ENABLE_STRICTNESS, 0, &vs, &error),
-       "Compile vertex shader");
-    hr(D3DCompile(shader, std::strlen(shader), "spidy_lab", nullptr, nullptr, "ps", "ps_5_0",
-                  D3DCOMPILE_ENABLE_STRICTNESS, 0, &ps, &error),
-       "Compile pixel shader");
+    compile(shader, "spidy_lab", "vs", "vs_5_0", vs, "Compile vertex shader");
+    compile(shader, "spidy_lab", "ps", "ps_5_0", ps, "Compile pixel shader");
     D3D12_ROOT_PARAMETER parameter{};
     parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     parameter.Constants.Num32BitValues = 16;
@@ -525,12 +543,8 @@ float4 ps(float4 position : SV_POSITION) : SV_TARGET {
 }
 )";
         ComPtr<ID3DBlob> vs, ps, error;
-        hr(D3DCompile(shader, std::strlen(shader), "spidy_blit", nullptr, nullptr, "vs", "vs_5_0",
-                      D3DCOMPILE_ENABLE_STRICTNESS, 0, &vs, &error),
-           "Compile blit vertex shader");
-        hr(D3DCompile(shader, std::strlen(shader), "spidy_blit", nullptr, nullptr, "ps", "ps_5_0",
-                      D3DCOMPILE_ENABLE_STRICTNESS, 0, &ps, &error),
-           "Compile blit pixel shader");
+        compile(shader, "spidy_blit", "vs", "vs_5_0", vs, "Compile blit vertex shader");
+        compile(shader, "spidy_blit", "ps", "ps_5_0", ps, "Compile blit pixel shader");
         D3D12_GRAPHICS_PIPELINE_STATE_DESC p{};
         p.pRootSignature = blitRoot_.Get();
         p.VS = {vs->GetBufferPointer(), vs->GetBufferSize()};

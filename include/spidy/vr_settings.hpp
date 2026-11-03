@@ -186,6 +186,11 @@ struct Values {
     // once it has arrived and catches softly (Swing::webTravel; pull
     // request #48).
     int webRange = 100, webSpeed = 0;
+    // The wrist menu's GRAPHICS and HOLOGRAM pages (wrist_hud.hpp), kept for the next session: the eye
+    // FXAA (1 on), eye history and sharpening (percent, 0 off), and the hologram's height over the wrist
+    // (cm), size, text size (percent), colour theme and text colour.
+    int eyeAA = 1, eyeHistory = 0, eyeSharpen = 0;
+    int hudHeightCm = 9, hudScalePercent = 100, hudTextPercent = 100, hudTheme = 0, hudTextColor = 0;
     bool operator==(const Values&) const = default;
 };
 inline constexpr int eyeAimShots = 1, eyeAimZips = 2;

@@ -2588,6 +2588,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyEyeShadows(void* mode) {
 // How far away the far buildings draw their full models while an eye stands in
 // for the resting game view (impostorReach above): percent of the game's own
 // distance, 50-400; 150 unless set. Takes effect at the next frame.
+// The reach in force, for the wrist menu (game_xr.cpp).
+extern "C" uint32_t SpidyImpostorReachNow() {
+    return impostorReach.load();
+}
 extern "C" __declspec(dllexport) DWORD WINAPI SpidyImpostorReach(void* percent) {
     const auto value = reinterpret_cast<uintptr_t>(percent);
     if (value < 50 || value > 400)

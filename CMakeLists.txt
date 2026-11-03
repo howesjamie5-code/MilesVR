@@ -37,7 +37,7 @@ add_library(spidy_core src/swing.cpp src/web_grab.cpp src/lab_world.cpp src/lab_
             src/web_visual.cpp src/body_ik.cpp src/punch.cpp src/shooter.cpp src/vr_settings.cpp
             src/body_calibration.cpp src/overlay_text.cpp src/slow_motion.cpp src/web_strike.cpp
             src/impact_sound.cpp src/prompt_buttons.cpp src/gadget_wheel.cpp src/spider_sense.cpp src/phone.cpp
-            src/body_haptics.cpp src/tech_marks.cpp)
+            src/body_haptics.cpp src/tech_marks.cpp src/wrist_hud.cpp)
 target_include_directories(spidy_core PUBLIC include)
 if(MSVC)
   target_compile_options(spidy_core PRIVATE /W4 /permissive-)
@@ -134,7 +134,7 @@ if(SPIDY_BUILD_OBSERVER)
   target_compile_options(spidy_movement_bridge PRIVATE /W4 /permissive-)
   target_link_libraries(spidy_movement_bridge PRIVATE minhook)
   # Loaded while the game starts, before its renderer exists; keep it small.
-  add_library(spidy_render_memory SHARED src/native_render_memory.cpp)
+  add_library(spidy_render_memory SHARED src/native_render_memory.cpp src/native_mip_bias.cpp)
   target_include_directories(spidy_render_memory PRIVATE include)
   target_compile_definitions(spidy_render_memory PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(spidy_render_memory PRIVATE /W4 /permissive-)
