@@ -76,6 +76,7 @@ constexpr int kMonitorRateValues[] = {0, 60, 30, 15, 5};
 constexpr const char* kScreenSizes[] = {"Small", "Medium", "Large"};
 constexpr const char* kHudSizes[] = {"Off", "Small", "Medium", "Large"};
 constexpr const char* kScreenDepths[] = {"Off", "Low", "Medium", "High"};
+constexpr const char* kCutscenes[] = {"Screen", "Immersive"};
 // The button that shoots and holds webs (SessionOptions::triggerWebs: the second).
 constexpr const char* kWebButtons[] = {"Grip", "Trigger"};
 // The venom punch's hand (SessionOptions::venomLeftHand: the second).
@@ -1356,6 +1357,13 @@ void App::optionsCard(ImVec2 size) {
            S(150), [&] {
                static constexpr int depths[] = {0, 1, 2, 3};
                stepCombo("##depth", kScreenDepths, depths, 4, &o.screenDepth);
+           });
+    option("Cutscenes",
+           "Screen: on the game screen (flat, or 3D with Game screen 3D). Immersive: around you, from the "
+           "game's own camera; turn your head to look around. Menus and loading stay on the screen.",
+           S(150), [&] {
+               static constexpr int choices[] = {0, 1};
+               stepCombo("##cutscenes", kCutscenes, choices, 2, &o.cutscenes);
            });
     option("HUD", "How large the game's HUD shows in front of you; off, there is none in VR.", S(150), [&] {
         static constexpr int sizes[] = {0, 1, 2, 3};

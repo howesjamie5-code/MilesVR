@@ -7822,6 +7822,36 @@ int main() {
         c.anchor={100,48.3f,-200};c.anchored=1;check(native_eyes::valid(c),"anchored pair rejected");
         bad=c;bad.anchor.y=std::numeric_limits<float>::infinity();check(!native_eyes::valid(bad),"infinite anchor accepted");
         bad=c;bad.anchored=2;check(!native_eyes::valid(bad),"unknown anchor mode accepted");
+        bad=c;bad.enabled=5;check(!native_eyes::valid(bad),"unknown eye mode accepted");
+    });
+    test("Cutscenes: Immersive puts the tracked eyes on the game's camera", [] {
+        // The game's camera, turned and somewhere in the city.
+        const Mat4 camera=native_view::relativePose({1,0,0,0,0,-1,0,0,0,0,-1,0,100,50,-200,1},
+                                                    {{0,0,0},Quat::yaw(.7f)});
+        // The head when the scene began, turned and tilted; it is the camera from then on.
+        const Pose head{{.3f,1.6f,-.2f},Quat::yaw(-1.1f)*Quat::around({1,0,0},.2f)};
+        const Pose start=native_eyes::levelHead(head);
+        check(std::abs(start.position.y-1.6f)<1e-5f&&std::abs(start.orientation.rotate({0,1,0}).y-1)<1e-4f,
+              "the scene's start was not level");
+        const Pose eye{{.35f,1.62f,-.25f},Quat::yaw(-.6f)};
+        const Mat4 relative=native_eyes::sceneEye(start,eye);
+        check(native_view::validPose(relative),"an eye relative to the camera was not a pose");
+        const Mat4 placed=native_eyes::onCamera(camera,relative),
+                   expected=native_view::relativePose(camera,compose(inverse(start),eye));
+        float worst=0;
+        for(int i=0;i<16;++i) worst=std::max(worst,std::abs(placed[i]-expected[i]));
+        check(worst<1e-4f&&native_view::validPose(placed),"the eye was not put on the camera");
+        // At the start the eyes are the camera itself.
+        const Mat4 same=native_eyes::onCamera(camera,native_eyes::sceneEye(start,start));
+        worst=0;
+        for(int i=0;i<16;++i) worst=std::max(worst,std::abs(same[i]-camera[i]));
+        check(worst<1e-4f,"the scene did not start at the game's camera");
+        native_eyes::Command c;c.enabled=4;c.serial=1;
+        for(unsigned i=0;i<2;++i) {
+            c.eyes[i].world=native_eyes::sceneEye(start,{{eye.position.x+(i?.032f:-.032f),eye.position.y,eye.position.z},eye.orientation});
+            const float fov[]={-.8f,.8f,-.8f,.8f};std::copy(std::begin(fov),std::end(fov),c.eyes[i].fov);
+        }
+        check(native_eyes::valid(c),"a scene around the viewer was refused");
     });
     test("game's active view sits between the eyes and its lens holds both eye images", [] {
         native_eyes::Command c;c.enabled=1;c.serial=1;

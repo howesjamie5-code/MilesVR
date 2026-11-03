@@ -1643,7 +1643,8 @@ void placeEyes() {
     // that screen (placeScreenHud, earlier in the frame): without the panel
     // (a pause menu: the game places none) the movie stays in the game's own
     // frame, which the headset then shows.
-    if (render && enabled && controlled && (config.createViews & 4) &&
+    // A scene around the viewer (4) leaves the movie in the game's own frame.
+    if (render && enabled && controlled && (config.createViews & 4) && desired.enabled != 4 &&
         (desired.enabled != 3 || screenHudFrame == frameIndex))
         native_hud::eyesShown(desired.enabled == 3);
     latchedHide = latchedImmersive && !native_body::drawn();
@@ -1754,7 +1755,7 @@ void placeEyes() {
         if (auto eye = slot.load(); eye && owned(eye)) {
             auto descriptor = main;
             const unsigned index = eye == eyes[0].load() ? 0 : 1;
-            if (controlled && desired.enabled >= 2) {
+            if (controlled && (desired.enabled == 2 || desired.enabled == 3)) {
                 // The game screen in stereo: the game's camera set apart
                 // sideways, each lens shifted the other way (stereoEyes).
                 const bool stereo = desired.enabled == 3;
@@ -1784,9 +1785,11 @@ void placeEyes() {
                 matchDistances(eye, descriptor, index);
                 continue;
             }
-            auto pose = controlled
-                            ? desired.eyes[index].world
-                            : native_view::relativePose(main.pose(), {{index == 0 ? -.032f : .032f, 0, 0}, {}});
+            // A scene around the viewer: the eye on this frame's own camera,
+            // so a cut or a camera move is in the same frame as the scene.
+            auto pose = !controlled ? native_view::relativePose(main.pose(), {{index == 0 ? -.032f : .032f, 0, 0}, {}})
+                        : desired.enabled == 4 ? native_eyes::onCamera(main.pose(), desired.eyes[index].world)
+                                               : desired.eyes[index].world;
             pose[12] += placed.offset.x;
             pose[13] += placed.offset.y;
             pose[14] += placed.offset.z;

@@ -111,6 +111,8 @@ struct XrConfig {
     // bit 21: arcade webs (WEB STYLE: ARCADE; vr_settings::Values::arcadeWebs)
     // (MilesVR: bit 21 the venom hand, 22 arcade webs, 23 the venom fist on
     // the trigger - vr_settings::Values::venomTrigger)
+    // bit 25: Cutscenes: Immersive (a scene the game plays is shown around the
+    // viewer from its own camera, eye command 4; off, the game screen)
     uint32_t options{};
     // OpenXR runtime manifest the launcher chose; empty: Virtual Desktop's if
     // installed, else Windows' active runtime.
@@ -1339,6 +1341,12 @@ DWORD WINAPI run(void*) {
         // and whether that scene's stereo eyes have the HUD's panel.
         SceneClock sceneClock;
         ScenePanel scenePanel;
+        // Cutscenes: Immersive. sceneAround: the scene is shown around the
+        // viewer this frame. sceneStart: the level head when it began, which
+        // is the game's camera from then on.
+        bool sceneAround{};
+        Pose sceneStart{};
+        uint32_t sceneCommands{};
         bool flatScreen{};
         Pose screenPose{};
         // MilesVR: the game screen's aspect as last shown, and the controllers as its mouse.
@@ -2661,7 +2669,16 @@ DWORD WINAPI run(void*) {
                     const auto clock = game_time::telemetry();
                     const bool timeRuns =
                         sceneClock.running(clock.installed && clock.gameFrame > 0, GetTickCount64());
+                    // Cutscenes: Immersive puts such a scene around the viewer
+                    // instead, needing no HUD panel. Not the ceiling crawl, and
+                    // not the game played on its screen (VIEW: GAME SCREEN).
+                    const bool aroundNow = (config.options & 0x2000000) && screen && !flatScreen &&
+                                           player.hero && bridgeRunning && timeRuns;
+                    if (aroundNow && !sceneAround)
+                        sceneStart = native_eyes::levelHead(frame.head);
+                    sceneAround = aroundNow;
                     const bool scene =
+                        sceneAround ||
                         scenePanel.wanted(screen && values.screenDepth > 0 && player.hero && bridgeRunning && timeRuns,
                                           native_hud::onScreen(sceneHoldMs), GetTickCount64());
                     // On the screen the controllers are the game's Xbox
@@ -5172,6 +5189,36 @@ DWORD WINAPI run(void*) {
                         // interval. A scene's screen keeps the game's frame.
                         return !vrPlay;
                     }
+                    if (!vrPlay && sceneAround) {
+                        // The scene around the viewer: each tracked eye, as it has
+                        // moved since the scene began, from the game's camera.
+                        native_eyes::Command eyes;
+                        eyes.enabled = 4;
+                        eyes.serial = ++serial;
+                        eyes.leaseMs = 250;
+                        for (unsigned i = 0; i < 2; ++i) {
+                            eyes.eyes[i].world = native_eyes::sceneEye(sceneStart, frame.eyes[i].pose);
+                            const auto& f = frame.eyes[i].fov;
+                            eyes.eyes[i].fov[0] = f.left;
+                            eyes.eyes[i].fov[1] = f.right;
+                            eyes.eyes[i].fov[2] = f.down;
+                            eyes.eyes[i].fov[3] = f.up;
+                        }
+                        NativeEyeFrame saved;
+                        saved.serial = eyes.serial;
+                        saved.motion.predictedDisplayTime = frame.predictedDisplayTime;
+                        saved.trackingEyes = frame.eyes;
+                        saved.sceneAround = true;
+                        saved.screenPose = screenPose;
+                        saved.screenAspect = SpidyFlatAspect();
+                        history.remember(saved);
+                        const auto code = SpidySetEyes(&eyes);
+                        if (code && code != 4003)
+                            check(code, "Scene eye command");
+                        stereoScene = !code;
+                        sceneCommands += !code;
+                        return true;
+                    }
                     if (!vrPlay) {
                         // The scene's two eyes: the game's own camera, set apart
                         // for this viewer and this screen (native_eyes::Stereo).
@@ -5526,6 +5573,42 @@ DWORD WINAPI run(void*) {
                         InterlockedIncrement64(&SpidyXrData.sequence);
                         return true;
                     }
+                    // A pair of a scene around the viewer, at the eyes it was
+                    // asked for, as gameplay's are, without Spidy's hands, webs
+                    // or marks.
+                    const auto showAround = [&](const NativeEyeFrame& saved, uint64_t pairSerial,
+                                                uint64_t pairGeneration) {
+                        for (unsigned eye = 0; eye < 2; ++eye) {
+                            const auto& pose = saved.trackingEyes[eye].pose;
+                            const auto& f = saved.trackingEyes[eye].fov;
+                            targets[eye].view.pose = {
+                                {pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w},
+                                {pose.position.x, pose.position.y, pose.position.z}};
+                            targets[eye].view.fov = {f.left, f.right, f.up, f.down};
+                        }
+                        copyMs =
+                            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - copyStart)
+                                .count();
+                        runtime.presentation(false);
+                        drawn = Presentation::sceneAround;
+                        std::lock_guard lock(telemetry);
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                        SpidyXrData.serial = pairSerial;
+                        SpidyXrData.generation = pairGeneration;
+                        InterlockedIncrement64(&SpidyXrData.sequence);
+                    };
+                    if (showScreen && stereoScene && sceneAround) {
+                        // Until the scene's first pair, the screen below.
+                        uint64_t pairSerial{}, pairGeneration{};
+                        const bool copied = native_gpu::copyLatest(targets[0].texture, targets[1].texture,
+                                                                   pairSerial, pairGeneration);
+                        check(native_gpu::error(), "GPU eye bridge");
+                        const auto* saved = copied ? history.find(pairSerial, displayTime) : nullptr;
+                        if (saved && saved->sceneAround) {
+                            showAround(*saved, pairSerial, pairGeneration);
+                            return true;
+                        }
+                    }
                     if (showScreen && stereoScene && native_hud::onScreen(sceneHoldMs)) {
                         // The scene's newest pair, once the game has rendered
                         // one with the HUD's panel on its screen; until then
@@ -5620,6 +5703,11 @@ DWORD WINAPI run(void*) {
                     check(native_gpu::error(), "GPU eye bridge");
                     const auto* saved = copied ? history.find(imageSerial, displayTime) : nullptr;
                     copied = copied && saved;
+                    // A scene's pair around the viewer stays so until play's first image.
+                    if (copied && saved->sceneAround) {
+                        showAround(*saved, imageSerial, imageGeneration);
+                        return true;
+                    }
                     copyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                                        copyStart)
                                  .count();
@@ -6178,6 +6266,9 @@ DWORD WINAPI run(void*) {
                                 ? "Game screen in 3D (a cutscene or another scene the game plays): the "
                                   "controllers work as an Xbox controller - Settings > MILES VR > GAME SCREEN 3D "
                                   "sets its depth"
+                            : drawn == Presentation::sceneAround
+                                ? "Cutscene around you (Cutscenes: Immersive): look around with your head; the "
+                                  "controllers work as an Xbox controller"
                             : drawn == Presentation::flat
                                 ? "Flat screen - pause, SWITCH TO VR goes back to VR"
                                 // 255 characters, all the message holds.

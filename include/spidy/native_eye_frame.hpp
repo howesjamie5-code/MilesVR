@@ -12,7 +12,10 @@ struct EyePose {
 }; // left, right, down, up
 // enabled: 0 off; 1 the tracked eyes; 2 the flat screen, both eyes the engine's
 // own camera; 3 the game screen in stereo, the two eyes that camera set apart
-// (Stereo below, carried in the first eye's fov).
+// (Stereo below, carried in the first eye's fov); 4 a scene around the viewer
+// (Cutscenes: Immersive): each eye's world is its pose relative to the game's
+// camera (sceneEye), which the render thread puts on that frame's camera
+// (onCamera), and its fov is the headset's.
 struct Command {
     uint32_t magic = 0x53455043, version = 2, bytes = sizeof(Command), enabled{};
     uint64_t serial{};
@@ -72,9 +75,9 @@ inline bool valid(const Stereo& s) {
            s.separation <= .1f;
 }
 inline bool valid(const Command& c) {
-    if (c.magic != 0x53455043 || c.version != 2 || c.bytes != sizeof(c) || c.enabled > 3 || !c.serial ||
+    if (c.magic != 0x53455043 || c.version != 2 || c.bytes != sizeof(c) || !c.serial ||
         c.leaseMs > 500 || c.reserved || c.anchored > 1 || !finite(c.anchor) || std::abs(c.anchor.x) > 1e6f ||
-        std::abs(c.anchor.y) > 1e6f || std::abs(c.anchor.z) > 1e6f)
+        std::abs(c.anchor.y) > 1e6f || std::abs(c.anchor.z) > 1e6f || c.enabled > 4)
         return false;
     if (!c.enabled)
         return true;
@@ -97,6 +100,32 @@ inline bool valid(const Command& c) {
     const auto& l = c.eyes[0].world;
     const auto& r = c.eyes[1].world;
     return length(Vec3{l[12] - r[12], l[13] - r[13], l[14] - r[14]}) <= .2f;
+}
+// A scene around the viewer (enabled 4). The viewer's level head when the
+// scene began is the game's camera: `eye` relative to it, in the camera's own
+// axes (rows right, down, forward, position).
+inline Pose levelHead(const Pose& head) {
+    const Vec3 forward = head.orientation.rotate({0, 0, -1});
+    const Vec3 heading{forward.x, 0, forward.z};
+    return {head.position, length(heading) < .1f ? Quat{} : Quat::yaw(std::atan2(-heading.x, -heading.z))};
+}
+inline Mat4 sceneEye(const Pose& start, const Pose& eye) {
+    return native_view::relativePose({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, compose(inverse(start), eye));
+}
+// That eye on the frame's camera: native_view::relativePose(camera, the same
+// relative pose).
+inline Mat4 onCamera(const Mat4& camera, const Mat4& relative) {
+    Mat4 out{};
+    for (int row = 0; row < 4; ++row) {
+        for (int i = 0; i < 3; ++i) {
+            float v = row == 3 ? camera[12 + i] : 0.f;
+            for (int j = 0; j < 3; ++j)
+                v += relative[row * 4 + j] * camera[j * 4 + i];
+            out[row * 4 + i] = v;
+        }
+    }
+    out[15] = 1;
+    return out;
 }
 // Native lens tangents (descriptor +400..+40c); +y points down.
 struct Bounds {

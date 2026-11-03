@@ -18,7 +18,15 @@ inline bool recentPresentation(uint64_t lastNewImageMs, uint64_t nowMs) {
 }
 // What a submitted headset frame showed.
 // stereoScreen: the game screen with a scene's own two eye images on it.
-enum class Presentation : uint32_t { none = 0, immersive = 1, flat = 2, gameScreen = 3, stereoScreen = 4 };
+// sceneAround: a scene the game plays, around the viewer (Cutscenes: Immersive).
+enum class Presentation : uint32_t {
+    none = 0,
+    immersive = 1,
+    flat = 2,
+    gameScreen = 3,
+    stereoScreen = 4,
+    sceneAround = 5
+};
 // Pause menus and hint cards, cutscenes, finishers, death and loading give the
 // tracked rig no gameplay camera. The headset then shows the game's presented
 // frame on a virtual screen; before the sixth build of October 5 it showed

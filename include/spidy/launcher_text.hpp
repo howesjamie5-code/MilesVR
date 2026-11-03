@@ -501,6 +501,8 @@ struct SessionOptions {
     int bodyHaptics = 100; // a bHaptics vest, sleeves and visor (body_haptics.hpp), percent; 0 off
     int screenSize = 1; // the game screen in the headset: 0 small, 1 medium, 2 large
     int screenDepth = 2; // the depth cutscenes have on that screen: 0 off (flat), 1 low, 2 medium, 3 high
+    // Cutscenes: 0 Screen (the game screen above, flat or 3D); 1 Immersive, around you at the game's camera.
+    int cutscenes = 0;
     int smoothTurn = 0; // degrees a second the right stick turns you while held over; 0: it snap turns
     int weight = 100;   // how heavy you are while webs fly you, percent of real gravity
     bool flips = false; // basic flips: airborne right stick; release holds orientation, A returns upright
@@ -582,6 +584,8 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--venom-trigger");
     if (options.arcadeWebs)
         args.emplace_back(L"--arcade-webs");
+    if (options.cutscenes == 1)
+        args.emplace_back(L"--immersive-cutscenes");
     if (options.gameDepthOfField)
         args.emplace_back(L"--game-depth-of-field");
     if (options.gameSharpening)
@@ -670,6 +674,8 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.triggerWebs = number != 0;
         else if (key == "arcade_webs")
             next.arcadeWebs = number != 0;
+        else if (key == "cutscenes")
+            next.cutscenes = std::clamp(number, 0, 1);
         else if (key == "swing_speed")
             next.swingSpeed = std::clamp(number, 10, 65);
         else if (key == "snap_turn")

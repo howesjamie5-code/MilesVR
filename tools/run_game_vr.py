@@ -557,7 +557,8 @@ def watch_stop_event(name):
 
 
 # game_screen_3d: the game screen with a scene's own two eye images on it (a cutscene in stereo).
-PRESENTATIONS = {0: 'none', 1: 'immersive', 2: 'flat', 3: 'game_screen', 4: 'game_screen_3d'}
+PRESENTATIONS = {0: 'none', 1: 'immersive', 2: 'flat', 3: 'game_screen', 4: 'game_screen_3d',
+                 5: 'cutscene_immersive'}
 # Why a frame had no gameplay (game_xr.cpp GateReason).
 GATE_REASONS = ((1, 'no_player'), (2, 'bridge_stopped'), (4, 'no_camera_commit'), (8, 'other_camera'),
                 (16, 'tracking'))
@@ -2248,6 +2249,9 @@ def main():
     p.add_argument('--venom-trigger', action='store_true',
                    help="The trigger charges the venom fist (VENOM BUTTON: TRIGGER); otherwise the grip. On the web "
                         "button that hand's webs switch off while the meter is full; on the other they stay")
+    p.add_argument('--immersive-cutscenes', action='store_true',
+                   help="Cutscenes: Immersive. A scene the game plays (a cutscene, a finisher) is shown around you "
+                        "from the game's own camera, and the head looks around in it; menus stay on the screen")
     p.add_argument('--arcade-webs', action='store_true',
                    help='Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or '
                         'loose things, and swings stay above the street')
@@ -2527,7 +2531,8 @@ def session(a, startup):
                              (0x20000 if a.own_shadows else 0) | (0 if reflections else 0x40000) |
                              (0x100000 if a.no_prompt_help else 0) | (0x80000 if a.eye_lens_distances else 0) |
                              (0x200000 if a.venom_left_hand else 0) | (0x400000 if a.arcade_webs else 0) |
-                             (0x800000 if a.venom_trigger else 0) | (0x1000000 if a.no_eye_fxaa else 0)) + \
+                             (0x800000 if a.venom_trigger else 0) | (0x1000000 if a.no_eye_fxaa else 0) |
+                             (0x2000000 if a.immersive_cutscenes else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
                                                  a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth,

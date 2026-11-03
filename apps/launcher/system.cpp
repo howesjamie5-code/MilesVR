@@ -569,6 +569,7 @@ Settings loadSettings() {
         else if (key == "body_haptics") o.bodyHaptics = std::clamp(number(), 0, 100);
         else if (key == "screen_size") o.screenSize = std::clamp(number(), 0, 2);
         else if (key == "screen_depth") o.screenDepth = std::clamp(number(), 0, 3);
+        else if (key == "cutscenes") o.cutscenes = std::clamp(number(), 0, 1);
         else if (key == "hud") o.hud = std::clamp(number(), 0, 3);
         else if (key == "flip_speed") o.flipSpeed = std::clamp(number(), 90, 480);
         // "weight" (before October 9) and "weight_percent" (until October 12) were saved whether chosen or
@@ -620,7 +621,7 @@ void saveSettings(const Settings& settings) {
          << "\nswing_speed=" << o.swingSpeed << "\ngravity_percent=" << o.weight << "\nsnap_turn=" << o.snapTurn
          << "\nsmooth_turn=" << o.smoothTurn
          << "\nhaptics=" << o.haptics << "\nbody_haptics=" << o.bodyHaptics << "\nscreen_size=" << o.screenSize
-         << "\nscreen_depth=" << o.screenDepth
+         << "\nscreen_depth=" << o.screenDepth << "\ncutscenes=" << o.cutscenes
          << "\nhud=" << o.hud
          << "\nflip_speed=" << o.flipSpeed << "\neye_height_mm=" << o.eyeHeightMm
          << "\narm_length_mm=" << o.armLengthMm << "\ncalibration_prompt=" << o.calibrationPrompt

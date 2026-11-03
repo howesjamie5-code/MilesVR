@@ -48,6 +48,9 @@ struct NativeEyeFrame {
     // The game screen in stereo (eye command 3): the pair goes on the screen,
     // the left image for the left eye and the right one for the right.
     bool stereoScreen{};
+    // A scene around the viewer (eye command 4, Cutscenes: Immersive): shown at
+    // trackingEyes, with none of Spidy's hands, webs or marks.
+    bool sceneAround{};
     Pose screenPose{};
     float screenAspect = 16.f / 9;
 };
