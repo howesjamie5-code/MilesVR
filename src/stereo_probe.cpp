@@ -1313,7 +1313,11 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
     stockHalfWidth = (stock.values[0x404 / 4] - stock.values[0x400 / 4]) / 2;
     if (!(config.createViews & 8) || stopRequested || GetTickCount64() >= deadline || live.load() != 2)
         return false;
-    if (!head.controlled || (head.command.enabled != 1 && head.command.enabled != 4))
+    // Play only (1). Not a scene around the viewer (4): its eyes are placed on this very view's camera
+    // (native_eyes::onCamera), so turning the view to the head fed each frame's head turn into the next
+    // frame's camera and the scene spun round and round (MilesVR 0.1.80, the user: "they all flip around
+    // in a circle and keep going"). SM2VR's scene camera is another view; Miles Morales's is this one.
+    if (!head.controlled || head.command.enabled != 1)
         return false;
     const auto& pose = head.pose;
     const auto lens = viewLens(head.lens);
