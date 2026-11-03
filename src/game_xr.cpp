@@ -39,6 +39,7 @@
 #include "spidy/native_eye_history.hpp"
 #include "spidy/fps_meter.hpp"
 #include "spidy/wrist_hud.hpp"
+#include "spidy/auto_tune.hpp"
 #include "spidy/native_hud.hpp"
 #include "spidy/native_webs.hpp"
 #include "spidy/near_clip.hpp"
@@ -69,6 +70,7 @@
 #include <windows.h>
 #include <mmsystem.h>
 #include <shlobj.h>
+#include <dxgi1_4.h>
 using namespace spidy;
 struct XrConfig {
     uint32_t magic = 0x53585243, version = 24, bytes = sizeof(XrConfig), pid{};
@@ -835,6 +837,45 @@ bool writeTabOnly(const std::string& text) {
     return whole &&
            MoveFileExW(written.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 }
+// AUTO TUNE's view of this PC and headset (auto_tune::Hardware, from SM2VR 0.0.127): the game's graphics
+// card (the adapter its device is on), the processor's threads, the memory, and the headset as the
+// runtime gives it. The refresh rate is the wrist meter's, filled in by the caller.
+auto_tune::Hardware readHardware(ID3D12Device* device, const XrRuntime& runtime) {
+    auto_tune::Hardware hw;
+    if (device) {
+        ComPtr<IDXGIFactory4> factory;
+        ComPtr<IDXGIAdapter1> adapter;
+        DXGI_ADAPTER_DESC1 desc{};
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+            SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) &&
+            SUCCEEDED(adapter->GetDesc1(&desc))) {
+            char name[256]{};
+            WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof name - 1, nullptr, nullptr);
+            hw.gpu = name;
+            hw.vendor = desc.VendorId;
+            hw.vramMb = desc.DedicatedVideoMemory >> 20;
+        }
+    }
+    hw.cpuThreads = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    MEMORYSTATUSEX memory{sizeof memory};
+    if (GlobalMemoryStatusEx(&memory))
+        hw.ramMb = memory.ullTotalPhys >> 20;
+    hw.headset = runtime.systemName();
+    const auto eye = runtime.recommendedDimensions();
+    hw.eyeWidth = eye[0];
+    hw.eyeHeight = eye[1];
+    return hw;
+}
+// The card's name without its maker's words, as the wrist shows it ("RTX 4080").
+std::string shortGpu(std::string name) {
+    for (const char* word : {"NVIDIA ", "GeForce ", "AMD ", "Radeon ", "Intel(R) ", "Intel ", "Arc ", "(TM)"}) {
+        for (size_t at; (at = name.find(word)) != std::string::npos;)
+            name.erase(at, std::strlen(word));
+    }
+    for (auto& c : name)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return name.empty() ? std::string("GPU") : name;
+}
 // REALISTIC FLIPS and the rows under it, as the rig takes them.
 RealisticFlipSettings realisticFlips(const vr_settings::Values& v) {
     return {v.realisticFlips,         v.automaticReleaseFlip,  v.automaticStrength,
@@ -884,6 +925,13 @@ DWORD WINAPI run(void*) {
         wrist_hud::Toggle wristToggle;
         wrist_hud::Menu wristMenu;
         wrist_hud::Applier wristApply;
+        // AUTO TUNE (auto_tune.hpp): the hardware read at the first press, the live check, the lines the
+        // GRAPHICS page shows, and a save still due (the press holds the menu until it is let go).
+        auto_tune::Hardware tuneHardware;
+        bool tuneHardwareRead{}, tuneSave{};
+        int tuneFound = -1;
+        auto_tune::Check tuneCheck;
+        std::array<std::string, 3> tuneLines;
         bool wristApplyStarted{}, wristHudFault{}, wristMenuFault{}, wristKeyHeld{};
         wrist_hud::Settings wristShown;
         uint32_t wristOff{};
@@ -2181,6 +2229,84 @@ DWORD WINAPI run(void*) {
                                     sessionFps.reset(); // from the next frame
                                     wristFps = {};
                                 }
+                                // AUTO TUNE: a mode's settings for a tier - the eye ones now (through
+                                // wristApply, as if set on the page), the rest kept for the next launch, never
+                                // above the tier the hardware rated (BEST LOOKS's check may step the eye ones up).
+                                const auto applyTune = [&](auto_tune::Mode mode, int tier) {
+                                    using wrist_hud::Control;
+                                    const auto p = auto_tune::preset(mode, tier, tuneHardware);
+                                    const std::pair<Control, int> live[] = {
+                                        {Control::reach, p.reach}, {Control::sharpen, p.sharpen}, {Control::monitor, p.monitor}};
+                                    for (const auto& [control, value] : live)
+                                        if (!(wristOff >> static_cast<unsigned>(control) & 1)) {
+                                            wristShown[control] = static_cast<float>(value);
+                                            wristApply.want(control, static_cast<float>(value));
+                                        }
+                                    const int launchTier = tuneFound >= 0 ? std::min(tier, tuneFound) : tier;
+                                    const auto next = launchTier == tier ? p : auto_tune::preset(mode, launchTier, tuneHardware);
+                                    values.tuneMode = static_cast<int>(mode);
+                                    values.tuneTier = launchTier;
+                                    values.tuneRenderScale = next.renderScale;
+                                    const auto& g = next.game;
+                                    values.tuneTextureQuality = g.textureQuality;
+                                    values.tuneTextureFiltering = g.textureFiltering;
+                                    values.tuneShadowQuality = g.shadowQuality;
+                                    values.tuneLevelOfDetail = g.levelOfDetail;
+                                    values.tuneAmbientOcclusion = g.ambientOcclusion;
+                                    values.tuneReflections = g.reflections;
+                                    values.tuneHairQuality = g.hairQuality;
+                                    values.tuneCrowdDetail = g.crowdDetail;
+                                    values.tuneVehicleDetail = g.vehicleDetail;
+                                    values.tuneParticleLighting = g.particleLighting;
+                                    tuneSave = true;
+                                };
+                                if (result.tune >= 0) {
+                                    if (!tuneHardwareRead) {
+                                        tuneHardware = readHardware(device.Get(), runtime);
+                                        tuneHardwareRead = true;
+                                    }
+                                    const float hz = wristFps.refreshHz();
+                                    tuneHardware.refreshHz = std::isfinite(hz) ? hz : 0.f;
+                                    const auto mode = static_cast<auto_tune::Mode>(result.tune);
+                                    tuneFound = auto_tune::tier(tuneHardware);
+                                    applyTune(mode, tuneFound);
+                                    tuneCheck.start(mode, tuneFound, wristClock);
+                                    const auto text = std::string("Auto tune ") + auto_tune::modeName(mode) + ": " +
+                                                      tuneHardware.gpu + ", " + std::to_string(tuneHardware.vramMb >> 10) +
+                                                      " GB, " + auto_tune::headsetName(tuneHardware) + " at " +
+                                                      std::to_string(std::lround(tuneHardware.refreshHz)) + " Hz - " +
+                                                      auto_tune::tierName(tuneFound) + " tier";
+                                    message(3, 0, text.c_str());
+                                    game_prompts::note(text.c_str());
+                                }
+                                // Its live check: a tier down while the mode's frame rate is missed in play
+                                // (BEST LOOKS: up while there is room).
+                                if (const int step = tuneCheck.update(wristClock, wristFps.fps(), wristFps.refreshHz(),
+                                                                      gesturesPlay);
+                                    step >= 0) {
+                                    applyTune(tuneCheck.mode(), step);
+                                    const auto text = std::string("Auto tune: ") +
+                                                      std::to_string(std::lround(tuneCheck.measured())) +
+                                                      " FPS, trying " + auto_tune::tierName(step) + " detail";
+                                    message(3, 0, text.c_str());
+                                }
+                                if (tuneHardwareRead) {
+                                    tuneLines[0] = shortGpu(tuneHardware.gpu) + " " +
+                                                   std::to_string((tuneHardware.vramMb + 512) >> 10) + "GB / " +
+                                                   auto_tune::headsetName(tuneHardware) + " / " +
+                                                   auto_tune::tierName(tuneFound) + " PC";
+                                    tuneLines[1] = tuneCheck.status(wristClock);
+                                    tuneLines[2] = values.tuneMode >= 0
+                                                       ? "NEXT LAUNCH: RESOLUTION " + std::to_string(values.tuneRenderScale) +
+                                                             "% + GAME SETTINGS"
+                                                       : std::string();
+                                } else if (values.tuneMode >= 0) {
+                                    tuneLines[0] = std::string("LAST: ") +
+                                                   auto_tune::modeName(static_cast<auto_tune::Mode>(values.tuneMode)) +
+                                                   ", " + auto_tune::tierName(values.tuneTier) + " DETAIL";
+                                    tuneLines[1] = "PRESS A MODE TO TUNE AGAIN";
+                                    tuneLines[2].clear();
+                                }
                                 if (result.pressed) {
                                     ++pressed;
                                     runtime.haptic(static_cast<int>(pointHand), .3f);
@@ -2266,7 +2392,8 @@ DWORD WINAPI run(void*) {
                                     }
                                 }
                                 values = vr_settings::sanitized(values);
-                                if (keep && wristMenu.held() == wrist_hud::Control::none) {
+                                if ((keep || tuneSave) && wristMenu.held() == wrist_hud::Control::none) {
+                                    tuneSave = false;
                                     if (auto text = vr_settings::tabOnlyText(values); text != tabOnlySaved) {
                                         if (!writeTabOnly(text))
                                             message(3, 0, "VR settings: the wrist menu's settings were not saved");
@@ -6049,6 +6176,8 @@ DWORD WINAPI run(void*) {
                                 hud.gear = wristGearShown;
                                 hud.gearCount = wristGearCount;
                                 hud.fnsmOpen = phoneAppAt != 0;
+                                hud.tuneMode = values.tuneMode;
+                                hud.tune = tuneLines;
                                 hud.settings = wristShown;
                                 hud.fps = wristFps.fps();
                                 hud.refreshHz = wristFps.refreshHz();

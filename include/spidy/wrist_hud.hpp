@@ -121,6 +121,9 @@ enum class Control : uint8_t {
     musicNext,
     musicAutoplay,
     fnsmApp,
+    tuneFps,      // AUTO TUNE (auto_tune.hpp, from SM2VR 0.0.127): MAX FPS
+    tuneBalanced, // BALANCED
+    tuneLooks,    // BEST LOOKS
     vrFirst = 64,
 };
 constexpr int controls = 32;
@@ -297,6 +300,9 @@ struct View {
     std::array<GearRow, gearRows> gear{};
     int gearCount{};
     bool fnsmOpen{}; // the game's FNSM app is up (its button reads CLOSE FNSM APP)
+    // AUTO TUNE: the mode last pressed (-1 none) and its three lines (the PC, the check, the next launch).
+    int tuneMode = -1;
+    std::array<std::string, 3> tune;
     Control hover{}, held{};
     bool pointing{};
     Vec3 tip{};
@@ -369,6 +375,7 @@ class Menu {
         // The MUSIC page's buttons, and FNSM APP.
         enum class Music : uint8_t { none, previous, toggle, next, autoplay } music{};
         bool fnsm{};
+        int tune = -1; // an AUTO TUNE button: its auto_tune::Mode
     };
     Result update(const Input&, Settings&);
     int page() const {

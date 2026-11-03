@@ -6,7 +6,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]/'tools'))
 import run_game_vr
@@ -86,12 +86,38 @@ class DisplayPermissionTests(unittest.TestCase):
                     with self.assertRaises(Prepared):
                         run_game_vr.session(args, startup)
                 prepare.assert_called_once_with(small=not full_desktop,
-                                                keep=('sharpening',) if full_desktop else (), comfort=True)
+                                                keep=('sharpening',) if full_desktop else (), comfort=True,
+                                                tuned=ANY)
                 self.assertIn('Access is denied', startup.fields['game_settings_refused'])
                 self.assertIn('WARNING:', shown.getvalue())
                 self.assertIn('frame generation off', shown.getvalue())
                 self.assertEqual('still need restoring' in shown.getvalue(), pending)
                 self.assertNotIn('Game settings for VR:', shown.getvalue())
+
+    def test_auto_tune_game_values_hold_for_the_vr_session_and_come_back_after(self):
+        with tempfile.TemporaryDirectory() as folder:
+            mine = dict(USER, ShadowQuality=3, LevelOfDetail=3, TextureQuality=2)
+            registry = FakeRegistry(mine)
+            backup = pathlib.Path(folder)/'before.json'
+            # HairQuality was never saved by the game: it is not made.
+            display.prepare_launch(registry=registry, backup=backup, screen=(3440, 1440),
+                                   tuned=dict(ShadowQuality=0, LevelOfDetail=1, HairQuality=1, Fullscreen=0))
+            self.assertEqual((registry.values['ShadowQuality'], registry.values['LevelOfDetail']), (0, 1))
+            self.assertNotIn('HairQuality', registry.values)
+            self.assertEqual(registry.values['TextureQuality'], 2)
+            self.assertTrue(display.restore(registry, backup))
+            self.assertEqual({k: registry.values[k] for k in ('ShadowQuality', 'LevelOfDetail', 'TextureQuality')},
+                             dict(ShadowQuality=3, LevelOfDetail=3, TextureQuality=2))
+            self.assertEqual(registry.values['Fullscreen'], 1)
+
+    def test_wrist_tune_reads_the_mode_resolution_and_game_values_from_spidy_vr_ini(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(run_game_vr.wrist_tune(folder), (None, None, {}))
+            (pathlib.Path(folder)/'Spidy').mkdir()
+            (pathlib.Path(folder)/'Spidy'/'spidy_vr.ini').write_text(
+                'tune_mode=1\ntune_render_scale=85\ntune_game_ShadowQuality=1\ntune_game_HairQuality=-1\n'
+                'tune_game_Fullscreen=0\n', encoding='utf-8')
+            self.assertEqual(run_game_vr.wrist_tune(folder), ('BALANCED', 85, dict(ShadowQuality=1)))
 
 
 if __name__ == '__main__':

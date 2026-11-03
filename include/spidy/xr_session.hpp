@@ -8,6 +8,7 @@
 #include <functional>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
+#include <string>
 
 namespace spidy {
 class XrRuntime {
@@ -56,6 +57,11 @@ class XrRuntime {
     std::array<unsigned, 2> recommendedDimensions() const {
         return {eyes_[0].recommendedWidth, eyes_[0].recommendedHeight};
     }
+    // The headset as the runtime names it (XrSystemProperties; AUTO TUNE's report): a Quest's own, or
+    // the streamer's.
+    const std::string& systemName() const {
+        return systemName_;
+    }
     // The layout the runtime uses for each hand's controller now (left,
     // right): one of Spidy's (controller_layout.hpp) or one of its own. And
     // the layouts it took Spidy's controls for, a bit each (1 << ControllerKind).
@@ -89,6 +95,7 @@ class XrRuntime {
     }
 
   private:
+    std::string systemName_;
     struct Graphics {
         ID3D12Device* device;
         ID3D12CommandQueue* queue;

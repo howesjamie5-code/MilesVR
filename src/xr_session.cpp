@@ -124,6 +124,11 @@ void XrRuntime::initialize(
     XrSystemGetInfo si{XR_TYPE_SYSTEM_GET_INFO};
     si.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
     xr(xrGetSystem(instance_, &si, &system_), "Find headset (connect Quest to Virtual Desktop first)");
+    {
+        XrSystemProperties named{XR_TYPE_SYSTEM_PROPERTIES};
+        if (XR_SUCCEEDED(xrGetSystemProperties(instance_, system_, &named)))
+            systemName_ = named.systemName;
+    }
     bool eyeTracker = false;
     if (gazeOffered_) {
         XrSystemEyeGazeInteractionPropertiesEXT gaze{XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT};

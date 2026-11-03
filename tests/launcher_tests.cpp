@@ -589,7 +589,8 @@ int main() {
             const std::string key = tabOnly.substr(line, tabOnly.find('=', line) - line);
             // The monitor's recording FOV and the wrist menu's graphics and hologram suit one PC.
             if (key == "recording_fov" || key == "recording_smoothing" || key == "height_cm" ||
-                key == "eye_aim" || key.starts_with("eye_") || key.starts_with("hud_"))
+                key == "eye_aim" || key.starts_with("eye_") || key.starts_with("hud_") ||
+                key.starts_with("tune_"))
                 continue;
             ++lines;
             check(at(key) < std::size(profileSettings) &&

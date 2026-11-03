@@ -11,6 +11,7 @@
 #include "spidy/native_render_memory.hpp"
 #include "spidy/enclosure.hpp"
 #include "spidy/wrist_hud.hpp"
+#include "spidy/auto_tune.hpp"
 #include "spidy/game_pad.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/phone.hpp"
@@ -21788,6 +21789,129 @@ int main() {
                     }
             }
     });
+    test("auto tune: cards rate by name, laptops lower, unknown ones by their memory", [] {
+        using namespace auto_tune;
+        check(gpuScore("NVIDIA GeForce RTX 4070 Ti SUPER", 16384) == 70, "4070 Ti SUPER is not a 4070");
+        check(gpuScore("NVIDIA GeForce RTX 4070", 12288) == 52, "4070");
+        check(gpuScore("NVIDIA GeForce RTX 4070 Laptop GPU", 8192) < 52, "a laptop's runs lower");
+        check(gpuScore("AMD Radeon RX 7900 XTX", 24576) > gpuScore("AMD Radeon RX 7900 XT", 20480), "XTX over XT");
+        check(gpuScore("Some Future GPU", 16384) == 55 && gpuScore("Some Future GPU", 4096) == 10, "by memory");
+    });
+    test("auto tune: the tier follows the card against the headset's pixels, capped by a small CPU", [] {
+        using namespace auto_tune;
+        Hardware hw{"NVIDIA GeForce RTX 4090", 0x10de, 24576, 32, 65536, "Meta Quest 3", 2064, 2208, 90};
+        check(tier(hw) == 3, "a 4090 on a Quest 3 is ULTRA");
+        hw.gpu = "NVIDIA GeForce RTX 3060";
+        check(tier(hw) == 1, "a 3060 is MID");
+        hw.gpu = "NVIDIA GeForce RTX 4070";
+        const int at90 = tier(hw);
+        hw.refreshHz = 120;
+        hw.eyeWidth = 2800;
+        hw.eyeHeight = 3000;
+        check(tier(hw) < at90, "more pixels a second, a lower tier");
+        hw.gpu = "NVIDIA GeForce RTX 4090";
+        hw.cpuThreads = 4;
+        check(tier(hw) == 0, "a 4-thread CPU holds it to ENTRY");
+        check(headsetName({"", 0, 0, 0, 0, "Meta Quest 3S", 0, 0, 0}) == "QUEST 3S", "Quest 3S, not 3");
+        check(headsetName({"", 0, 0, 0, 0, "Virtual Desktop", 0, 0, 0}) == "VIRTUAL DESKTOP", "a streamer's name");
+    });
+    test("auto tune: MAX FPS asks less than BALANCED, and BALANCED less than BEST LOOKS, at every tier", [] {
+        using namespace auto_tune;
+        const Hardware hw{"NVIDIA GeForce RTX 4080", 0x10de, 16384, 24, 32768, "", 0, 0, 90};
+        for (int t = 0; t < tiers; ++t) {
+            const Preset f = preset(Mode::maxFps, t, hw), b = preset(Mode::balanced, t, hw),
+                         l = preset(Mode::bestLooks, t, hw);
+            check(f.renderScale <= b.renderScale && b.renderScale <= l.renderScale && l.renderScale <= 100,
+                  "resolution by mode, never above the headset's");
+            check(f.reach <= b.reach && b.reach <= l.reach, "building reach by mode");
+            check(f.game.shadowQuality <= b.game.shadowQuality && b.game.shadowQuality <= l.game.shadowQuality,
+                  "shadows by mode");
+            for (const auto& key : gameKeys())
+                for (const Preset* p : {&f, &b, &l})
+                    check(p->game.*key.value >= key.low && p->game.*key.value <= key.high, key.name);
+            if (t)
+                check(preset(Mode::balanced, t - 1, hw).renderScale <= b.renderScale, "resolution by tier");
+            check(l.game.shadowQuality <= 2 && l.game.reflections <= 1, "no High shadows or reflections");
+        }
+        // Virtual Desktop's Quest 3 asks 2496 x 2688: MAX FPS at HIGH is about 2.8 million pixels an eye.
+        Hardware vd = hw;
+        vd.eyeWidth = 2496;
+        vd.eyeHeight = 2688;
+        check(preset(Mode::maxFps, 2, vd).renderScale == 65, "65% of Virtual Desktop's eye");
+        check(preset(Mode::bestLooks, 3, vd).renderScale == 90, "BEST LOOKS under 100%");
+        // Little video memory caps the textures; HBAO+ only on NVIDIA.
+        const Hardware small{"AMD Radeon RX 6500 XT", 0x1002, 4096, 12, 16384, "", 0, 0, 90};
+        check(preset(Mode::bestLooks, 3, small).game.textureQuality == 0, "4 GB: low textures");
+        check(preset(Mode::bestLooks, 3, small).game.ambientOcclusion == 1, "AMD: SSAO");
+        check(preset(Mode::bestLooks, 3, hw).game.ambientOcclusion == 2, "NVIDIA: HBAO+");
+    });
+    test("auto tune: the live check steps down while the target is missed in play, BEST LOOKS up with room", [] {
+        using namespace auto_tune;
+        Check c;
+        c.start(Mode::maxFps, 2, 0);
+        double t = 0;
+        int step = -1;
+        // A menu (not play) never counts.
+        for (; t < 30; t += .1)
+            check(c.update(t, 40, 90, false) < 0, "a menu does not step");
+        for (; t < 60 && step < 0; t += .1)
+            step = c.update(t, 60, 90, true); // 60 of 90: under MAX FPS's 81
+        check(step == 1 && c.liveTier() == 1, "one tier down");
+        for (step = -1; t < 120 && c.running(); t += .1)
+            step = c.update(t, 85, 90, true);
+        check(!c.running() && c.liveTier() == 1 && c.status(t).find("ON TARGET") != std::string::npos,
+              "on target: done");
+        // A step down that buys nothing (the processor holds the rate) goes back and ends.
+        c.start(Mode::maxFps, 2, 0);
+        for (t = 0, step = -1; t < 30 && step < 0; t += .1)
+            step = c.update(t, 55, 90, true);
+        check(step == 1, "stepped down");
+        for (step = -1; t < 60 && step < 0; t += .1)
+            step = c.update(t, 56, 90, true);
+        check(step == 2 && !c.running() && c.status(t).find("CPU LIMITED") != std::string::npos,
+              "no gain: the detail back");
+        c.start(Mode::bestLooks, 1, 0);
+        for (t = 0, step = -1; t < 30 && step < 0; t += .1)
+            step = c.update(t, 88, 90, true);
+        check(step == 2, "BEST LOOKS with room steps up");
+        c.start(Mode::balanced, 0, 0);
+        for (t = 0; t < 60 && c.running(); t += .1)
+            check(c.update(t, 20, 90, true) < 0, "nothing below ENTRY");
+        check(!c.running(), "done at the lowest tier");
+    });
+    test("auto tune: its choice is kept in spidy_vr.ini and read back", [] {
+        vr_settings::Values v;
+        v.tuneMode = 1;
+        v.tuneTier = 2;
+        v.tuneRenderScale = 100;
+        v.tuneShadowQuality = 2;
+        check(vr_settings::withTabOnly({}, vr_settings::tabOnlyText(v)) == v, "the tune did not come back");
+        check(vr_settings::withTabOnly({}, "tune_render_scale=20\ntune_mode=9\n").tuneRenderScale == 0 &&
+                  vr_settings::withTabOnly({}, "tune_mode=9\n").tuneMode == 2,
+              "out of range");
+    });
+    test("wrist menu: AUTO TUNE's three buttons are on the GRAPHICS page and press their modes", [] {
+        using namespace wrist_hud;
+        int mode = 0;
+        for (const Control c : {Control::tuneFps, Control::tuneBalanced, Control::tuneLooks}) {
+            const Spot s = controlSpot(1, c, 0, 1);
+            check(s.found && s.visible, "a tune button on the page");
+            check(controlAt(1, s.u, s.v, 0, 1) == c, "pointed at");
+            check(*helpText(c), "explained");
+            Menu m;
+            m.setPage(1);
+            Settings settings;
+            Menu::Input in;
+            in.active = true;
+            in.pointer = {true, s.u, s.v};
+            in.trigger = .2f; // touched first
+            m.update(in, settings);
+            in.trigger = 1;
+            const auto r = m.update(in, settings);
+            check(r.pressed && r.tune == mode, "pressed: its mode");
+            ++mode;
+        }
+    });
     test("wrist menu: every VR SETTINGS row is there and can be pointed at once scrolled to", [] {
         using namespace wrist_hud;
         const auto& rows = vr_settings::rows();
@@ -21926,7 +22050,8 @@ int main() {
                                        "slingshot_speed=0\nrecording_smoothing=0\n"
                                        "two_hand_zip=0\nrope_steering=0\nweb_range_m=100\nweb_speed=0\n"
                                        "eye_aa=1\neye_history=0\neye_sharpen=0\nhud_height_cm=9\nhud_scale=100\n"
-                                       "hud_text=100\nhud_theme=0\nhud_text_color=0\n",
+                                       "hud_text=100\nhud_theme=0\nhud_text_color=0\n"
+                                       "tune_mode=-1\ntune_tier=-1\ntune_render_scale=0\ntune_game_TextureQuality=-1\ntune_game_TextureFiltering=-1\ntune_game_ShadowQuality=-1\ntune_game_LevelOfDetail=-1\ntune_game_AmbientOcclusionQuality=-1\ntune_game_ScreenSpaceReflections=-1\ntune_game_HairQuality=-1\ntune_game_CrowdDetail=-1\ntune_game_VehicleDetail=-1\ntune_game_ParticleLighting=-1\n",
               "the defaults' text");
         Values changed = defaults;
         changed.recordingFov = 140;

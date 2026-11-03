@@ -5,6 +5,7 @@ from ctypes import wintypes
 import hashlib
 import json
 import math
+import os
 import pathlib
 import re
 import shutil
@@ -2156,6 +2157,35 @@ def settle_display(running):
               r'starts the game it tries again (or run tools\vr_display.py --restore).', flush=True)
 
 
+TUNE_MODES = ('MAX FPS', 'BALANCED', 'BEST LOOKS')
+
+
+def wrist_tune(root=None):
+    """The wrist's AUTO TUNE from %APPDATA%\\Spidy\\spidy_vr.ini (src/auto_tune.cpp): its mode (None when it was
+    never pressed), the eye resolution it picked (render scale percent, or None) and the game graphics values
+    (vr_display.TUNABLE names), each only where it holds one."""
+    root = root if root is not None else os.environ.get('APPDATA')
+    found = {}
+    try:
+        text = (pathlib.Path(root) / 'Spidy' / 'spidy_vr.ini').read_text(encoding='utf-8') if root else ''
+    except OSError:
+        text = ''
+    for raw in text.splitlines():
+        key, sep, value = raw.strip().partition('=')
+        if sep:
+            try:
+                found[key] = int(value)
+            except ValueError:
+                pass
+    mode = found.get('tune_mode', -1)
+    if not 0 <= mode < len(TUNE_MODES):
+        return None, None, {}
+    scale = found.get('tune_render_scale', 0)
+    game = {name: found[f'tune_game_{name}'] for name in vr_display.TUNABLE
+            if 0 <= found.get(f'tune_game_{name}', -1) <= 4}
+    return TUNE_MODES[mode], scale if RENDER_SCALES[0] <= scale <= RENDER_SCALES[1] else None, game
+
+
 def picture_kept(a):
     """The game's picture settings a session leaves as the player has them (vr_display.PICTURE names)."""
     return tuple(name for name, kept in (('depth_of_field', a.game_depth_of_field),
@@ -2385,10 +2415,20 @@ def session(a, startup):
         print(link_warning(links, runtime.get('name')), flush=True)
     startup.stage = 'starting the game'
 
+    # AUTO TUNE: its eye resolution replaces the launcher's, and its game values go to prepare_display.
+    a.tune_mode, tune_scale, a.tune_game = wrist_tune()
+    if a.tune_mode and tune_scale and not a.size:
+        a.render_scale = tune_scale
+
     def prepare_display():
         try:
             values = vr_display.prepare_launch(small=not a.full_desktop_view, keep=picture_kept(a),
-                                               comfort=not getattr(a, 'game_effects', False))
+                                               comfort=not getattr(a, 'game_effects', False),
+                                               tuned=getattr(a, 'tune_game', None))
+            if getattr(a, 'tune_mode', None):
+                print(f"Auto tune {a.tune_mode} (the wrist's GRAPHICS page): eye resolution {a.render_scale}% and "
+                      f"the game's graphics for VR ({', '.join(f'{k} {v}' for k, v in a.tune_game.items())}); your "
+                      'own game settings return when the game closes.', flush=True)
         except OSError as error:
             # VR runs without them: the window only saves GPU time, and the two settings matter where
             # frame generation is on or under SteamVR.

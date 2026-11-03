@@ -1286,6 +1286,29 @@ void App::optionsCard(ImVec2 size) {
     }
     if (o.renderScale > 100)
         resolutionHelp += " Costs frame rate and memory.";
+    // AUTO TUNE (the wrist's GRAPHICS page) picks the resolution and the game's graphics for VR sessions
+    // until it is turned off here.
+    if (tabOnly_.tuneMode >= 0) {
+        static const char* modes[] = {"MAX FPS", "BALANCED", "BEST LOOKS"};
+        const std::string tuned = format("Auto tune: %s (set on the wrist). It picks the resolution (%d%%) and the "
+                                         "game's graphics for VR. Off: your own settings again.",
+                                         modes[std::clamp(tabOnly_.tuneMode, 0, 2)], tabOnly_.tuneRenderScale);
+        option("Auto tune", tuned.c_str(), S(150), [&] {
+            if (ImGui::Button("Turn off##autotune", ImVec2(S(150), 0))) {
+                tabOnly_.tuneMode = tabOnly_.tuneTier = -1;
+                tabOnly_.tuneRenderScale = 0;
+                for (int spidy::vr_settings::Values::*game :
+                     {&spidy::vr_settings::Values::tuneTextureQuality, &spidy::vr_settings::Values::tuneTextureFiltering,
+                      &spidy::vr_settings::Values::tuneShadowQuality, &spidy::vr_settings::Values::tuneLevelOfDetail,
+                      &spidy::vr_settings::Values::tuneAmbientOcclusion, &spidy::vr_settings::Values::tuneReflections,
+                      &spidy::vr_settings::Values::tuneHairQuality, &spidy::vr_settings::Values::tuneCrowdDetail,
+                      &spidy::vr_settings::Values::tuneVehicleDetail,
+                      &spidy::vr_settings::Values::tuneParticleLighting})
+                    tabOnly_.*game = -1;
+                tabChanged = true;
+            }
+        });
+    }
     option("Render resolution", resolutionHelp.c_str(), S(150), [&] {
         ImGui::PushFont(fonts_.semibold, 13.5f);
         if (ImGui::SliderInt("##resolution", &o.renderScale, static_cast<int>(spidy::minimumRenderScale),

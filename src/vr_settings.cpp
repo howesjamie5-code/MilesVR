@@ -328,6 +328,14 @@ Values sanitized(Values v) {
     v.heightCm = v.heightCm <= 0 ? 0 : std::clamp(v.heightCm, seated::minHeightCm, seated::maxHeightCm);
     v.eyeAim = std::clamp(v.eyeAim, 0, eyeAimShots | eyeAimZips);
     v.eyeAA = std::clamp(v.eyeAA, 0, 1);
+    v.tuneMode = std::clamp(v.tuneMode, -1, 2);
+    v.tuneTier = std::clamp(v.tuneTier, -1, 3);
+    v.tuneRenderScale = v.tuneRenderScale >= 50 && v.tuneRenderScale <= 200 ? v.tuneRenderScale : 0;
+    for (int Values::*game : {&Values::tuneTextureQuality, &Values::tuneTextureFiltering, &Values::tuneShadowQuality,
+                              &Values::tuneLevelOfDetail, &Values::tuneAmbientOcclusion, &Values::tuneReflections,
+                              &Values::tuneHairQuality, &Values::tuneCrowdDetail, &Values::tuneVehicleDetail,
+                              &Values::tuneParticleLighting})
+        v.*game = std::clamp(v.*game, -1, 4);
     v.eyeHistory = std::clamp(v.eyeHistory, 0, 95);
     v.eyeSharpen = std::clamp(v.eyeSharpen, 0, 200);
     v.hudHeightCm = std::clamp(v.hudHeightCm, 0, 25);
@@ -692,6 +700,19 @@ constexpr TabOnly tabOnly[] = {
     {"hud_text", nullptr, &Values::hudTextPercent},
     {"hud_theme", nullptr, &Values::hudTheme},
     {"hud_text_color", nullptr, &Values::hudTextColor},
+    {"tune_mode", nullptr, &Values::tuneMode},
+    {"tune_tier", nullptr, &Values::tuneTier},
+    {"tune_render_scale", nullptr, &Values::tuneRenderScale},
+    {"tune_game_TextureQuality", nullptr, &Values::tuneTextureQuality},
+    {"tune_game_TextureFiltering", nullptr, &Values::tuneTextureFiltering},
+    {"tune_game_ShadowQuality", nullptr, &Values::tuneShadowQuality},
+    {"tune_game_LevelOfDetail", nullptr, &Values::tuneLevelOfDetail},
+    {"tune_game_AmbientOcclusionQuality", nullptr, &Values::tuneAmbientOcclusion},
+    {"tune_game_ScreenSpaceReflections", nullptr, &Values::tuneReflections},
+    {"tune_game_HairQuality", nullptr, &Values::tuneHairQuality},
+    {"tune_game_CrowdDetail", nullptr, &Values::tuneCrowdDetail},
+    {"tune_game_VehicleDetail", nullptr, &Values::tuneVehicleDetail},
+    {"tune_game_ParticleLighting", nullptr, &Values::tuneParticleLighting},
 };
 } // namespace
 std::string tabOnlyText(const Values& v) {

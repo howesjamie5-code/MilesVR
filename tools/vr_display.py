@@ -83,6 +83,12 @@ PICTURE = dict(depth_of_field='DOFQuality', sharpening='Sharpness')
 #   vignette off, which smear or shimmer in a headset (the names are the same in Miles Morales's key).
 #   comfort=False in prepare_session leaves them as the player set them.
 COMFORT_OFF = ('FilmGrainStrength', 'MotionBlurScale', 'ChromaticAberration', 'Vignette')
+# - The wrist's AUTO TUNE (src/auto_tune.cpp, MilesVR 0.1.80 from SM2VR 0.0.127): the game graphics values a
+#   mode picked for this PC and headset (%APPDATA%\Spidy\spidy_vr.ini, tune_game_<name>). A VR launch writes
+#   them as it does SESSION's, so the game starts with them, and the player's own come back when the game
+#   closes: the flat game keeps its settings. Only values the game has saved before are changed.
+TUNABLE = ('TextureQuality', 'TextureFiltering', 'ShadowQuality', 'LevelOfDetail', 'AmbientOcclusionQuality',
+           'ScreenSpaceReflections', 'HairQuality', 'CrowdDetail', 'VehicleDetail', 'ParticleLighting')
 SESSION = ((KEY, dict(DLSSG=0, FrameGen=0, VSync=0, DOFQuality=0, Sharpness=1, RTReflections=0,
                       ForcedAspectRatio=0, ReflexMode=0, FilmGrainStrength=0, MotionBlurScale=0,
                       ChromaticAberration=0, Vignette=0), False),
@@ -194,7 +200,7 @@ def restore(registry=None, backup=BACKUP):
     values = saved.get('values') if isinstance(saved, dict) and saved.get('key') == KEY else None
     # Backups before October 7's SteamVR fix hold the window's values only.
     session = saved.get('session', []) if isinstance(saved, dict) else None
-    allowed = {key: (tuple(wanted), create) for key, wanted, create in SESSION}
+    allowed = {key: (tuple(wanted) + (TUNABLE if key == KEY else ()), create) for key, wanted, create in SESSION}
     known = isinstance(session, list) and all(
         isinstance(entry, dict) and entry.get('key') in allowed and
         _saved(entry.get('values'), *allowed[entry['key']]) for entry in session)
@@ -225,13 +231,16 @@ def shrink(registry=None, backup=BACKUP, screen=None):
     return wanted
 
 
-def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True):
+def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True, tuned=None):
     """Turn off what SESSION lists, adding the user's values to the backup (made here if the window
     keeps the user's settings). keep: PICTURE names ('depth_of_field', 'sharpening') to leave as the
     player has them. comfort False leaves blur, grain, colour fringes and the vignette alone and does
-    not record them as replaced. Returns the values written."""
+    not record them as replaced. tuned: AUTO TUNE's game values (TUNABLE names), written and restored
+    the same way. Returns the values written."""
     registry = registry or Registry()
     kept = {PICTURE[name] for name in keep} | (set() if comfort else set(COMFORT_OFF))
+    tuned = {name: value for name, value in (tuned or {}).items()
+             if name in TUNABLE and isinstance(value, int) and 0 <= value <= 4}
     saved = _load(backup) or dict(key=KEY, values={})
     if 'session' not in saved:
         saved['session'] = []
@@ -239,10 +248,15 @@ def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True):
             current = registry.read(tuple(wanted), key)
             saved['session'].append(dict(key=key, values={name: current.get(name) for name in wanted
                                                           if (name in current or create) and name not in kept}))
+        if tuned:
+            current = registry.read(tuple(tuned), KEY)
+            saved['session'].append(dict(key=KEY, values={name: current[name] for name in tuned if name in current}))
         _write(backup, saved)
-    before = {entry['key']: entry['values'] for entry in saved['session']}
+    before = {}
+    for entry in saved['session']:
+        before.setdefault(entry['key'], {}).update(entry['values'])
     written = {}
-    for key, wanted, _ in SESSION:
+    for key, wanted, _ in SESSION + ((KEY, tuned, False),):
         values = {name: value for name, value in wanted.items() if name in before.get(key, {}) and name not in kept}
         if values:
             registry.write(values, key)
@@ -250,7 +264,7 @@ def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True):
     return written
 
 
-def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(), comfort=True):
+def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(), comfort=True, tuned=None):
     """Called with the game closed, just before it starts. A previous session's values are restored
     first, so a backup always holds the user's own settings. keep: as prepare_session's. Returns the
     window's values written (None when the window keeps the user's settings).
@@ -261,7 +275,7 @@ def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(
     restore(registry, backup)
     try:
         window = shrink(registry, backup, screen) if small else None
-        prepare_session(registry, backup, keep, comfort)
+        prepare_session(registry, backup, keep, comfort, tuned)
     except OSError:
         try:
             restore(registry, backup)

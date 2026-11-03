@@ -190,6 +190,14 @@ struct Values {
     // FXAA (1 on), eye history and sharpening (percent, 0 off), and the hologram's height over the wrist
     // (cm), size, text size (percent), colour theme and text colour.
     int eyeAA = 1, eyeHistory = 0, eyeSharpen = 0;
+    // AUTO TUNE (auto_tune.hpp, from SM2VR 0.0.127), from the wrist's GRAPHICS page: the mode pressed (-1
+    // none, 0 MAX FPS, 1 BALANCED, 2 BEST LOOKS), the tier it found, and what it leaves for the next launch:
+    // the eye resolution (render scale percent, 0 the launcher's own) and the game's graphics values for VR
+    // sessions (-1 each: the player's own), in auto_tune::gameKeys' order.
+    int tuneMode = -1, tuneTier = -1, tuneRenderScale = 0;
+    int tuneTextureQuality = -1, tuneTextureFiltering = -1, tuneShadowQuality = -1, tuneLevelOfDetail = -1,
+        tuneAmbientOcclusion = -1, tuneReflections = -1, tuneHairQuality = -1, tuneCrowdDetail = -1,
+        tuneVehicleDetail = -1, tuneParticleLighting = -1;
     int hudHeightCm = 9, hudScalePercent = 100, hudTextPercent = 100, hudTheme = 0, hudTextColor = 0;
     bool operator==(const Values&) const = default;
 };

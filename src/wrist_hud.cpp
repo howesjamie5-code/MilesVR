@@ -240,7 +240,7 @@ struct Help {
     float height = helpHeight, pitch = helpPitch;
     std::vector<std::string> lines;
 };
-enum class Kind : uint8_t { title, fps, fpsStats, slider, toggle, cycle, vr, section, footer, song, transport, gear, wide };
+enum class Kind : uint8_t { title, fps, fpsStats, slider, toggle, cycle, vr, section, footer, song, transport, gear, wide, tune, tuneInfo };
 struct Item {
     Kind kind = Kind::title;
     Control control = Control::none;
@@ -430,6 +430,35 @@ Layout build(int page, float k) {
         l.items.push_back(std::move(f));
         footerItem(scrollFooter);
     } else if (page == 1) {
+        // AUTO TUNE: a button a mode, then what it found and did (View::tune).
+        auto section = [&](const char* text) {
+            Item h = itemOf(Kind::section);
+            h.text = text;
+            h.track = c - gapV;
+            h.h = fittedHeight(h.text, headingHeight * k, trackRight - trackLeft);
+            h.v = h.track - .0035f * k - h.h;
+            c = h.v;
+            l.items.push_back(std::move(h));
+        };
+        section("AUTO TUNE");
+        for (const Control control : {Control::tuneFps, Control::tuneBalanced, Control::tuneLooks}) {
+            Item b = itemOf(Kind::tune, control);
+            b.text = control == Control::tuneFps ? "MAX FPS" : control == Control::tuneBalanced ? "BALANCED" : "BEST LOOKS";
+            const float bh = std::max(.018f * k, .015f);
+            b.box = {control, trackLeft, c - gapV - bh, trackRight, c - gapV};
+            c = b.box.v0;
+            helpUnder(helpText(control), b.help);
+            l.items.push_back(std::move(b));
+        }
+        {
+            Item info = itemOf(Kind::tuneInfo);
+            info.h = std::max(.0040f * k, .0034f);
+            info.v = c - gapV - info.h;  // the first line's bottom
+            info.track = info.h * 1.45f; // the lines' pitch
+            c = info.v - info.track * 2;
+            l.items.push_back(std::move(info));
+        }
+        section("FINE TUNING");
         toggleItem(Control::aa);
         for (const Control control : {Control::history, Control::sharpen, Control::reach, Control::monitor})
             sliderItem(control);
@@ -496,7 +525,11 @@ Layout build(int page, float k) {
             break;
         case Kind::transport:
         case Kind::wide:
+        case Kind::tune:
             area(it.box.u0, it.box.v0, it.box.u1, it.box.v1, "a button");
+            break;
+        case Kind::tuneInfo:
+            area(trackLeft, it.v - it.track * 2, trackRight, it.v + it.h, "the auto tune lines");
             break;
         case Kind::gear:
             area(it.box.u0, it.box.v0 + .0005f, it.box.u1, it.box.v1 - .0005f, "a gadget's row");
@@ -758,6 +791,23 @@ void content(const Painter& p, const Layout& l, const View& view) {
         }
         case Kind::wide:
             button(p, it.box, it.control == Control::fnsmApp && view.fnsmOpen ? "CLOSE FNSM APP" : it.text, view, k);
+            break;
+        case Kind::tune: {
+            const int mode = it.control == Control::tuneFps ? 0 : it.control == Control::tuneBalanced ? 1 : 2;
+            const bool active = view.tuneMode == mode;
+            button(p, it.box, active ? it.text + " - ON" : it.text, view, k);
+            if (active) // the chosen mode: a bar down its left edge
+                p.rect(it.box.u0, it.box.v0, it.box.u0 + .0025f, it.box.v1, p.c.good, .95f);
+            break;
+        }
+        case Kind::tuneInfo:
+            for (size_t i = 0; i < view.tune.size(); ++i) {
+                const std::string line =
+                    panelText(view.tune[i].empty() && i == 0 ? "PRESS A MODE: IT READS THIS PC AND HEADSET" : view.tune[i]);
+                const float v = it.v - it.track * static_cast<float>(i);
+                p.text(line, trackLeft, v, fittedHeight(line, it.h, trackRight - trackLeft),
+                       i == 1 ? p.c.value : i == 2 ? p.c.warn : p.c.label);
+            }
             break;
         }
         helpLines(p, it.help, p.c.help);
@@ -1139,6 +1189,12 @@ const char* helpText(Control c) {
         return "Your music's loudness only; the game's own sound is not changed.";
     case Control::fnsmApp:
         return "Opens the game's app over your left hand; tap it with your right index finger. B closes it.";
+    case Control::tuneFps:
+        return "Smoothest play: simpler detail and resolution.";
+    case Control::tuneBalanced:
+        return "A steady frame rate with most of the detail.";
+    case Control::tuneLooks:
+        return "The most detail your PC holds at a playable rate.";
     default:
         return "";
     }
@@ -1429,6 +1485,15 @@ Menu::Result Menu::update(const Input& in, Settings& settings) {
                     break;
                 case Control::fnsmApp:
                     r.fnsm = true;
+                    break;
+                case Control::tuneFps:
+                    r.tune = 0;
+                    break;
+                case Control::tuneBalanced:
+                    r.tune = 1;
+                    break;
+                case Control::tuneLooks:
+                    r.tune = 2;
                     break;
                 case Control::aa:
                 case Control::eyeTest:
