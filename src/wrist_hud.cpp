@@ -1188,7 +1188,7 @@ const char* helpText(Control c) {
     case Control::musicVolume:
         return "Your music's loudness only; the game's own sound is not changed.";
     case Control::fnsmApp:
-        return "Opens the game's app over your left hand; tap it with your right index finger. B closes it.";
+        return "Opens the game's own app on your HUD; the controllers work it. B closes it.";
     case Control::tuneFps:
         return "Smoothest play: simpler detail and resolution.";
     case Control::tuneBalanced:

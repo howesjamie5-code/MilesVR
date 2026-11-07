@@ -1994,9 +1994,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                               "at the bottom flip pages"},
           {"Pages", "VR SETTINGS (FPS and every setting), GRAPHICS, MUSIC (the songs in the Music folder beside "
                     "the launcher), GEAR (your gadgets, FNSM APP), HOLOGRAM"},
-          {"FNSM APP", "The game's Friendly Neighborhood app over your left hand: tap it with your right index "
-                       "finger, B closes it. Use it when the game asks for that app",
-           "FNSM - open the wrist menu (right hand on the left forearm + trigger), GEAR, FNSM APP"}}},
+          {"FNSM APP", "Opens the game's own Friendly Neighborhood app on your HUD (the wrist menu closes). Work it "
+                       "as a gamepad: stick to move, A to choose, B back / close",
+           "FNSM app open on your HUD - stick to move, A to choose, B back / close"}}},
         {"MENUS, CUTSCENES, BODY",
          {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset. Controllers = Xbox controller. "
                           "Mouse: point at it + pull the trigger. Any button = controller again",

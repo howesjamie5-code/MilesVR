@@ -1164,6 +1164,7 @@ DWORD WINAPI run(void*) {
         // (finger taps). B (the phone is away once FNSM APP is pressed) ends it and gives the controller back,
         // which then holds the game's B a moment (fnsmCloseTap) to close the app.
         float fnsmKeyWait{}, fnsmKey{}, fnsmCloseTap{};
+        float fnsmPadBack{}; // MilesVR 0.1.83: seconds until the controller is given back to work the open app
         bool phoneAppKey{}, padHeldOff{}, fnsmCloseHeld{};
         static constexpr WORD fnsmScan = 0x32; // M
         // MilesVR 0.1.80: the story's FNSM moment (the user: "be actually in the vr camera view pull the phone
@@ -1955,18 +1956,23 @@ DWORD WINAPI run(void*) {
                         fnsmSceneDone = true;
                         phoneAppAt = GetTickCount64();
                         phoneAppHand = static_cast<int>(wristHand);
+                        // MilesVR 0.1.83 (as SM2VR 0.0.293): the wrist menu closes while the game's app is open.
+                        if (wristToggle.on())
+                            wristToggle.flip();
                         phoneAppPlaySeconds = phoneAppCommittedSeconds = 0;
                         if (phoneTouch.reset())
                             mouseEvent(MOUSEEVENTF_LEFTUP);
                         runtime.haptic(1, .3f);
-                        message(3, 0, fnsmHold > 0 ? "FNSM app - the game's own opens over your left hand (its View held)"
-                                                   : "FNSM app - the game's own opens over your left hand (its M key)");
+                        message(3, 0, fnsmHold > 0 ? "FNSM app - the game's own opens on your HUD (its View held)"
+                                                   : "FNSM app - the game's own opens on your HUD (its M key)");
                         game_prompts::note(fnsmHold > 0 ? "wrist menu: FNSM APP -> the game's View held 1 s"
                                                         : "wrist menu: FNSM APP -> the game's M key");
                     };
                     const auto closeFnsmApp = [&] {
                         phoneAppAt = 0;
-                        fnsmCloseTap = .25f;
+                        // MilesVR 0.1.83: with the controller given back the player's own B reached the game already.
+                        fnsmCloseTap = padHeldOff ? .25f : 0.f;
+                        fnsmPadBack = 0;
                         runtime.haptic(1, .2f);
                         message(3, 0, "FNSM app closed - the controls are the game's again");
                         game_prompts::note("wrist menu: the game's FNSM app closes (its B), the controller back");
@@ -1987,17 +1993,19 @@ DWORD WINAPI run(void*) {
                                 game_prompts::note("wrist menu: FNSM APP - the game's window is not in front, no M sent");
                             }
                         }
-                        if (fnsmKey > 0 && (fnsmKey -= keyStep) <= 0)
+                        if (fnsmKey > 0 && (fnsmKey -= keyStep) <= 0) {
                             keyEvent(fnsmScan, false);
-                        // The game asks for its FNSM app: in VR that is the wrist menu's.
-                        if (const uint64_t reminders = game_prompts::fnsmReminders(); reminders != fnsmRemindersSeen) {
-                            fnsmRemindersSeen = reminders;
-                            runtime.haptic(0, .25f);
-                            runtime.haptic(1, .25f);
-                            message(3, 0, "FNSM - open the wrist menu (right hand on the left forearm + trigger), "
-                                          "GEAR, FNSM APP");
-                            game_prompts::note("the game's FNSM reminder -> the headset asks for the wrist menu");
+                            fnsmPadBack = .8f;
                         }
+                        // MilesVR 0.1.83 (as SM2VR 0.0.293): the app open by its key, the controller given back a moment
+                        // later - the controllers then work the app (stick, A, B) as the game's gamepad.
+                        if (fnsmPadBack > 0 && (fnsmPadBack -= keyStep) <= 0 && phoneAppAt && padHeldOff) {
+                            padHeldOff = false;
+                            message(3, 0, "FNSM app open on your HUD - stick to move, A to choose, B back / close");
+                            game_prompts::note("FNSM app: the controller given back to work the app");
+                        }
+                        // MilesVR 0.1.83 (the user: "removing the fnsm story moment"): the game's FNSM reminders no
+                        // longer buzz or send the player to the wrist menu.
                     }
                     uint64_t changes{};
                     if (const auto found = players.current(changes); changes != playerChanges) {
@@ -2021,24 +2029,9 @@ DWORD WINAPI run(void*) {
                     const bool committed = game.qpc && now.QuadPart >= static_cast<int64_t>(game.qpc) &&
                                            static_cast<double>(now.QuadPart - game.qpc) / frequency.QuadPart < .1;
                     const bool followsPlayer = native_view::validPose(body) && native_view::validPose(camera);
-                    // The FNSM moment (fnsmAskSeen above): play, though the game's camera rests.
-                    if (const uint64_t asked = game_prompts::fnsmAppAskedAt(); asked && asked != fnsmAskSeen) {
-                        if (!fnsmAskSeen || asked - fnsmAskSeen > fnsmAskGapMs) {
-                            fnsmSceneDone = false;
-                            fnsmCommittedSeconds = 0;
-                            runtime.haptic(0, .3f);
-                            runtime.haptic(1, .3f);
-                            message(3, 0, "FNSM - open the wrist menu (right hand on the left forearm + trigger), "
-                                          "GEAR, FNSM APP");
-                            game_prompts::note("the game asks for its FNSM app: VR stays in play for the wrist menu");
-                        }
-                        fnsmAskSeen = asked;
-                    }
-                    if (!fnsmSceneDone) {
-                        fnsmCommittedSeconds = committed ? fnsmCommittedSeconds + (std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f) : 0;
-                        if (fnsmCommittedSeconds >= fnsmSceneEndSeconds || GetTickCount64() - fnsmAskSeen > fnsmSceneMostMs)
-                            fnsmSceneDone = true;
-                    }
+                    // MilesVR 0.1.83 (the user: "removing the fnsm story moment"): the game asking for its FNSM app no
+                    // longer keeps VR in play or sends the player to the wrist menu - the scene is the game's own.
+                    fnsmSceneDone = true;
                     // And while the game's app is on the phone, the world goes on round it (0.1.80, the user:
                     // "the whole game screen acts as a monitor only showing the game on the phone").
                     if (phoneAppAt) {
@@ -2997,7 +2990,10 @@ DWORD WINAPI run(void*) {
                     using CalibrationPhase = body_calibration::Phase;
                     const bool immersive = viewing && motion.active && !flatScreen && controlsVisible;
                     const uint64_t nowMs = GetTickCount64();
-                    const bool phoneAppOn = phoneAppAt && viewing;
+                    // MilesVR 0.1.83 (as SM2VR 0.0.293, the user: the game's own app "nothing else"): no phone panel and
+                    // no finger taps - FNSM APP opens the game's own app, the controllers work it. The panel code stays
+                    // unused.
+                    const bool phoneAppOn = false;
                     if (!phoneAppOn) {
                         if (phoneTouch.reset())
                             mouseEvent(MOUSEEVENTF_LEFTUP);
