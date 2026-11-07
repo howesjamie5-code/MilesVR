@@ -581,6 +581,7 @@ void App::frame(float scale) {
     if (size.x > 0 && size.y > 0) {
         switch (tab_) {
         case Tab::play: play(origin, size); break;
+        case Tab::profiles: profiles(origin, size); break;
         case Tab::controls: controls(origin, size); break;
         case Tab::about: about(origin, size); break;
         }
@@ -640,13 +641,17 @@ void App::tabs() {
     const float width = ImGui::GetWindowWidth(), y = window.y + S(96), height = S(46);
     draw->AddLine(ImVec2(window.x, y + height), ImVec2(window.x + width, y + height), col(kBorder), 1);
     float x = window.x + S(16);
-    const std::pair<Tab, const char*> items[] = {{Tab::play, "Play"}, {Tab::controls, "Controls"}, {Tab::about, "About"}};
+    const std::pair<Tab, const char*> items[] = {
+        {Tab::play, "Play"}, {Tab::profiles, "Profiles"}, {Tab::controls, "Controls"}, {Tab::about, "About"}};
     for (const auto& [tab, label] : items) {
         const ImVec2 size = measure(fonts_.semibold, S(15), label);
         const float itemWidth = size.x + S(24);
         ImGui::SetCursorScreenPos(ImVec2(x, y));
-        if (ImGui::InvisibleButton(label, ImVec2(itemWidth, height)))
+        if (ImGui::InvisibleButton(label, ImVec2(itemWidth, height))) {
+            if (tab == Tab::profiles && tab_ != Tab::profiles)
+                profilesRead_ = false; // the files read again: one may have been added by hand
             tab_ = tab;
+        }
         handCursor();
         const bool active = tab_ == tab, hovered = ImGui::IsItemHovered();
         draw->AddText(fonts_.semibold, S(15), ImVec2(x + S(12), y + (height - size.y) * 0.5f),
@@ -1689,6 +1694,184 @@ float App::logLine(ImDrawList* draw, ImVec2 at, const char* text, float width, b
     draw->AddText(fonts_.semibold, S(12.5f), ImVec2(at.x + S(8), at.y + S(4)),
                   col(venom ? kVenomBright : kText, 0.9f), text, nullptr, inner);
     return size.y + S(8);
+}
+
+// SETTINGS PROFILES (ported from SM2VR 0.0.294, the user's one MilesVR change): the settings a profile holds
+// (spidy/launcher_profile.hpp) saved under a name, and each kept one (system.cpp: %APPDATA%\Spidy\profiles\
+// <name>.spidy) loaded, renamed or deleted (to the Recycle Bin, after a second click). Not while VR runs.
+void App::profiles(ImVec2 origin, ImVec2 size) {
+    namespace lp = spidy::launcher;
+    if (!profilesRead_) {
+        profiles_ = savedProfiles();
+        profilesRead_ = true;
+    }
+    const bool running = session_.running();
+    const lp::PlaySettings current{settings_.options, tabOnly_};
+    const auto notice = [&](std::string line, bool bad = false) {
+        profileNotice_ = std::move(line);
+        profileNoticeBad_ = bad;
+        profilesRead_ = false; // the list read again next frame
+    };
+    const auto heading = [&](const char* title) {
+        ImGui::Dummy(ImVec2(0, S(4)));
+        ImGui::PushFont(fonts_.bold, 12.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kMuted));
+        ImGui::TextUnformatted(title);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+    };
+    ImGui::SetCursorScreenPos(origin);
+    if (!beginCard("##profiles", size)) {
+        endCard();
+        return;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(S(10), S(8)));
+    cardTitle("SETTINGS PROFILES");
+    ImGui::BeginChild("##profilesList", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+    ImGui::PushStyleColor(ImGuiCol_Text, vec(kMuted));
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextUnformatted("A profile keeps how MilesVR plays - the gameplay, webs, swinging, venom, turning, haptics "
+                           "and display choices. Not this PC's graphics options, and not your body calibration: "
+                           "loading a profile leaves those as they are.");
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::BeginDisabled(running);
+
+    // SAVE: the settings as they are now, under the name typed.
+    heading("SAVE YOUR SETTINGS");
+    const std::string typed = lp::profileName(profileName_);
+    const bool nameOk = !lp::profileFileName(typed).empty();
+    const bool exists = nameOk && profileExists(typed);
+    ImGui::SetNextItemWidth(S(320));
+    ImGui::PushFont(fonts_.semibold, 13.5f);
+    const bool entered = ImGui::InputTextWithHint("##profileName", "Name this profile", profileName_,
+                                                  sizeof(profileName_), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!nameOk);
+    if ((secondaryButton(exists ? "Overwrite" : "Save", S(110)) || entered) && nameOk) {
+        if (saveProfile(typed, lp::profileText(lp::profileOf(current, typed), kVersion))) {
+            settings_.profile = typed;
+            save();
+            notice(format("Saved \"%s\".", typed.c_str()));
+            profileName_[0] = 0;
+        } else {
+            notice(format("Could not save \"%s\" (the profiles folder could not be written).", typed.c_str()), true);
+        }
+        deleting_.clear();
+    }
+    ImGui::EndDisabled();
+
+    // YOUR PROFILES: each kept one, with LOAD, RENAME and DELETE.
+    heading("YOUR PROFILES");
+    if (profiles_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kFaint));
+        ImGui::TextUnformatted("None saved yet. Name your settings above and press Save.");
+        ImGui::PopStyleColor();
+    }
+    const float buttons = S(96) * 3 + S(10) * 2;
+    for (const auto& saved : profiles_) {
+        ImGui::PushID(saved.name.c_str());
+        const std::string shown = saved.profile.name.empty() ? saved.name : saved.profile.name;
+        if (renaming_ == saved.name) {
+            ImGui::SetNextItemWidth(S(320));
+            ImGui::PushFont(fonts_.semibold, 13.5f);
+            bool done = ImGui::InputText("##renameTo", renameTo_, sizeof(renameTo_),
+                                         ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::PopFont();
+            ImGui::SameLine();
+            done |= secondaryButton("OK", S(70));
+            ImGui::SameLine();
+            if (secondaryButton("Cancel", S(80))) {
+                renaming_.clear();
+            } else if (done) {
+                const std::string to = lp::profileName(renameTo_);
+                const bool sameFile = lp::profileFileName(to) == lp::profileFileName(saved.name);
+                if (lp::profileFileName(to).empty()) {
+                    notice("Type a name with letters or numbers in it.", true);
+                } else if (!sameFile && profileExists(to)) {
+                    notice(format("There is already a profile called \"%s\".", to.c_str()), true);
+                } else {
+                    lp::Profile renamed = saved.profile;
+                    renamed.name = to;
+                    const std::string madeWith = renamed.madeWith.empty() ? std::string(kVersion) : renamed.madeWith;
+                    if (saveProfile(to, lp::profileText(renamed, madeWith)) && (sameFile || deleteProfile(saved.name))) {
+                        if (settings_.profile == saved.name || settings_.profile == shown) {
+                            settings_.profile = to;
+                            save();
+                        }
+                        notice(format("Renamed \"%s\" to \"%s\".", shown.c_str(), to.c_str()));
+                    } else {
+                        notice(format("Could not rename \"%s\".", shown.c_str()), true);
+                    }
+                    renaming_.clear();
+                }
+            }
+        } else {
+            const bool inUse = lp::profileMatches(saved.profile, current);
+            ImGui::AlignTextToFramePadding();
+            ImGui::PushFont(fonts_.semibold, 15.f);
+            ImGui::TextUnformatted(shown.c_str());
+            ImGui::PopFont();
+            if (inUse) {
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Text, vec(kGreen));
+                ImGui::TextUnformatted("IN USE");
+                ImGui::PopStyleColor();
+            }
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - buttons));
+            if (secondaryButton("Load", S(96))) {
+                lp::PlaySettings loaded = current;
+                lp::applyProfile(saved.profile, loaded);
+                settings_.options = loaded.options;
+                tabOnly_ = loaded.tab;
+                settings_.profile = saved.name;
+                save();
+                saveTabOnly(tabOnly_);
+                notice(format("Loaded \"%s\" - the Play tab's options show it, and VR starts with it.", shown.c_str()));
+                deleting_.clear();
+            }
+            ImGui::SameLine();
+            if (secondaryButton("Rename", S(96))) {
+                renaming_ = saved.name;
+                strncpy_s(renameTo_, shown.c_str(), _TRUNCATE);
+                deleting_.clear();
+            }
+            ImGui::SameLine();
+            const bool asking = deleting_ == saved.name;
+            if (asking)
+                ImGui::PushStyleColor(ImGuiCol_Button, vec(kError, 0.55f));
+            if (secondaryButton(asking ? "Sure?" : "Delete", S(96))) {
+                if (!asking) {
+                    deleting_ = saved.name;
+                } else {
+                    if (deleteProfile(saved.name))
+                        notice(format("Deleted \"%s\" (it is in the Recycle Bin).", shown.c_str()));
+                    else
+                        notice(format("Could not delete \"%s\".", shown.c_str()), true);
+                    deleting_.clear();
+                }
+            }
+            if (asking)
+                ImGui::PopStyleColor();
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndDisabled();
+    ImGui::Dummy(ImVec2(0, S(6)));
+    if (running) {
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kFaint));
+        ImGui::TextWrapped("Profiles can be saved and used while VR is not running.");
+        ImGui::PopStyleColor();
+    }
+    if (!profileNotice_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(profileNoticeBad_ ? kError : kGreen));
+        ImGui::TextWrapped("%s", profileNotice_.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    endCard();
 }
 
 void App::controls(ImVec2 origin, ImVec2 size) {

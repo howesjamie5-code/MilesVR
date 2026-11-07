@@ -39,7 +39,7 @@ public:
     }
 
 private:
-    enum class Tab { play, controls, about };
+    enum class Tab { play, profiles, controls, about };
     enum class Mark { ok, warning, error, busy, info };
 
     float S(float value) const { return value * scale_; }
@@ -47,6 +47,8 @@ private:
     void tabs();
     void play(ImVec2 origin, ImVec2 size);
     void controls(ImVec2 origin, ImVec2 size);
+    // Settings profiles (ported from SM2VR 0.0.294): save the settings under a name, load, rename or delete one.
+    void profiles(ImVec2 origin, ImVec2 size);
     float logLine(ImDrawList* draw, ImVec2 at, const char* text, float width, bool venom);
     void about(ImVec2 origin, ImVec2 size);
     void setupCard(float width);
@@ -137,6 +139,15 @@ private:
     std::string tutorialName_, tutorialText_, tutorialError_;
     // The MILES VR tab's settings launcher.ini has no key for (spidy_vr.ini), as the Options card shows them.
     spidy::vr_settings::Values tabOnly_;
+    // The Profiles tab: the profiles kept (read again when the tab opens and after each change), the name being
+    // typed, the one being renamed and its new name, the one asked about before deleting, and the last result.
+    std::vector<SavedProfile> profiles_;
+    bool profilesRead_{};
+    char profileName_[64]{};
+    std::string renaming_, deleting_;
+    char renameTo_[64]{};
+    std::string profileNotice_;
+    bool profileNoticeBad_{};
 };
 
 } // namespace launcher
