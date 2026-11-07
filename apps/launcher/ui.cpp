@@ -1762,6 +1762,46 @@ void App::profiles(ImVec2 origin, ImVec2 size) {
     }
     ImGui::EndDisabled();
 
+    // MilesVR 0.1.82 (the user: "add a load button to load another players profile from file explorer"): a .spidy
+    // file (or a text with a profile in it) picked in Windows' Open dialog - its settings put in place, and a copy
+    // kept in YOUR PROFILES (a name already there gets " (2)", " (3)"...: none of the player's own is overwritten).
+    heading("LOAD A PLAYER'S PROFILE");
+    if (secondaryButton("Load from file...", S(170))) {
+        if (const auto path = browseForProfile(window_)) {
+            if (const auto picked = lp::readProfile(readTextFile(*path))) {
+                std::string base = picked->name.empty() ? std::string("Imported profile") : picked->name;
+                std::string name = base;
+                for (int n = 2; n <= 99 && profileExists(name); ++n)
+                    name = lp::profileName(base + " (" + std::to_string(n) + ")");
+                lp::Profile kept = *picked;
+                kept.name = name;
+                lp::PlaySettings loaded = current;
+                lp::applyProfile(kept, loaded);
+                settings_.options = loaded.options;
+                tabOnly_ = loaded.tab;
+                const bool savedCopy =
+                    saveProfile(name, lp::profileText(kept, kept.madeWith.empty() ? std::string(kVersion) : kept.madeWith));
+                settings_.profile = savedCopy ? name : settings_.profile;
+                save();
+                saveTabOnly(tabOnly_);
+                notice(savedCopy ? format("Loaded \"%s\" from the file (%zu settings) - kept in your profiles as \"%s\".",
+                                          base.c_str(), picked->count(), name.c_str())
+                                 : format("Loaded \"%s\" from the file, but could not keep a copy in your profiles.",
+                                          base.c_str()),
+                       !savedCopy);
+            } else {
+                notice("That file holds no MilesVR profile.", true);
+            }
+            deleting_.clear();
+            renaming_.clear();
+        }
+    }
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, vec(kFaint));
+    ImGui::TextUnformatted("A profile file another player sent you (.spidy).");
+    ImGui::PopStyleColor();
+
     // YOUR PROFILES: each kept one, with LOAD, RENAME and DELETE.
     heading("YOUR PROFILES");
     if (profiles_.empty()) {
