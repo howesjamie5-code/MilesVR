@@ -1186,6 +1186,11 @@ DWORD WINAPI run(void*) {
         bool gripPairHeld{}, gripPairBefore[2]{};
         // A struggle QTE has the controller (padLayer.force).
         bool qteLayer{};
+        // X's map tap waits xMenuWait for a second tap (mashing: the game's X instead, xMashSeconds on), and the
+        // game's X presses queued for the mash.
+        static constexpr float xMenuWait = .35f, xMashSeconds = 1.2f, xPulseOn = .07f, xPulseOff = .05f;
+        float xMenuPending{}, xMashLeft{}, xPulse{}, xGap{};
+        uint32_t xQueued{}, xMashes{};
         uint32_t gripPairPresses{};
         bool namedFists{}, fistsBlows{};
         uint32_t namedPressesBefore{}, slamsBefore{};
@@ -5968,8 +5973,22 @@ DWORD WINAPI run(void*) {
                             const auto chosen =
                                 gadgetWheel.update(frame.seconds, x, offered && steering && !calibrationInput,
                                                    frame.hands[hand].grip.position, frame.head.position, places);
-                            if (chosen.tap)
-                                menuTap = menuTapSeconds;
+                            // MilesVR 0.1.84 (the user: in a QTE "X still opens the map"; the report of November 11,
+                            // 16:25: the mash's every X went out as the game's Back, and the game named no button
+                            // and the hero was in no struggle): a tap of X opens the map only once xMenuWait has gone
+                            // by without another. X tapped again sooner is mashing: each tap is the game's own X,
+                            // the first's too, and the map does not open, until xMashSeconds pass with no tap.
+                            if (chosen.tap) {
+                                if (xMenuPending > 0 || xMashLeft > 0) {
+                                    xQueued += xMenuPending > 0 ? 2 : 1;
+                                    xMenuPending = 0;
+                                    if (xMashLeft <= 0 && ++xMashes <= 20)
+                                        game_prompts::note("X mashed: each tap is the game's X (no map)");
+                                    xMashLeft = xMashSeconds;
+                                } else {
+                                    xMenuPending = xMenuWait;
+                                }
+                            }
                             if (chosen.opened) {
                                 runtime.haptic(hand, .3f);
                                 feel(body_haptics::Kind::gadget, static_cast<int>(hand), .3f);
@@ -6112,6 +6131,25 @@ DWORD WINAPI run(void*) {
                         if (bossStrikeTap > 0) {
                             pad.buttons |= game_pad::y;
                             bossStrikeTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        {
+                            const float dt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                            if (xMenuPending > 0 && (xMenuPending -= dt) <= 0)
+                                menuTap = menuTapSeconds;
+                            if (xMashLeft > 0)
+                                xMashLeft -= dt;
+                            // The mash's X presses, one after another: down xPulseOn, up xPulseOff.
+                            if (xPulse > 0) {
+                                if (mapping == game_pad::Mapping::gameplay)
+                                    pad.buttons |= game_pad::x;
+                                if ((xPulse -= dt) <= 0)
+                                    xGap = xPulseOff;
+                            } else if (xGap > 0) {
+                                xGap -= dt;
+                            } else if (xQueued > 0) {
+                                --xQueued;
+                                xPulse = xPulseOn;
+                            }
                         }
                         if (bossTap > 0) {
                             pad.buttons |= game_pad::x;
