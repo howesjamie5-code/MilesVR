@@ -2327,15 +2327,16 @@ DWORD WINAPI run(void*) {
                     if (uintptr_t entity{}; player.hero && read(player.record, &entity, sizeof(entity))) {
                         uint64_t asset{};
                         unsigned joints{};
-                        // MilesVR: the player is always Miles; the PR's game_fp has no character test, so this stays off.
-                        if (false && asset != playerBody) {
+                        // MilesVR: Miles in his own clothes plays with the game's controls (the user, November 11:
+                        // "web balls and web swinging webs should not be able to be used during this section").
+                        if (game_fp::skeleton(entity, asset, joints) && asset != playerBody) {
                             playerBody = asset;
-                            spiderMan = true;
+                            spiderMan = !game_fp::civilian(asset, joints);
                             char line[160];
                             std::snprintf(line, sizeof(line),
                                           "Player character: body %016llX (%u joints), %s",
                                           static_cast<unsigned long long>(asset), joints,
-                                          spiderMan ? "Spider-Man" : "not Spider-Man: the game's controls");
+                                          spiderMan ? "Miles in a suit" : "Miles out of the suit: the game's controls, no webs");
                             message(3, 0, line);
                         }
                     }

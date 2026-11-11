@@ -101,4 +101,11 @@ Status status();
 bool note(uint32_t& seen, char* out, size_t size);
 // Everything hidden by this module goes back at once (the render thread).
 void release();
+// The skeleton of the player's entity (its body asset and joint count), as Spidy 0.8.1's skeleton();
+// false when it does not read.
+bool skeleton(uintptr_t entity, uint64_t& asset, unsigned& joints);
+// MilesVR: Miles out of the suit, in his own clothes (Spidy 0.8.1's otherCharacter): the civilian body,
+// B900A23DAB6FC4E5 with 472 joints in the user's sessions of November 11 (the suits' have 241), or any
+// body of 400 joints or more (clothes have many more joints than a suit).
+bool civilian(uint64_t asset, unsigned joints);
 } // namespace spidy::game_fp

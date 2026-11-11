@@ -2415,4 +2415,10 @@ void release() {
     wanted = false;
     hero(heroObject.load());
 }
+bool skeleton(uintptr_t entity, uint64_t& asset, unsigned& joints) {
+    return classifyNow(entity, asset, joints);
+}
+bool civilian(uint64_t asset, unsigned joints) {
+    return asset == 0xB900A23DAB6FC4E5ULL || joints >= 400;
+}
 } // namespace spidy::game_fp

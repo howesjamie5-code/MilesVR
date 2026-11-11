@@ -319,7 +319,8 @@ static_assert(sizeof(ProbeConfig) == 32);
 // SpidyBodyCapture: the next hero pose job copies its joints as the game
 // wrote them and as the body left them, with its rig and the rig's rest pose
 // in model space, into SpidyBodyPoses.
-constexpr unsigned maxJoints = 256;
+// 512 since MilesVR 0.1.84: Miles in his own clothes has 472 (the suits 241), and his body was not drawn.
+constexpr unsigned maxJoints = 512;
 struct Poses {
     uint32_t magic = 0x53424450, version = 1, bytes = sizeof(Poses), joints{};
     int64_t sequence{};

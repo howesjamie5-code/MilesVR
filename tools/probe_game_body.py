@@ -43,7 +43,7 @@ from vr_launcher import bring_to_front
 OUTPUT = ROOT/'reports/body-probe'
 STEREO_DLL = ROOT/'build/windows-ninja/spidy_stereo_probe.dll'
 RAY_DLL = ROOT/'build/windows-ninja/spidy_ray_bridge.dll'
-MAX_JOINTS = 256
+MAX_JOINTS = 512
 STATUS_SIZE, POSES_SIZE = 208, 56 + 64 + 3*MAX_JOINTS*64
 PROBLEMS = {0: 'none', 1: 'no hero', 2: 'no rig yet', 3: 'unknown rig', 4: 'bad rest pose', 5: 'bad instance'}
 STATES = {0: 'off', 1: 'waiting', 2: 'active', 3: 'failed'}
