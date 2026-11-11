@@ -1,3 +1,31 @@
+MilesVR 0.1.84 - for Marvel's Spider-Man: Miles Morales
+=================================================================
+
+What changed since 0.1.80 (0.1.81-0.1.83 were never released, so they are in here too)
+------------------------------------------------------------------------------------------
+- FIRST PERSON CUTSCENES (vrfloop-lab's pull request #1): launcher Cutscenes = Screen /
+  Immersive / First person. Right stick click in a scene switches to Immersive and back.
+  The main menu always stays on the flat screen.
+- HALF PUNCH DAMAGE and ENEMY TYPES (also pull request #1): enemies that block in the
+  base game block your plain blows until webbed or stunned (launcher: Enemy types).
+- SPIDYVR 0.8.0-0.8.6 ported: web tie, web lines, native run, Spidy run, air slingshot,
+  running leap, early jump, soft/smooth landings, web aim (model forearm, wrist/palm
+  shooters, web angle), single hand yank strength, dodge tumble, flip reprojection,
+  steady HUD, reel and swing haptics, air fists, gameplay presets (Arcade / Balanced /
+  Pro on the Profiles tab), VR settings in short in-game pages plus a MILES VR page.
+  All new options are off by default (launcher: FROM SPIDYVR 0.8).
+- X tap opens the game menu (map) again; X held = gadget wheel; X mashed = the game's X.
+- AUTO TUNE MAX FPS no longer raises any graphics setting above your own.
+- Miles out of the suit: his body shows, and no webs or web balls (the game's controls).
+- Time to Rally: camouflage on the frozen game screen = hand at temple + trigger; the bus
+  (game asks LB + RB) = squeeze both grips and hold.
+- Struggle QTEs (an enemy's grab) give the whole controller to the game.
+- Launcher PROFILES tab: save, load, rename, delete, and Load from file... (0.1.81-0.1.82).
+- FNSM APP on the wrist opens only the game's own app; the FNSM story moment is the
+  game's own again (0.1.83).
+
+Known: the game can go black after changing graphics in its own menu - send the report.
+
 MilesVR 0.1.80 - TEST BUILD for Marvel's Spider-Man: Miles Morales
 =================================================================
 
