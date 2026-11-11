@@ -1535,6 +1535,8 @@ DWORD WINAPI run(void*) {
         // menu are glitchy ... disable them for the main menu and use flat screen instead"): the title screen's
         // scene, which never plays, stays on the game screen.
         bool scenePlaySeen{};
+        float scenePlayFor{};
+        static constexpr float scenePlaySeconds = 2.f;
         static constexpr float sceneSteadySeconds = 1.f, sceneGapSeconds = .4f;
         static constexpr uint64_t sceneAfterPlayerMs = 6000;
         Pose sceneStart{};
@@ -3169,7 +3171,15 @@ DWORD WINAPI run(void*) {
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
                     // No hero (the main menu, quitting to it): play is not seen, whatever the Cutscenes choice.
-                    scenePlaySeen = player.hero && (scenePlaySeen || vrPlay);
+                    // And play is seen only after scenePlaySeconds of it in a row: Miles Morales's title screen
+                    // commits the player's camera once as it comes up (the user's report of November 11, 15:18:
+                    // a third of a second of "play", then its menus shown as a scene around the headset - "the
+                    // save main menu still was in 3D").
+                    scenePlayFor = vrPlay && player.hero ? scenePlayFor + (std::isfinite(frame.seconds)
+                                                                               ? std::clamp(frame.seconds, 0.f, .1f)
+                                                                               : 0.f)
+                                                         : 0.f;
+                    scenePlaySeen = player.hero && (scenePlaySeen || scenePlayFor >= scenePlaySeconds);
                     // FIRST-PERSON CUTSCENES: the scene is shown from inside the head of the character it plays,
                     // round the viewer, instead of on the screen (game_fp.hpp). Wanted while a scene plays
                     // (the same conditions, but the screen's 3D depth and its HUD panel); it is shown once the
