@@ -231,12 +231,14 @@ def shrink(registry=None, backup=BACKUP, screen=None):
     return wanted
 
 
-def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True, tuned=None):
+def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True, tuned=None, cap=False):
     """Turn off what SESSION lists, adding the user's values to the backup (made here if the window
     keeps the user's settings). keep: PICTURE names ('depth_of_field', 'sharpening') to leave as the
     player has them. comfort False leaves blur, grain, colour fringes and the vignette alone and does
     not record them as replaced. tuned: AUTO TUNE's game values (TUNABLE names), written and restored
-    the same way. Returns the values written."""
+    the same way. cap: no tuned value above the player's own (MAX FPS: the user, November 11, "the max fps
+    thing is bugged its bumping graphic settings up" - a strong PC's tier preset was above their settings).
+    Returns the values written."""
     registry = registry or Registry()
     kept = {PICTURE[name] for name in keep} | (set() if comfort else set(COMFORT_OFF))
     tuned = {name: value for name, value in (tuned or {}).items()
@@ -255,6 +257,10 @@ def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True, tuned=N
     before = {}
     for entry in saved['session']:
         before.setdefault(entry['key'], {}).update(entry['values'])
+    if cap:
+        own = before.get(KEY, {})
+        tuned = {name: min(value, own[name]) if isinstance(own.get(name), int) else value
+                 for name, value in tuned.items()}
     written = {}
     for key, wanted, _ in SESSION + ((KEY, tuned, False),):
         values = {name: value for name, value in wanted.items() if name in before.get(key, {}) and name not in kept}
@@ -264,7 +270,8 @@ def prepare_session(registry=None, backup=BACKUP, keep=(), comfort=True, tuned=N
     return written
 
 
-def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(), comfort=True, tuned=None):
+def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(), comfort=True, tuned=None,
+                   cap=False):
     """Called with the game closed, just before it starts. A previous session's values are restored
     first, so a backup always holds the user's own settings. keep: as prepare_session's. Returns the
     window's values written (None when the window keeps the user's settings).
@@ -275,7 +282,7 @@ def prepare_launch(small=True, registry=None, backup=BACKUP, screen=None, keep=(
     restore(registry, backup)
     try:
         window = shrink(registry, backup, screen) if small else None
-        prepare_session(registry, backup, keep, comfort, tuned)
+        prepare_session(registry, backup, keep, comfort, tuned, cap)
     except OSError:
         try:
             restore(registry, backup)

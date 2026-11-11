@@ -501,12 +501,10 @@ struct SessionOptions {
     int bodyHaptics = 100; // a bHaptics vest, sleeves and visor (body_haptics.hpp), percent; 0 off
     int screenSize = 1; // the game screen in the headset: 0 small, 1 medium, 2 large
     int screenDepth = 2; // the depth cutscenes have on that screen: 0 off (flat), 1 low, 2 medium, 3 high
-    // Cutscenes: 0 Screen (the game screen above, flat or 3D); 1 Immersive, around you at the game's camera.
+    // Cutscenes: 0 Screen (the game screen above, flat or 3D); 1 Immersive, around you at the game's camera;
+    // 2 First person (experimental, game_fp.hpp): while a scene plays, the headset is inside the character's
+    // head and the scene is 3D around you; the right stick's click switches to Immersive and back.
     int cutscenes = 0;
-    // First person cutscenes (experimental, game_fp.hpp): while a scene plays, the headset is inside the
-    // character's head and the scene is 3D around you. The right stick's click switches to the camera chosen
-    // above. Off (the default), a scene is shown as chosen above.
-    bool firstPersonCutscenes = false;
     // With first-person cutscenes: your head turns the view in a scene. Off, the scene's own camera aims the
     // view (your position still follows the headset).
     bool cutsceneHeadTracking = true;
@@ -591,11 +589,11 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--venom-trigger");
     if (options.arcadeWebs)
         args.emplace_back(L"--arcade-webs");
-    if (options.cutscenes == 1)
+    if (options.cutscenes >= 1)
         args.emplace_back(L"--immersive-cutscenes");
-    if (options.firstPersonCutscenes)
+    if (options.cutscenes == 2)
         args.emplace_back(L"--first-person-cutscenes");
-    if (options.firstPersonCutscenes && !options.cutsceneHeadTracking)
+    if (options.cutscenes == 2 && !options.cutsceneHeadTracking)
         args.emplace_back(L"--no-cutscene-head-tracking");
     if (options.gameDepthOfField)
         args.emplace_back(L"--game-depth-of-field");
@@ -686,9 +684,7 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
         else if (key == "arcade_webs")
             next.arcadeWebs = number != 0;
         else if (key == "cutscenes")
-            next.cutscenes = std::clamp(number, 0, 1);
-        else if (key == "first_person_cutscenes")
-            next.firstPersonCutscenes = number != 0;
+            next.cutscenes = std::clamp(number, 0, 2);
         else if (key == "cutscene_head_tracking")
             next.cutsceneHeadTracking = number != 0;
         else if (key == "swing_speed")

@@ -249,25 +249,22 @@ int main() {
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--arcade-webs", "arcade webs chosen");
         options = {};
-        check(options.cutscenes == 0 && !options.firstPersonCutscenes && options.cutsceneHeadTracking,
+        check(options.cutscenes == 0 && options.cutsceneHeadTracking,
               "cutscenes on the screen, first person off, with head tracking, in a new launcher");
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 7, "a session with the cutscenes on the screen is told nothing of them");
         options.cutscenes = 1;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--immersive-cutscenes", "immersive cutscenes chosen");
-        options.firstPersonCutscenes = true;
+        options.cutscenes = 2;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 9 && args[7] == L"--immersive-cutscenes" && args[8] == L"--first-person-cutscenes",
-              "first-person cutscenes chosen beside immersive ones");
-        options.cutscenes = 0;
-        args = sessionArguments(options, L"r.json", L"", L"");
-        check(args.size() == 8 && args[7] == L"--first-person-cutscenes", "first-person cutscenes chosen");
+              "first-person cutscenes chosen, immersive ones beside them for the right stick's click");
         options.cutsceneHeadTracking = false;
         args = sessionArguments(options, L"r.json", L"", L"");
-        check(args.size() == 9 && args[8] == L"--no-cutscene-head-tracking",
+        check(args.size() == 10 && args[9] == L"--no-cutscene-head-tracking",
               "first-person cutscenes aimed by the scene's own camera");
-        options.firstPersonCutscenes = false;
+        options.cutscenes = 0;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 7, "head tracking is said only with first-person cutscenes");
         options = {};

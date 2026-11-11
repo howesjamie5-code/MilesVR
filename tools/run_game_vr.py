@@ -2424,13 +2424,15 @@ def session(a, startup):
     # AUTO TUNE: its eye resolution replaces the launcher's, and its game values go to prepare_display.
     a.tune_mode, tune_scale, a.tune_game = wrist_tune()
     if a.tune_mode and tune_scale and not a.size:
-        a.render_scale = tune_scale
+        # MAX FPS never raises the resolution above the launcher's.
+        a.render_scale = min(tune_scale, a.render_scale) if a.tune_mode == 'MAX FPS' else tune_scale
 
     def prepare_display():
         try:
             values = vr_display.prepare_launch(small=not a.full_desktop_view, keep=picture_kept(a),
                                                comfort=not getattr(a, 'game_effects', False),
-                                               tuned=getattr(a, 'tune_game', None))
+                                               tuned=getattr(a, 'tune_game', None),
+                                               cap=getattr(a, 'tune_mode', None) == 'MAX FPS')
             if getattr(a, 'tune_mode', None):
                 print(f"Auto tune {a.tune_mode} (the wrist's GRAPHICS page): eye resolution {a.render_scale}% and "
                       f"the game's graphics for VR ({', '.join(f'{k} {v}' for k, v in a.tune_game.items())}); your "

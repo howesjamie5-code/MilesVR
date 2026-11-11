@@ -76,7 +76,7 @@ constexpr int kMonitorRateValues[] = {0, 60, 30, 15, 5};
 constexpr const char* kScreenSizes[] = {"Small", "Medium", "Large"};
 constexpr const char* kHudSizes[] = {"Off", "Small", "Medium", "Large"};
 constexpr const char* kScreenDepths[] = {"Off", "Low", "Medium", "High"};
-constexpr const char* kCutscenes[] = {"Screen", "Immersive"};
+constexpr const char* kCutscenes[] = {"Screen", "Immersive", "First person"};
 // The button that shoots and holds webs (SessionOptions::triggerWebs: the second).
 constexpr const char* kWebButtons[] = {"Grip", "Trigger"};
 // The venom punch's hand (SessionOptions::venomLeftHand: the second).
@@ -1388,16 +1388,13 @@ void App::optionsCard(ImVec2 size) {
            });
     option("Cutscenes",
            "Screen: on the game screen (flat, or 3D with Game screen 3D). Immersive: around you, from the "
-           "game's own camera; turn your head to look around. Menus and loading stay on the screen.",
+           "game's own camera. First person (experimental): from inside Miles's head; right stick click "
+           "switches to Immersive and back. Menus and loading stay on the screen.",
            S(150), [&] {
-               static constexpr int choices[] = {0, 1};
-               stepCombo("##cutscenes", kCutscenes, choices, 2, &o.cutscenes);
+               static constexpr int choices[] = {0, 1, 2};
+               stepCombo("##cutscenes", kCutscenes, choices, 3, &o.cutscenes);
            });
-    option("First person cutscenes (experimental)",
-           "Renders all cutscenes in full VR first person, works with finishers and car chases. Press right "
-           "stick to switch between first person and the normal camera. Expect bugs",
-           S(42), [&] { changed |= toggle("##fpscenes", &o.firstPersonCutscenes); });
-    if (o.firstPersonCutscenes)
+    if (o.cutscenes == 2)
         option("Cutscene head tracking",
                "On by default, disable to remove head tracking from cutscenes. Best if you get motion sickness.",
                S(42), [&] { changed |= toggle("##fpscenehead", &o.cutsceneHeadTracking); });
@@ -2023,6 +2020,8 @@ void App::controls(ImVec2 origin, ImVec2 size) {
                                              "Prompts and subtitles float in front of you. The main menu stays "
                                              "on the screen",
            "Cutscene around you (Cutscenes: Immersive): look around with your head; ..."},
+          {"Cutscenes: First person (options)", "Cutscenes from inside Miles's head. Right stick click = "
+                                                "Immersive camera and back"},
           {"Left stick  /  A  /  B", "Move  /  select  /  back"},
           {"Grips", "Switch menu tabs"},
           {"T-pose, hold both triggers", "Body calibration when VR starts (B skips it)",

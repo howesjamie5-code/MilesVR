@@ -1158,9 +1158,8 @@ DWORD WINAPI run(void*) {
         int wristGearCount{};
         // The hero down (his hit points at 0), and the swing last told so (Settings::noBlows).
         bool heroDown{}, downBlows{};
-        // The wrist's MENU (was the phone's, Spidy 0.5): the game's Back, which opens its menu (the map,
-        // suits and skills), sent this long. A tap of X sent it until October
-        // 23, when the menu went onto the phone.
+        // A tap of X (the phone's MENU from October 23 to 0.1.80): the game's Back, which opens its menu
+        // (the map, suits and skills), sent this long.
         constexpr float menuTapSeconds = .1f;
         float menuTap{};
         // MilesVR 0.1.78: the phone's FNSM APP holds the game's View this long, which on an Xbox controller
@@ -1309,6 +1308,12 @@ DWORD WINAPI run(void*) {
         bool stickWalking{};       // the left stick moves him: the game's walk and run legs
         // The right hand at the temple scans; the left's is Miles's Camouflage.
         game_pad::TemplePress templePress{2u}, camoPress{1u};
+        // MilesVR 0.1.84: Camouflage on the game screen - Time to Rally's camo lesson freezes the game on its
+        // prompt, which VR shows as the game screen, where the left temple sent nothing (the user, November
+        // 11: "the time to rally stuff needs to be worked on"). There either hand at the temple with its
+        // trigger is the game's D-pad up.
+        game_pad::TemplePress screenCamoPress{3u};
+        uint32_t screenCamosBefore{};
         game_pad::SwingTap swingTap;
         uint32_t camosBefore{};
         uint32_t chargesBefore{}, leapsBefore{}, scansBefore{};
@@ -2332,10 +2337,19 @@ DWORD WINAPI run(void*) {
                                     const auto p = auto_tune::preset(mode, tier, tuneHardware);
                                     const std::pair<Control, int> live[] = {
                                         {Control::reach, p.reach}, {Control::sharpen, p.sharpen}, {Control::monitor, p.monitor}};
+                                    // MAX FPS never raises one above what it is (the user, November 11: "its
+                                    // bumping graphic settings up"); the launch's game values are capped the
+                                    // same way at the player's own (vr_display.py, cap).
                                     for (const auto& [control, value] : live)
                                         if (!(wristOff >> static_cast<unsigned>(control) & 1)) {
-                                            wristShown[control] = static_cast<float>(value);
-                                            wristApply.want(control, static_cast<float>(value));
+                                            // (WINDOW FPS 0 is every frame, the most of all.)
+                                            const float now = wristShown[control];
+                                            const bool capped = mode == auto_tune::Mode::maxFps && std::isfinite(now) &&
+                                                                !(control == Control::monitor && now <= 0);
+                                            const float set = capped ? std::min(now, static_cast<float>(value))
+                                                                     : static_cast<float>(value);
+                                            wristShown[control] = set;
+                                            wristApply.want(control, set);
                                         }
                                     const int launchTier = tuneFound >= 0 ? std::min(tier, tuneFound) : tier;
                                     const auto next = launchTier == tier ? p : auto_tune::preset(mode, launchTier, tuneHardware);
@@ -5026,8 +5040,11 @@ DWORD WINAPI run(void*) {
                             buttons.buttons &= ~static_cast<uint32_t>(buttonX);
                         // The gadget wheel: X held opens it in front of the hand
                         // X is on (the left on Touch and Index, the right on the
-                        // Steam Frame); X tapped does nothing (the game menu until
-                        // October 23: the phone's MENU now). Chosen, a gadget is
+                        // Steam Frame); X tapped is the game's Back, its menu of the
+                        // map, suits and skills (as until October 23; the phone's
+                        // MENU had it until 0.1.80, and the wrist none: the user,
+                        // November 11, "x doesnt open the map menu anymore add that
+                        // back"). Chosen, a gadget is
                         // equipped in the game and the free hand's trigger fires
                         // it; the web shooter at the top has it fire web balls
                         // again. A game that offers no gadget yet (a new game's
@@ -5050,6 +5067,8 @@ DWORD WINAPI run(void*) {
                             const auto chosen =
                                 gadgetWheel.update(frame.seconds, x, offered && steering && !calibrationInput,
                                                    frame.hands[hand].grip.position, frame.head.position, places);
+                            if (chosen.tap)
+                                menuTap = menuTapSeconds;
                             if (chosen.opened) {
                                 runtime.haptic(hand, .3f);
                                 feel(body_haptics::Kind::gadget, static_cast<int>(hand), .3f);
@@ -5165,6 +5184,22 @@ DWORD WINAPI run(void*) {
                             if (bossVenomTap < .2f)
                                 pad.buttons |= game_pad::x;
                             bossVenomTap -= std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : .1f;
+                        }
+                        {
+                            const Pose grips[2]{frame.hands[0].grip, frame.hands[1].grip};
+                            const bool tracked[2]{frame.hands[0].valid && validTrackedPose(frame.hands[0].grip),
+                                                  frame.hands[1].valid && validTrackedPose(frame.hands[1].grip)};
+                            const float triggers[2]{frame.hands[0].trigger, frame.hands[1].trigger};
+                            screenCamoPress.update(frame.seconds, mapping == game_pad::Mapping::menus, frame.head,
+                                                   grips, tracked, triggers);
+                            if (screenCamoPress.held())
+                                pad.buttons |= game_pad::dpadUp;
+                            if (screenCamoPress.scans() != screenCamosBefore) {
+                                screenCamosBefore = screenCamoPress.scans();
+                                runtime.haptic(0, .6f, .25f);
+                                game_prompts::note("game screen: a hand at the temple + trigger -> the game's "
+                                                   "D-pad up (Camouflage)");
+                            }
                         }
                         // The venom punch tutorial on the game screen: the venom button held and a fast
                         // punch away from the body is the game's own venom punch (LB, then X with it).

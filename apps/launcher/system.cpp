@@ -523,6 +523,7 @@ Settings loadSettings() {
     std::istringstream lines(readText(settingsPath(), 1 << 16));
     std::string line;
     int weight = 0, percentWeight = 0, legacyWeight = 0;
+    bool firstPerson = false;
     while (std::getline(lines, line)) {
         if (!line.empty() && line.back() == '\r')
             line.pop_back();
@@ -547,7 +548,8 @@ Settings loadSettings() {
         else if (key == "venom_left_hand") o.venomLeftHand = number() != 0;
         else if (key == "venom_trigger") o.venomTrigger = number() != 0;
         else if (key == "arcade_webs") o.arcadeWebs = number() != 0;
-        else if (key == "first_person_cutscenes") o.firstPersonCutscenes = number() != 0;
+        // first_person_cutscenes (PR #1, November 9) is now Cutscenes: First person.
+        else if (key == "first_person_cutscenes") firstPerson = number() != 0;
         else if (key == "cutscene_head_tracking") o.cutsceneHeadTracking = number() != 0;
         // wall_run (before October 25) and stand_on_walls (written until then, read until October 15) are no
         // longer read: the swing's walls and the view on them are always on.
@@ -571,7 +573,7 @@ Settings loadSettings() {
         else if (key == "body_haptics") o.bodyHaptics = std::clamp(number(), 0, 100);
         else if (key == "screen_size") o.screenSize = std::clamp(number(), 0, 1);
         else if (key == "screen_depth") o.screenDepth = std::clamp(number(), 0, 3);
-        else if (key == "cutscenes") o.cutscenes = std::clamp(number(), 0, 1);
+        else if (key == "cutscenes") o.cutscenes = std::clamp(number(), 0, 2);
         else if (key == "hud") o.hud = std::clamp(number(), 0, 3);
         else if (key == "flip_speed") o.flipSpeed = std::clamp(number(), 90, 480);
         // "weight" (before October 9) and "weight_percent" (until October 12) were saved whether chosen or
@@ -590,6 +592,8 @@ Settings loadSettings() {
         else if (key == "update_check") settings.updateCheck = number() != 0;
         else if (key == "profile") settings.profile = value;
     }
+    if (firstPerson)
+        settings.options.cutscenes = 2;
     if (weight)
         settings.options.weight = weight;
     else if (percentWeight && percentWeight != 80)
@@ -616,7 +620,6 @@ void saveSettings(const Settings& settings) {
          << "\naim_markers=" << o.aimMarkers << "\nair_webs=" << o.airWebs << "\nflips=" << o.flips
          << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand
          << "\nvenom_trigger=" << o.venomTrigger << "\narcade_webs=" << o.arcadeWebs
-         << "\nfirst_person_cutscenes=" << o.firstPersonCutscenes
          << "\ncutscene_head_tracking=" << o.cutsceneHeadTracking
          << "\ngame_depth_of_field=" << o.gameDepthOfField
          << "\ngame_sharpening=" << o.gameSharpening << "\ngame_effects=" << o.gameEffects

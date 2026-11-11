@@ -87,12 +87,25 @@ class DisplayPermissionTests(unittest.TestCase):
                         run_game_vr.session(args, startup)
                 prepare.assert_called_once_with(small=not full_desktop,
                                                 keep=('sharpening',) if full_desktop else (), comfort=True,
-                                                tuned=ANY)
+                                                tuned=ANY, cap=ANY)
                 self.assertIn('Access is denied', startup.fields['game_settings_refused'])
                 self.assertIn('WARNING:', shown.getvalue())
                 self.assertIn('frame generation off', shown.getvalue())
                 self.assertEqual('still need restoring' in shown.getvalue(), pending)
                 self.assertNotIn('Game settings for VR:', shown.getvalue())
+
+    def test_max_fps_never_raises_a_game_setting_above_the_players_own(self):
+        with tempfile.TemporaryDirectory() as folder:
+            mine = dict(USER, ShadowQuality=0, LevelOfDetail=3, TextureQuality=1)
+            registry = FakeRegistry(mine)
+            backup = pathlib.Path(folder)/'before.json'
+            display.prepare_launch(registry=registry, backup=backup, screen=(3440, 1440), cap=True,
+                                   tuned=dict(ShadowQuality=1, LevelOfDetail=1, TextureQuality=2))
+            self.assertEqual({k: registry.values[k] for k in ('ShadowQuality', 'LevelOfDetail', 'TextureQuality')},
+                             dict(ShadowQuality=0, LevelOfDetail=1, TextureQuality=1))
+            self.assertTrue(display.restore(registry, backup))
+            self.assertEqual({k: registry.values[k] for k in ('ShadowQuality', 'LevelOfDetail', 'TextureQuality')},
+                             dict(ShadowQuality=0, LevelOfDetail=3, TextureQuality=1))
 
     def test_auto_tune_game_values_hold_for_the_vr_session_and_come_back_after(self):
         with tempfile.TemporaryDirectory() as folder:
