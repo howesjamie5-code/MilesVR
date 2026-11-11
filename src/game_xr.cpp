@@ -1535,8 +1535,7 @@ DWORD WINAPI run(void*) {
         // menu are glitchy ... disable them for the main menu and use flat screen instead"): the title screen's
         // scene, which never plays, stays on the game screen.
         bool scenePlaySeen{};
-        float scenePlayFor{};
-        static constexpr float scenePlaySeconds = 2.f;
+        bool wasTitleCamera{};
         static constexpr float sceneSteadySeconds = 1.f, sceneGapSeconds = .4f;
         static constexpr uint64_t sceneAfterPlayerMs = 6000;
         Pose sceneStart{};
@@ -3171,15 +3170,20 @@ DWORD WINAPI run(void*) {
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
                     // No hero (the main menu, quitting to it): play is not seen, whatever the Cutscenes choice.
-                    // And play is seen only after scenePlaySeconds of it in a row: Miles Morales's title screen
-                    // commits the player's camera once as it comes up (the user's report of November 11, 15:18:
-                    // a third of a second of "play", then its menus shown as a scene around the headset - "the
-                    // save main menu still was in 3D").
-                    scenePlayFor = vrPlay && player.hero ? scenePlayFor + (std::isfinite(frame.seconds)
-                                                                               ? std::clamp(frame.seconds, 0.f, .1f)
-                                                                               : 0.f)
-                                                         : 0.f;
-                    scenePlaySeen = player.hero && (scenePlaySeen || scenePlayFor >= scenePlaySeconds);
+                    // And not while the game's camera is its title screen's (the user's reports of November 11,
+                    // 15:18 and 15:28): Miles Morales's main menu commits the player's camera once as it comes up, a
+                    // blink of "play" that showed its menus as a scene around the headset ("the save main menu still
+                    // was in 3D"). That camera looks the same way in every session: along +x, 10 degrees down, its z
+                    // exactly 0. (2c080cd waited for 2 s of play instead, and a save that loads into a cutscene had
+                    // none: "my cutscenes arent first person anymore".)
+                    const bool titleCamera = std::abs(camera[8] - .985f) < .004f && std::abs(camera[9] + .174f) < .004f &&
+                                             std::abs(camera[10]) < .004f;
+                    if (titleCamera != wasTitleCamera) {
+                        wasTitleCamera = titleCamera;
+                        if (titleCamera)
+                            message(3, 0, "Cutscenes: the game's title screen camera - the main menu stays on the screen");
+                    }
+                    scenePlaySeen = player.hero && !titleCamera && (scenePlaySeen || vrPlay);
                     // FIRST-PERSON CUTSCENES: the scene is shown from inside the head of the character it plays,
                     // round the viewer, instead of on the screen (game_fp.hpp). Wanted while a scene plays
                     // (the same conditions, but the screen's 3D depth and its HUD panel); it is shown once the
