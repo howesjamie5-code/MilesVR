@@ -1,5 +1,6 @@
 // Frees props the web holds and moves them, and flings bots, inside
 // hknpWorld::preCollide on the main thread (see native_bodies.hpp).
+#include "spidy/game_record.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/game_time.hpp"
 #include <MinHook.h>
@@ -225,12 +226,16 @@ bool damageNow(const Damage& d, bool& unnamed) {
     unnamed = damager && !namesDamager(d.victim);
     const auto system = reinterpret_cast<void*>(base + damageSystem);
     uint8_t* request{};
+    // The recorder (game_record) tells the mod's own requests from the game's by this.
+    game_record::issuing(true);
     __try {
         request = reinterpret_cast<DirectDamage>(base + directDamageRva)(
             system, &victim, &direction, &d.point, length(normal) > .5f ? &normal : &direction);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        game_record::issuing(false);
         return false;
     }
+    game_record::issuing(false);
     if (!request || reinterpret_cast<uintptr_t>(request) == base + damageSystem + spareRequest)
         return false; // the pool was full: the system handed out its spare
     uint64_t fields{};

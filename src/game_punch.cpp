@@ -4,16 +4,20 @@
 #include "spidy/game_punch.hpp"
 #include "spidy/game_focus.hpp"
 #include "spidy/game_grab.hpp"
+#include "spidy/game_guard.hpp"
+#include "spidy/game_record.hpp"
 #include "spidy/game_sense.hpp"
 #include "spidy/game_sound.hpp"
 #include "spidy/game_targets.hpp"
 #include "spidy/game_time.hpp"
+#include "spidy/guard_pose.hpp"
 #include "spidy/native_bodies.hpp"
 #include "spidy/venom_punch.hpp"
 #include "spidy/spider_sense.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 #include <windows.h>
@@ -97,6 +101,19 @@ struct Struck {
     float age{};
 };
 std::vector<Struck> struckLately;
+// MilesVR 0.1.80, v18: the enemies a blocked blow made flinch lately, and when (GetTickCount64; touchBlocked).
+struct Touched {
+    uint64_t record{};
+    ULONGLONG at{};
+};
+std::vector<Touched> touched;
+// MilesVR 0.1.80, v21: the counters enemies have begun (the repeated blocked punches' answer) that have not reached
+// the hero yet, and when each does (GetTickCount64).
+struct Retaliation {
+    uint64_t record{};
+    ULONGLONG due{};
+};
+std::vector<Retaliation> retaliations;
 constexpr float struckSeconds = 3, chestHeight = 1.3f;
 std::vector<FightTarget> enemies;
 struct Near {
@@ -286,6 +303,8 @@ void resetFight() {
     cues.clear();
     lock.clear();
     struckLately.clear();
+    touched.clear();
+    retaliations.clear();
     enemies.clear();
     nearby.clear();
     launches.clear();
@@ -392,6 +411,165 @@ bool bossStunned(uint64_t record) {
             return game_targets::isStunned(base, b);
     return false;
 }
+// MilesVR 0.1.80, v18 (game_guard): the bot of the target watch with this actor record, null for none.
+const game_targets::Candidate* botOf(uint64_t record) {
+    for (const auto& b : bots)
+        if (b.record == record)
+            return &b;
+    return nullptr;
+}
+// He is in the middle of an attack the game warned the hero of. (Until v22 his guard was open to a blow then; v23: it
+// holds, and a blocked blow staggers him - v25: only with guard.txt's `touch on`; otherwise he finishes his attack.)
+bool attackingNow(uint64_t record) {
+    for (const auto& t : threats)
+        if (t.attacker == record && standing(t, sense.config()))
+            return true;
+    return false;
+}
+// A blow a guard stopped does nothing to him and counts for nothing in the flow (v29: it ends the flow, endCombo
+// below), but it charges the venom meter a little (half a plain blow's gain): the venom that breaks a guard has to
+// come from somewhere, or an enemy who is all guard could never be hurt.
+constexpr float blockedGain = .5f;
+// And the enemy takes it: the game's smallest hit reaction (Twitch) with next to no damage, so a blocked blow is
+// seen to meet him. (v21: his arms come up as well - the mod's own pose, guard_pose.hpp - for the game's own block
+// state is one his AI enters on its own attacks' terms.) Once in touchGap for each enemy. v25: only when guard.txt
+// says `touch on` (see below).
+// v23 (the user, November 8: "if i punch them as they are attacking, their attack should be cancelled and they block
+// me, and if thats not possible, they block me and follow through the attack"): a blow his guard blocks while he is
+// in the middle of an attack staggers him (the game's Stagger reaction, as hard as a plain punch's smallest): his
+// attack is stopped by the game's own hit reaction when it will be. If the game's reaction lets it go on, he finishes
+// it - blocked all the same (guard.hpp). v24: that is all it does. In v23 the next such blow knocked him back as well,
+// as a Spider-Sense counter's break does (breakAttack), and the user said "i punch them once, it gets blocked, and
+// then none of my next punches register": a fighter flung out of reach is a fighter the next fists whiff at.
+// v25 (the user, after v24: "they do a staggered animation when you punch them a couple times"): none of this happens
+// unless guard.txt says `touch on` (game_guard::touchWanted). In the log of November 8 the game's hit-reaction state
+// (BotStateHitReactGame) was under 24 of the 70 blocked blows; the likeliest source is the Stagger above given to an
+// attacker, kept going by the Twitch of the blocks after it. A guard that reels at every punch does not look like one
+// that blocks it, and the mod's own pose (guard_pose.hpp: arms up, the body jolted by the blow) is what shows the blow
+// meeting him. An attacker finishes his attack, blocked all the same - the user's own alternative of November 8:
+// "they block me and follow through the attack".
+constexpr float interruptStagger = 2.f;
+constexpr float touchDamage = .01f, touchKnock = 1.f;
+constexpr ULONGLONG touchGap = 450, touchMemory = 5000;
+void touchBlocked(const game_targets::Candidate& bot, const PunchEvent& e, bool attacking) {
+    if (!game_guard::touchWanted())
+        return;
+    const ULONGLONG now = GetTickCount64();
+    for (auto it = touched.begin(); it != touched.end();) {
+        if (now - it->at > touchMemory)
+            it = touched.erase(it);
+        else
+            ++it;
+    }
+    const auto found = std::find_if(touched.begin(), touched.end(),
+                                    [&](const Touched& t) { return t.record == bot.record; });
+    if (found != touched.end()) {
+        if (now - found->at < touchGap)
+            return;
+        found->at = now;
+    } else if (touched.size() < 64) {
+        touched.push_back({bot.record, now});
+    }
+    Vec3 way = e.direction;
+    way.y = 0;
+    if (length(way) < .1f) {
+        way = e.point - fighter.feet;
+        way.y = 0;
+    }
+    way = length(way) > 1e-3f ? normalized(way) : Vec3{0, 0, -1};
+    native_bodies::Damage request;
+    request.victim = bot.record;
+    request.damager = fighter.record;
+    request.point = e.point;
+    request.direction = way;
+    request.normal = way * -1.f;
+    request.amount = touchDamage;
+    request.type = 1; // kMelee
+    if (attacking) {
+        request.knockback = static_cast<int32_t>(Knockback::Stagger);
+        request.knockbackAmount = interruptStagger;
+    } else {
+        request.knockback = static_cast<int32_t>(Knockback::Twitch);
+        request.knockbackAmount = touchKnock;
+    }
+    native_bodies::damage(request);
+}
+// MilesVR 0.1.80, v29 (the user, November 9: "if the blocked ui comes up then the combo symbol should disappear, infact
+// the combo should reset if you attack a guarding enemy, combo meaning left right up down attacks"): a blow a guard
+// stops ends the combo. Until v28 it left the flow where it stood - its count, and the arrow of the blow it called next
+// (left, right, up or down, web_strike.hpp's Cues) - so a combo of three went on through a guard that stopped every
+// blow after it, with its arrow and its count showing beside the BLOCKED mark. Now the count starts over and the call
+// is gone (the headset takes the arrow and the count's marks down with them), and the next blow that lands is the first
+// of a new flow. A flow with nothing in it and no call standing has nothing to end, and the log says nothing of it.
+void endCombo(const game_targets::Candidate& bot) {
+    const int blows = flow.count();
+    const CueWay called = cues.cue().way;
+    if (blows <= 0 && called == CueWay::None)
+        return;
+    flow.reset();
+    cues.clear();
+    char line[160];
+    std::snprintf(line, sizeof(line), "COMBO #%u a blocked blow ended the combo (%d blow(s) in it%s)", bot.handle & 0xfffff,
+                  blows, called != CueWay::None ? ", a call standing" : "");
+    game_record::log(line);
+}
+void blockedBlow(const game_targets::Candidate& bot, const PunchEvent& e, bool attacking) {
+    chargeMeter(venomMeter.load(), venom_punch::gain(false, false) * blockedGain);
+    endCombo(bot);
+    touchBlocked(bot, e, attacking);
+    // Off the ground and on no web, the player stays up for the next blow.
+    if (!fighter.grounded && !fighter.swinging)
+        strike.hangOn(false);
+}
+// MilesVR 0.1.80, v21: the guard's answer to blocked punches in a row, as the base game's guarding enemies have it:
+// he swings at the hero, and it does no damage - it only staggers him. The swing is seen (guard_pose.hpp: the headset
+// side poses his arm when the guard module says it began); it reaches the hero contactSeconds after it began, if
+// the hero is still within his reach and his guard has not been opened by then (a venom punch, a gadget, a dodge
+// over him: no counter), and then the game gets a stagger-level hit on the hero from the enemy with next to nothing
+// of damage in it - the game's own hit reaction does the rest.
+constexpr float retaliateDamage = .01f, retaliateKnock = 1.f, retaliateReach = 2.4f;
+constexpr ULONGLONG retaliateStale = 1500;
+void scheduleCounter(const game_targets::Candidate& bot) {
+    if (retaliations.size() >= 8)
+        retaliations.erase(retaliations.begin());
+    retaliations.push_back({bot.record, GetTickCount64() + static_cast<ULONGLONG>(guard_pose::contactSeconds * 1000.0)});
+}
+void answerCounters() {
+    if (retaliations.empty())
+        return;
+    const ULONGLONG now = GetTickCount64();
+    for (auto it = retaliations.begin(); it != retaliations.end();) {
+        if (now < it->due) {
+            ++it;
+            continue;
+        }
+        const Retaliation due = *it;
+        it = retaliations.erase(it);
+        const auto* bot = botOf(due.record);
+        Vec3 feet{};
+        if (now - due.due > retaliateStale || !bot || !fighter.record || !fighter.grounded ||
+            !game_targets::position(*bot, feet) || !game_guard::holds(*bot))
+            continue;
+        Vec3 way = fighter.feet - feet;
+        way.y = 0;
+        const float apart = length(way);
+        if (apart > retaliateReach)
+            continue;
+        way = apart > 1e-3f ? way / apart : Vec3{0, 0, 1};
+        native_bodies::Damage request;
+        request.victim = fighter.record;
+        request.damager = bot->record;
+        request.point = fighter.feet + Vec3{0, strike.config().chest, 0};
+        request.direction = way;
+        request.normal = way * -1.f;
+        request.amount = retaliateDamage;
+        request.type = 1; // kMelee
+        request.knockback = static_cast<int32_t>(Knockback::Stagger);
+        request.knockbackAmount = retaliateKnock;
+        if (native_bodies::damage(request))
+            game_guard::counterLanded(*bot);
+    }
+}
 // A counter's break: the game's flinch for the attacker the moment the fist
 // goes out at him, so his blow never comes; the blow that lands on him next
 // is the counter's (land()).
@@ -404,12 +582,17 @@ void breakAttack(const SpiderSense::Counter& c, Vec3 head) {
     way.y = 0;
     request.direction = length(way) > 1e-3f ? normalized(way) : Vec3{0, 0, -1};
     request.normal = request.direction * -1.f;
-    request.amount = 1;
+    request.amount = fighter.halfPunchDamage ? .5f : 1.f;
     request.type = 1; // kMelee
     request.knockback = static_cast<int32_t>(Knockback::Knockback);
     request.knockbackAmount = 3;
-    if (native_bodies::damage(request))
+    if (native_bodies::damage(request)) {
         ++senseTally.breaks;
+        // v23: a guard's attack is broken, and the punch that follows is blocked all the same: the state this
+        // knockback gives him is the mod's own, and does not open his guard to it (game_guard::own).
+        if (const auto* bot = botOf(c.attacker))
+            game_guard::own(*bot);
+    }
 }
 void noteCounter(const SpiderSense::Counter& c, bool thrown) {
     (thrown ? senseTally.thrown : senseTally.landed) += 1;
@@ -540,6 +723,11 @@ void blast(Vec3 centre, Blast kind = Blast::Smash) {
         request.statusType = venomStatus;
         request.statusAmount = venomStatusAmount;
         request.statusDuration = venomStatusSeconds;
+        // The venom breaks any guard it reaches (game_guard).
+        game_guard::Strike broke;
+        broke.venom = true;
+        broke.point = middle;
+        game_guard::blow(b, broke);
         native_bodies::damage(tamedForBoss(request));
         if (b.machine) {
             const auto waiting = std::find_if(launches.begin(), launches.end(),
@@ -594,6 +782,34 @@ void land(PunchEvent e, bool byStrike) {
     game_grab::struck(e.target);
     // He is the one from here on, and his knockout would be this blow's.
     lock.take(e.target);
+    // MilesVR 0.1.80, v18 (game_guard): whether this blow is a Spider-Sense counter's and whether it is the venom
+    // punch is known first; then the guard judges the blow (v21: only the venom breaks a guard; v23: not a
+    // Spider-Sense counter either, and not a blow at an enemy in the middle of an attack - he guards then too; with
+    // guard.txt's `touch on` a blocked blow staggers him so his attack stops, v25: otherwise he finishes it). A
+    // blocked blow ends here: nothing lands, and (v29) the combo is over (blockedBlow: endCombo).
+    std::optional<SpiderSense::Counter> made;
+    const bool counterBlow = sense.blow(e.target, threats, fighter.feet + Vec3{0, strike.config().chest, 0}, made);
+    const uint32_t charge = venomCharge.load();
+    const bool venom = e.hand == (venomHand.load() ? 1 : 0) && venomArmed();
+    guards::Outcome guarded{};
+    if (const auto* bot = botOf(e.target)) {
+        game_guard::Strike hit;
+        hit.hand = static_cast<uint32_t>(e.hand);
+        hit.strength = e.strength;
+        hit.venom = venom;
+        hit.grounded = fighter.grounded;
+        hit.attacking = attackingNow(e.target);
+        hit.point = e.point;
+        // v30: a swing kick - a dive's blow, whose hand is WebStrike::diveHand - goes through a baton's guard (game_guard).
+        hit.kick = byStrike && e.hand == WebStrike::diveHand;
+        guarded = game_guard::blow(*bot, hit);
+        if (guarded.verdict == guards::Verdict::Blocked) {
+            blockedBlow(*bot, e, hit.attacking);
+            if (guarded.retaliates)
+                scheduleCounter(*bot);
+            return;
+        }
+    }
     {
         Vec3 chest = e.point;
         for (const auto& enemy : enemies)
@@ -631,8 +847,9 @@ void land(PunchEvent e, bool byStrike) {
     if (uncalled)
         flow.keep();
     const int count = uncalled ? flow.count() : flow.hit();
-    auto d = deliver(e, airborne, count, flow, {}, called ? before.way : CueWay::None, cues.config().damage,
-                     !fighter.combatVisuals);
+    // (The venom punch below takes at least venomLeast whatever this halves: a power of its own.)
+    auto d = deliver(e, airborne, count, flow, DeliveryConfig{.halfDamage = fighter.halfPunchDamage},
+                     called ? before.way : CueWay::None, cues.config().damage, !fighter.combatVisuals);
     if (uncalled && (d.fly || d.knockback >= Knockback::Knockdown)) {
         d.kind = BlowKind::Hit;
         d.kinetic = d.fly = false;
@@ -642,11 +859,14 @@ void land(PunchEvent e, bool byStrike) {
     // A counter's blow (spider_sense.hpp): the one after a fist thrown at him
     // while his warning stood, or one that lands while it stands and so
     // counters him itself. It sends him flying, whatever the flow says.
-    std::optional<SpiderSense::Counter> made;
-    if (sense.blow(e.target, threats, fighter.feet + Vec3{0, strike.config().chest, 0}, made)) {
+    // (And the blow that breaks a weapon guard under the blows before it is sent the same way, flying: the stagger.)
+    const bool strainBreak = guarded.verdict == guards::Verdict::Breaks && guarded.cause == guards::Cause::Strain;
+    if (counterBlow) {
         if (made)
             noteCounter(*made, false);
         ++senseTally.counterBlows;
+    }
+    if (counterBlow || strainBreak) {
         if (d.kind == BlowKind::Hit && (fighter.combatVisuals || verticalBlow(e, airborne) != CueWay::Down)) {
             Vec3 along = e.direction;
             along.y = 0;
@@ -663,8 +883,6 @@ void land(PunchEvent e, bool byStrike) {
                              static_cast<uint32_t>((tally.blows + 1) * 2654435761u >> 13));
     // The right fist charged with venom: this blow is the venom punch, and
     // the charge is spent.
-    const uint32_t charge = venomCharge.load();
-    const bool venom = e.hand == (venomHand.load() ? 1 : 0) && venomArmed();
     if (venom) {
         venomUsed = charge;
         Vec3 along{e.direction.x, 0, e.direction.z};
@@ -788,6 +1006,8 @@ uint32_t game_punch::start(uintptr_t gameBase) {
             senseTally = {};
             warnedLately = {};
             ReleaseSRWLockExclusive(&updating);
+            // The guards (game_guard): their rules file is read before the first scan reads the classes.
+            game_guard::start(base);
             watch.start(base, 1u << static_cast<unsigned>(game_targets::Kind::bot));
             enabled = true;
         }
@@ -814,6 +1034,7 @@ uint32_t game_punch::stop() {
     publishSense(0, {});
     ReleaseSRWLockExclusive(&updating);
     watch.stop();
+    game_guard::stop();
     publish([](Data& d) { d.status = 0; });
     ReleaseSRWLockExclusive(&lifecycle);
     return 0;
@@ -840,6 +1061,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
         return opened;
     watch.current(bots);
     fighter = player;
+    // v19 (game_guard): the guards' hit points and the dodge over them, from the bots as they stand. v27: and how fast
+    // each enemy comes at the hero (a runner guards), in the world's time - the game's time scale is told.
+    game_guard::watch(bots, player.feet, worldScale());
+    // v21: a guard's counter that has arrived staggers the hero.
+    answerCounters();
     // The fist: the knuckles, fistAhead along the hand from its web shooter
     // (the swing input's aim, webShooter: the nozzle, 2.5 cm further back
     // since October 18, which this keeps the fist clear of); its motion
@@ -935,8 +1161,11 @@ Opened game_punch::update(float seconds, const Input& in, const Player& player, 
                        perfects = perfect > perfectAnswered ? std::min(perfect - perfectAnswered, 2u) : 0;
         dodgesAnswered = dodged;
         perfectAnswered = perfect;
-        if (plain || perfects)
+        if (plain || perfects) {
             chargeMeter(venomMeter.load(), plain * venom_punch::dodgeGain + perfects * venom_punch::perfectDodgeExtra);
+            // v19 (game_guard): a dodge that carries him over an enemy opens that enemy's guard.
+            game_guard::dodgeBegan(player.feet);
+        }
     }
     if (const uint32_t asked = megaRequest.load(); asked != megaAnswered) {
         megaAnswered = asked;
@@ -1222,6 +1451,7 @@ Venom game_punch::venom(const Venom& in) {
     perfectRequest = in.perfectDodges;
     venomLocked = (in.locked & Venom::lockedVenom) != 0;
     venomLocks = in.locked;
+    game_guard::setVenomLocked(venomLocked.load());
     AcquireSRWLockShared(&output);
     auto out = venomOut;
     ReleaseSRWLockShared(&output);

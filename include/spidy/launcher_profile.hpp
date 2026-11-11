@@ -110,6 +110,10 @@ inline constexpr ProfileSetting profileSettings[] = {
     launcherOption("hud", Item::hud, 0, 3, &SessionOptions::hud),
     tabOnly("ui_style", Item::uiStyle, 0, 1, &Values::uiStyle),
     tabOnly("combat_visuals", Item::combatVisuals, &Values::combatVisuals),
+    tabOnly("half_punch_damage", Item::halfPunchDamage, &Values::halfPunchDamage),
+    // MilesVR's Enemy types (v31): the enemy types that block in the base game block base attacks until they are webbed or
+    // stunned; off, nobody guards. A profile from before it leaves the setting as it is.
+    tabOnly("enemy_types", Item::enemyTypes, &Values::enemyTypes),
     tabOnly("near_clip_mm", Item::nearClip, 10, 100, &Values::nearClipMm),
     tabOnly("seated", Item::seated, &Values::seated),
     launcherOption("flips", Item::flips, &SessionOptions::flips),

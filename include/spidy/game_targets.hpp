@@ -1,8 +1,10 @@
 #pragma once
+#include "guard.hpp"
 #include "math.hpp"
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -57,7 +59,25 @@ enum Trait : uint32_t {
     rhino = 256,
     // A state class: the bot is stunned (BotStateStunned, BotStateElectricStun) - for a boss, the moment the
     // game offers its web strike finisher (game_targets::stunned).
-    stunned = 512
+    stunned = 512,
+    // MilesVR 0.1.80, v18 (guard.hpp, game_guard): what guard the classes of the actor's components give it -
+    // a weapon's (BotMeleeWeaponManager), a brawler's, a shield's - and a class that takes every guard from it.
+    guardWeapon = 1024,
+    guardBrawler = 2048,
+    guardShield = 4096,
+    guardExempt = 8192,
+    // v19: a state class: the bot is staggered, stunned, webbed or knocked about (guards::opensGuard) - his guard
+    // is open in it (game_targets::inOpenState).
+    guardOpen = 16384,
+    // v23: a component class of a weapon breaker (the Underground's melee enemies: WeaponBreakerStatusEffect,
+    // UnbrokenWeaponPartialPlayer): his block sounds like a brawler's (guards::soundOf).
+    guardBreaker = 32768,
+    // v23: a state class: the bot is webbed or caught in a web (guards::webbedState): his guard is down in it, whatever
+    // the mod's own blows did lately (game_targets::inWebbedState).
+    guardWebbed = 65536,
+    // v30: a component class on the actor that is a behavior of a fight (guards::fightBehavior: BehaviorMeleeGame,
+    // BehaviorRangedCombat ...): a sign that he has detected the hero (game_guard::watch).
+    guardEngaged = 131072
 };
 // A bot's size: the capsule his mover collides with, above his actor's
 // transform, as the game builds it (1fbba90) from his mover manager's body
@@ -136,6 +156,18 @@ bool up(uintptr_t base, const Candidate&);
 bool held(uintptr_t base, const Candidate&);
 // In a stunned state now (Trait stunned on his state machine's current state).
 bool isStunned(uintptr_t base, const Candidate&);
+// v19: in a state that has him staggered, stunned, webbed or knocked about (guards::opensGuard by the state's name,
+// or any class it derives from).
+bool inOpenState(uintptr_t base, const Candidate&);
+// v23: in a state that has him webbed or caught in a web (guards::webbedState by the state's name, or any class it
+// derives from): he never guards in it.
+bool inWebbedState(uintptr_t base, const Candidate&);
+// v24: the name of the class of the state his state machine is in at this moment ("BotStateWebStruggle"), for the
+// guard's log. False (and `out` empty) when he is no bot or it cannot be read.
+bool stateName(uintptr_t base, const Candidate&, std::string& out);
+// v27: in a state of an enemy on the move at the hero (guards::runningState by the name of the state's own class, not
+// by those it derives from: a dash attack is an attack).
+bool inRunningState(uintptr_t base, const Candidate&);
 // An enemy in the fight: an enemy who is up and free to fight - his own AI
 // moves him (not held). What a punch across the room, a web, a web ball and
 // the blow of a thrown thug take. The user, October 12, with webs still
@@ -170,6 +202,54 @@ bool position(const Candidate&, Vec3& out);
 // The candidate's hit points: false, and `out` left as it was, for an actor
 // without a health component or with one that cannot be read.
 bool health(const Candidate&, float& out);
+// MilesVR 0.1.80, v18 (guard.hpp): the most hit points he can have (his health component's float at +0x80, as
+// the logs of November 7 show: 90, 110 and 120 for the street thugs), false for none or one that cannot be read.
+bool maxHealth(const Candidate&, float& out);
+// The rules the classes' guard bits are read by (the built-in ones until set). Set at any time: every class is
+// read again by the next scan.
+void setGuardRules(const guards::Rules& rules);
+// The kind of guard the traits give: the strongest of the guard bits, None for none or an exempting class.
+inline guards::Kind guardKind(uint32_t traits) {
+    if (traits & guardExempt)
+        return guards::Kind::None;
+    guards::Kind kind = guards::Kind::None;
+    if (traits & guardWeapon)
+        kind = guards::stronger(kind, guards::Kind::Weapon);
+    if (traits & guardBrawler)
+        kind = guards::stronger(kind, guards::Kind::Brawler);
+    if (traits & guardShield)
+        kind = guards::stronger(kind, guards::Kind::Shield);
+    return kind;
+}
+// The combat-related component classes (tellsCombat) of one actor at the latest scan, comma separated: for the
+// guard's census line, so a guard that is missing can be given by a class name. False for an actor with none.
+bool combatClasses(uint64_t record, std::string& out);
+// v30: the Behavior classes of one actor at the latest scan, comma separated (the machinery every actor's behaviors run
+// on left out: guards::isBehavior): for the guard's census line, to tell the behaviors of an enemy who has not detected the
+// hero from those of one who has. False for an actor with none.
+bool behaviors(uint64_t record, std::string& out);
+
+// MilesVR 0.1.80, v16 (game_record): what an actor is made of, for the recorder. The classes of the components
+// registered on the actor record (their own names, as the game's type information gives them): all of them, or
+// only those of its states and of what blocks or arms it (BotState*, Block, Shield, Armor, Stagger, Weapon,
+// Baton, Guard). hit points: those of its health component (the float at +0x88), NaN for none. Walks the whole
+// registry (milliseconds): never in a game thread's step.
+struct Description {
+    std::vector<std::string> classes;
+    // Each of those components' address (parallel to classes), and the health component's.
+    std::vector<uintptr_t> addresses;
+    uintptr_t health{};
+    float hitPoints{};
+    bool hasHealth{};
+};
+bool describe(uintptr_t base, uint64_t record, bool all, Description& out);
+// A class name the recorder and the rules share: whether it is one that shows a block, a shield or a weapon.
+bool tellsCombat(const char* name);
+// MilesVR 0.1.80, v18: the classes the game image itself names in its type information, for finding the game's
+// own block (or guard, or reaction) state: every "BotState..." class (without the BotState) in `states`, and the
+// other classes whose names tell of a block, a guard, a parry, a shield, a stagger and the like in `others`,
+// each a comma separated list in order, cut at about 240 names. False when the image cannot be read.
+bool imageClasses(uintptr_t base, std::string& states, std::string& others);
 
 class Watch {
   public:

@@ -1,9 +1,12 @@
 // Finds web-grab candidates in-process, the way game_player finds the player.
 #include "spidy/game_targets.hpp"
+#include "spidy/guard.hpp"
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #include <windows.h>
 using namespace spidy;
@@ -45,6 +48,45 @@ constexpr uint32_t trait(Trait t) {
 // machine that has him out of the fight, and one in which something else
 // moves him (bit 0: no kind is 0).
 constexpr uint32_t heldState = 1u << 0, downState = 1u << 5, healthClass = 1u << 6, botHealthClass = 1u << 7;
+// MilesVR 0.1.80, v18: the class's own name tells of combat (tellsCombat): its name is kept for the guard's census.
+// Above every trait (trait(guardWebbed) is bit 24; v30: trait(guardEngaged), the highest, is bit 25).
+constexpr uint32_t combatClass = 1u << 30;
+// v30: the class's own name is a Behavior one (guards::isBehavior): its name is kept for the guard's census too.
+constexpr uint32_t behaviorClass = 1u << 29;
+bool ownName(uintptr_t base, uintptr_t vtable, std::string& out);
+// The guard rules the class names are read by, under classesLock.
+guards::Rules guardRules;
+// The guard bits a class gives its actor, by its decorated name (and v19: the open state bit for a state class
+// that has him staggered).
+uint32_t guardBits(const char* decorated) {
+    const auto verdict = guards::classOf(guards::plainName(decorated), guardRules);
+    uint32_t bits{};
+    if (guards::opensGuard(guards::plainName(decorated)))
+        bits |= static_cast<uint32_t>(guardOpen) << 8;
+    if (guards::webbedState(guards::plainName(decorated)))
+        bits |= static_cast<uint32_t>(guardWebbed) << 8;
+    // v30: a behavior of a fight on the actor: a sign that he has detected the hero.
+    if (guards::fightBehavior(guards::plainName(decorated)))
+        bits |= static_cast<uint32_t>(guardEngaged) << 8;
+    if (verdict.breaker)
+        bits |= static_cast<uint32_t>(guardBreaker) << 8;
+    if (verdict.exempt)
+        bits |= static_cast<uint32_t>(guardExempt) << 8;
+    switch (verdict.kind) {
+    case guards::Kind::Weapon:
+        bits |= static_cast<uint32_t>(guardWeapon) << 8;
+        break;
+    case guards::Kind::Brawler:
+        bits |= static_cast<uint32_t>(guardBrawler) << 8;
+        break;
+    case guards::Kind::Shield:
+        bits |= static_cast<uint32_t>(guardShield) << 8;
+        break;
+    default:
+        break;
+    }
+    return bits;
+}
 constexpr Rule rules[] = {
     {".?AVThrowableHelper@@", marker(Kind::throwable)},
     {".?AVBotMoverManager@@", marker(Kind::bot)},
@@ -114,10 +156,12 @@ uint32_t classify(uintptr_t base, uintptr_t vtable, std::unordered_map<uint32_t,
         if (known == types.end()) {
             char name[64]{};
             uint32_t own{};
-            if (typeName(base + type, name))
+            if (typeName(base + type, name)) {
                 for (const auto& rule : rules)
                     if (!std::strcmp(name, rule.name))
                         own |= rule.bits;
+                own |= guardBits(name);
+            }
             known = types.emplace(type, own).first;
         }
         bits |= known->second;
@@ -135,12 +179,51 @@ uint64_t imageSize(uintptr_t base) {
 std::mutex classesLock;
 std::unordered_map<uintptr_t, uint32_t> classes;
 std::unordered_map<uint32_t, uint32_t> types;
+// The component classes that tell of combat, by vtable, with their own names (classesLock).
+std::unordered_map<uintptr_t, std::string> combatNames;
+// v30: the same for the Behavior classes (guards::isBehavior).
+std::unordered_map<uintptr_t, std::string> behaviorNames;
 // classesLock held.
 uint32_t lookup(uintptr_t base, uintptr_t vtable) {
     auto known = classes.find(vtable);
-    if (known == classes.end())
-        known = classes.emplace(vtable, classify(base, vtable, types)).first;
+    if (known == classes.end()) {
+        uint32_t bits = classify(base, vtable, types);
+        std::string name;
+        if (ownName(base, vtable, name)) {
+            if (game_targets::tellsCombat(name.c_str())) {
+                bits |= combatClass;
+                combatNames[vtable] = name;
+            }
+            if (guards::isBehavior(name)) {
+                bits |= behaviorClass;
+                behaviorNames[vtable] = name;
+            }
+        }
+        known = classes.emplace(vtable, bits).first;
+    }
     return known->second;
+}
+// The latest scan's combat classes for each bot, joined (combatLock).
+std::mutex combatLock;
+std::unordered_map<uint64_t, std::string> combatNow;
+// v30: the latest scan's Behavior classes for each bot, joined (behaviorLock).
+std::mutex behaviorLock;
+std::unordered_map<uint64_t, std::string> behaviorNow;
+// The names met for each actor record, joined with commas (a name once each, the bots' alone, at most about 700 characters).
+std::unordered_map<uint64_t, std::string> joinNames(const std::vector<std::pair<uint64_t, const std::string*>>& seen,
+                                                    const std::unordered_map<uint64_t, bool>& bots) {
+    std::unordered_map<uint64_t, std::string> joined;
+    for (const auto& [record, name] : seen) {
+        if (!bots.count(record))
+            continue;
+        auto& list = joined[record];
+        bool have{};
+        for (size_t at = list.find(*name); at != std::string::npos && !have; at = list.find(*name, at + 1))
+            have = (at == 0 || list[at - 1] == ',') && (at + name->size() == list.size() || list[at + name->size()] == ',');
+        if (!have && list.size() + name->size() < 700)
+            list += (list.empty() ? "" : ",") + *name;
+    }
+    return joined;
 }
 } // namespace
 
@@ -164,6 +247,8 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
     };
     std::unordered_map<uint64_t, Tracker> trackers;
     std::unordered_map<uint64_t, bool> bots;
+    // The combat classes met, by actor record (MilesVR 0.1.80, v18: the guard's census). v30: and the Behavior ones.
+    std::vector<std::pair<uint64_t, const std::string*>> combatSeen, behaviorSeen;
     const auto size = imageSize(base);
     std::lock_guard lock(classesLock);
     for (uint32_t i = 0; i < static_cast<uint32_t>(count); ++i) {
@@ -206,8 +291,14 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
             healths[head.record] = entry.address;
         else if (bits & healthClass)
             healths.emplace(head.record, entry.address);
-        if (bits >> 8)
-            traits[head.record] |= bits >> 8;
+        if ((bits & ~(combatClass | behaviorClass)) >> 8)
+            traits[head.record] |= (bits & ~(combatClass | behaviorClass)) >> 8;
+        if (bits & combatClass)
+            if (const auto name = combatNames.find(head.vtable); name != combatNames.end())
+                combatSeen.emplace_back(head.record, &name->second);
+        if (bits & behaviorClass)
+            if (const auto name = behaviorNames.find(head.vtable); name != behaviorNames.end())
+                behaviorSeen.emplace_back(head.record, &name->second);
         if (bits & trait(webbable))
             trackers.emplace(head.record, Tracker{entry.address, head.vtable, head.handle});
         if (bits & marker(Kind::bot))
@@ -245,6 +336,191 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
             }
         }
     }
+    // The bots' combat classes, joined, for the guard's census line (a name once each). v30: and their Behavior classes.
+    auto joined = joinNames(combatSeen, bots);
+    auto behaviorJoined = joinNames(behaviorSeen, bots);
+    {
+        std::lock_guard combat(combatLock);
+        combatNow.swap(joined);
+    }
+    {
+        std::lock_guard behavior(behaviorLock);
+        behaviorNow.swap(behaviorJoined);
+    }
+    return true;
+}
+// MilesVR 0.1.80, v16 (game_record): the components of one actor, by their classes.
+namespace {
+// A class's own name from its vtable's complete object locator, without the decoration (".?AVBotHealth@@").
+bool ownName(uintptr_t base, uintptr_t vtable, std::string& out) {
+    struct Locator {
+        uint32_t signature, offset, constructorOffset, type, hierarchy, self;
+    } locator{};
+    const auto at = pointer(vtable - 8);
+    char name[64]{};
+    if (!read(at, &locator, sizeof(locator)) || locator.signature != 1 || !typeName(base + locator.type, name))
+        return false;
+    const char* begin = name;
+    if (!std::strncmp(begin, ".?AV", 4) || !std::strncmp(begin, ".?AU", 4))
+        begin += 4;
+    out.assign(begin, std::strcspn(begin, "@"));
+    return !out.empty();
+}
+bool endsWith(const std::string& s, const char* tail) {
+    const size_t n = std::strlen(tail);
+    return s.size() >= n && !s.compare(s.size() - n, n, tail);
+}
+} // namespace
+
+bool game_targets::tellsCombat(const char* name) {
+    static const char* const words[] = {"BotState", "Block", "Shield", "Armor", "Stagger", "Weapon", "Baton",
+                                        "Guard",    "Melee", "Brute",  "Heavy", "Stun",    "Parry",  "Counter"};
+    for (const char* w : words)
+        if (std::strstr(name, w))
+            return true;
+    return false;
+}
+
+namespace {
+// A name in the game's type information that tells of a block or a reaction (not a bot state: those are kept
+// whole).
+bool tellsReaction(const std::string& name) {
+    static const char* const words[] = {"Block", "Guard", "Parry", "Deflect", "Shield", "Defend", "Defense",
+                                        "Brace", "Flinch", "Stagger", "Armor", "Cower", "Evade"};
+    for (const char* w : words)
+        if (name.find(w) != std::string::npos)
+            return true;
+    return false;
+}
+// The plain class names in a stretch of memory copied out: a type descriptor is a vtable pointer, a spare 0 and the
+// decorated name (".?AVName@@") at +0x10, so a name starts on 8 bytes with 8 bytes of 0 before it.
+void namesIn(const uint8_t* bytes, size_t from, size_t to, size_t have, uintptr_t address, std::set<std::string>& states,
+             std::set<std::string>& others) {
+    constexpr size_t most = 240;
+    for (size_t i = (std::max<size_t>)(from, 8); i < to;) {
+        const void* dot = std::memchr(bytes + i, '.', to - i);
+        if (!dot)
+            break;
+        i = static_cast<const uint8_t*>(dot) - bytes;
+        if (i + 5 < have && (address + i) % 8 == 0 && !std::memcmp(bytes + i, ".?AV", 4)) {
+            uint64_t spare{};
+            std::memcpy(&spare, bytes + i - 8, 8);
+            if (!spare) {
+                std::string name;
+                for (size_t k = i + 4; k < have && k < i + 4 + 60 && bytes[k] != '@' && bytes[k] != 0; ++k) {
+                    const char c = static_cast<char>(bytes[k]);
+                    if (!(c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+                        name.clear();
+                        break;
+                    }
+                    name += c;
+                }
+                if (name.size() >= 3 && !(name[0] >= '0' && name[0] <= '9')) {
+                    if (name.compare(0, 8, "BotState") == 0 && name.size() > 8) {
+                        if (states.size() < most)
+                            states.insert(name.substr(8));
+                    } else if (tellsReaction(name) && others.size() < most) {
+                        others.insert(name);
+                    }
+                }
+            }
+        }
+        ++i;
+    }
+}
+std::string joined(const std::set<std::string>& names) {
+    std::string out;
+    for (const auto& n : names)
+        out += (out.empty() ? "" : ",") + n;
+    return out;
+}
+} // namespace
+
+bool game_targets::imageClasses(uintptr_t base, std::string& states, std::string& others) {
+    states.clear();
+    others.clear();
+    const auto size = imageSize(base);
+    if (!base || !size || size > (1ull << 31))
+        return false;
+    std::set<std::string> stateSet, otherSet;
+    constexpr size_t chunk = 1 << 16, margin = 8, tail = 80;
+    std::vector<uint8_t> buffer(margin + chunk + tail);
+    // The data sections first (the type descriptors are not constant); every readable stretch if they gave little.
+    for (int pass = 0; pass < 2 && stateSet.size() + otherSet.size() < 20; ++pass) {
+        const uintptr_t end = base + size;
+        for (uintptr_t at = base; at < end;) {
+            MEMORY_BASIC_INFORMATION info{};
+            if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)) || !info.RegionSize)
+                break;
+            const uintptr_t from = reinterpret_cast<uintptr_t>(info.BaseAddress);
+            const uintptr_t to = (std::min<uintptr_t>)(end, from + info.RegionSize);
+            const bool readable = info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD));
+            const bool writable =
+                (info.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+            if (readable && (pass == 1 || writable)) {
+                for (uintptr_t p = (std::max)(at, from); p < to; p += chunk) {
+                    const uintptr_t start = p > from + margin ? p - margin : from;
+                    const size_t lead = p - start;
+                    const size_t want = (std::min<size_t>)(to - start, lead + chunk + tail);
+                    if (read(start, buffer.data(), want))
+                        namesIn(buffer.data(), lead, (std::min<size_t>)(want, lead + chunk), want, start, stateSet, otherSet);
+                }
+            }
+            if (to <= at)
+                break;
+            at = to;
+        }
+    }
+    states = joined(stateSet);
+    others = joined(otherSet);
+    return !stateSet.empty() || !otherSet.empty();
+}
+
+bool game_targets::describe(uintptr_t base, uint64_t record, bool all, Description& out) {
+    out = {};
+    const auto table = pointer(base + registryTable);
+    int32_t count{};
+    if (!record || !table || !read(base + registryCount, &count, 4) || count <= 0 || count > 0x100000)
+        return false;
+    const auto size = imageSize(base);
+    std::unordered_map<uintptr_t, std::string> names;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(count); ++i) {
+        struct Entry {
+            uintptr_t address;
+            uint32_t generation, pad;
+        } entry{};
+        if (!read(table + i * 16ull, &entry, sizeof(entry)) || entry.address < 0x10000 || entry.address % 8 ||
+            !entry.generation || entry.generation > 0xfff)
+            continue;
+        struct Head {
+            uintptr_t vtable, record;
+            uint32_t pad, handle;
+        } head{};
+        if (!read(entry.address, &head, sizeof(head)) || head.record != record ||
+            head.handle != (entry.generation << 20 | i) || head.vtable - base >= size)
+            continue;
+        auto known = names.find(head.vtable);
+        if (known == names.end()) {
+            std::string name;
+            ownName(base, head.vtable, name);
+            known = names.emplace(head.vtable, std::move(name)).first;
+        }
+        const std::string& name = known->second;
+        if (name.empty())
+            continue;
+        if (endsWith(name, "Health") && !out.hasHealth) {
+            float hp{};
+            if (read(entry.address + 0x88, &hp, 4) && std::isfinite(hp)) {
+                out.hitPoints = hp;
+                out.hasHealth = true;
+                out.health = entry.address;
+            }
+        }
+        if (all || tellsCombat(name.c_str())) {
+            out.classes.push_back(name);
+            out.addresses.push_back(entry.address);
+        }
+    }
     return true;
 }
 bool game_targets::inPlay(const Candidate& c) {
@@ -264,6 +540,25 @@ bool game_targets::held(uintptr_t base, const Candidate& c) {
 bool game_targets::isStunned(uintptr_t base, const Candidate& c) {
     return c.kind == Kind::bot && c.machine && inPlay(c) &&
            (classOf(base, pointer(pointer(c.machine + 0x70))) & trait(game_targets::stunned));
+}
+bool game_targets::inOpenState(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & trait(game_targets::guardOpen));
+}
+bool game_targets::inWebbedState(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & trait(game_targets::guardWebbed));
+}
+bool game_targets::stateName(uintptr_t base, const Candidate& c, std::string& out) {
+    out.clear();
+    if (c.kind != Kind::bot || !c.machine || !inPlay(c))
+        return false;
+    const auto vtable = pointer(pointer(c.machine + 0x70));
+    return vtable && ownName(base, vtable, out);
+}
+bool game_targets::inRunningState(uintptr_t base, const Candidate& c) {
+    std::string name;
+    return stateName(base, c, name) && guards::runningState(name);
 }
 bool game_targets::standing(const Candidate& c) {
     float points{};
@@ -329,6 +624,38 @@ bool game_targets::health(const Candidate& c, float& out) {
     if (!c.health || !read(c.health + 0x88, &points, sizeof(points)) || !std::isfinite(points))
         return false;
     out = points;
+    return true;
+}
+bool game_targets::maxHealth(const Candidate& c, float& out) {
+    float points{};
+    if (!c.health || !read(c.health + 0x80, &points, sizeof(points)) || !std::isfinite(points) || points <= 0 ||
+        points > 1e7f)
+        return false;
+    out = points;
+    return true;
+}
+void game_targets::setGuardRules(const guards::Rules& rules) {
+    std::lock_guard lock(classesLock);
+    guardRules = rules;
+    classes.clear();
+    types.clear();
+    combatNames.clear();
+    behaviorNames.clear();
+}
+bool game_targets::combatClasses(uint64_t record, std::string& out) {
+    std::lock_guard lock(combatLock);
+    const auto found = combatNow.find(record);
+    if (found == combatNow.end())
+        return false;
+    out = found->second;
+    return true;
+}
+bool game_targets::behaviors(uint64_t record, std::string& out) {
+    std::lock_guard lock(behaviorLock);
+    const auto found = behaviorNow.find(record);
+    if (found == behaviorNow.end())
+        return false;
+    out = found->second;
     return true;
 }
 void Watch::start(uintptr_t base, uint32_t kinds) {

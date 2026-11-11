@@ -256,6 +256,10 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.ropeSteering;
     case Item::combatVisuals:
         return &v.combatVisuals;
+    case Item::halfPunchDamage:
+        return &v.halfPunchDamage;
+    case Item::enemyTypes:
+        return &v.enemyTypes;
     case Item::aimMarkers:
         return &v.aimMarkers;
     case Item::airWebs:
@@ -353,9 +357,9 @@ Values sanitized(Values v) {
     v.automaticHandThreshold = std::clamp(v.automaticHandThreshold, 50, 300);
     return v;
 }
-const std::array<Row, 65>& rows() {
+const std::array<Row, 67>& rows() {
     // The help fits the game's description column beside the rows.
-    static const std::array<Row, 65> all{{
+    static const std::array<Row, 67> all{{
         {Item::none, "WEBS", nullptr, {}},
         {Item::webStyle, "WEB STYLE",
          "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.", webStyleChoices},
@@ -447,6 +451,17 @@ const std::array<Row, 65>& rows() {
          "COMBAT VISUALS",
          "Off: no combat effects; free uppercuts/smashes. Spider-Sense stays on.",
          {}},
+        {Item::halfPunchDamage,
+         "HALF PUNCH DAMAGE",
+         "Punches and web strikes deal 50% damage. Launches and smash force stay the same.",
+         {}},
+        // v31 (the user, November 9: "add all the things as launcher settings, title: enemy types"): the launcher's
+        // Enemy types, not in the game's tab. Where the tab would have it: next to the other combat rows.
+        {Item::enemyTypes,
+         "ENEMY TYPES",
+         "Enemy types that block in the base game block base attacks until they are webbed or stunned.",
+         {},
+         Place::launcher},
         {Item::nearClip, "NEAR CLIP",
          "How near your eyes things still show. Nearer keeps your hands in view.", nearClipChoices},
         {Item::recordingFov, "RECORDING FOV",
@@ -676,6 +691,8 @@ constexpr TabOnly tabOnly[] = {
     {"recording_fov", nullptr, &Values::recordingFov},
     {"ui_style", nullptr, &Values::uiStyle},
     {"combat_visuals", &Values::combatVisuals, nullptr},
+    {"half_punch_damage", &Values::halfPunchDamage, nullptr},
+    {"enemy_types", &Values::enemyTypes, nullptr},
     {"blow_sounds", nullptr, &Values::blowSounds},
     {"web_slingshot", &Values::webSlingshot, nullptr},
     {"better_climbing", &Values::betterClimbing, nullptr},

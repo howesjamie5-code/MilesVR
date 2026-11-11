@@ -14,7 +14,11 @@
 #include "spidy/eye_snapshot.hpp"
 #include "spidy/game_bridge_protocol.hpp"
 #include "spidy/game_dodge.hpp"
+#include "spidy/game_record.hpp"
+#include "spidy/game_fp.hpp"
 #include "spidy/game_grab.hpp"
+#include "spidy/game_guard.hpp"
+#include "spidy/guard_pose.hpp"
 #include "spidy/game_menu.hpp"
 #include "spidy/game_offers.hpp"
 #include "spidy/game_pad.hpp"
@@ -34,6 +38,7 @@
 #include "spidy/game_warp.hpp"
 #include "spidy/hand_pose.hpp"
 #include "spidy/impact_sound.hpp"
+#include "spidy/voice_pool.hpp"
 #include "spidy/native_eye_frame.hpp"
 #include "spidy/native_eye_gpu.hpp"
 #include "spidy/native_eye_history.hpp"
@@ -113,8 +118,11 @@ struct XrConfig {
     // bit 21: arcade webs (WEB STYLE: ARCADE; vr_settings::Values::arcadeWebs)
     // (MilesVR: bit 21 the venom hand, 22 arcade webs, 23 the venom fist on
     // the trigger - vr_settings::Values::venomTrigger)
-    // bit 25: Cutscenes: Immersive (a scene the game plays is shown around the
-    // viewer from its own camera, eye command 4; off, the game screen)
+    // bit 25: Cutscenes: Immersive (the theatre screen is off: a scene the game plays is shown around the
+    // viewer, from the scene's own camera or, with bit 26, from inside the character's head; off, the game screen)
+    // bit 26: first-person cutscenes (cutscenes and story moments play in 3D around the player, from
+    // inside the hero's head: game_fp.hpp, game_fp.cpp; the right stick's click switches to the other view);
+    // bit 27: with bit 26, the scene's own camera aims the view, not the player's head
     uint32_t options{};
     // OpenXR runtime manifest the launcher chose; empty: Virtual Desktop's if
     // installed, else Windows' active runtime.
@@ -657,6 +665,8 @@ BridgeCall startSwing{}, submitSwing{}, sampleSwing{}, stopSwing{}, retargetSwin
 // edge is drawn to that edge.
 BridgeCall sampleBends{}, sampleWebFlight{};
 BridgeCall sampleClimb{};
+BridgeCall recordNote{}; // v16: the hit recorder's notes (game_record)
+BridgeCall sampleGuard{}; // v18: the guards' blocked blows and refused web pulls (game_guard; optional)
 BridgeCall startPunch{}, samplePunch{}, stopPunch{}, swingSettings{}, sampleStrike{}, venomCall{}, sampleSlingshot{};
 // Spider-Sense (game_sense, in the same module as the punches): optional, an
 // older module draws no warnings.
@@ -1411,6 +1421,30 @@ DWORD WINAPI run(void*) {
         static constexpr uint64_t sceneAfterPlayerMs = 6000;
         Pose sceneStart{};
         uint32_t sceneCommands{};
+        // First-person cutscenes (options bit 22): the tracking-space pose the view of a scene is measured from
+        // (the headset where the scene began, turned to its heading), whether it is taken, and the last line of
+        // the worker that finds the scene's character the log has.
+        Pose sceneRef{};
+        bool sceneRefSet{}, wasFpScene{}, wasCameraView{}, wasPlaySeen{};
+        uint64_t fpLastWanted{};
+        // The right thumbstick's click in a first-person scene puts the theatre screen back, and again the first-person
+        // view (fpTheatre); with the theater screen disabled (options bit 24) it puts the scene's own camera there instead
+        // of the screen; it stays until clicked again, in play too. fpClickTaken: that click toggled the view, it is
+        // not slow motion.
+        bool fpTheatre{}, wasFpRightClick{}, fpClickTaken{}, wasFpX{};
+        // Head tracking off: the right stick turns the view (your snap or smooth turn setting), radians, and whether
+        // the stick is held past a flick.
+        float sceneTurn{};
+        // The heading the first-person scene's view last had, world yaw, and when: play that follows a scene faces
+        // there (GameTrackingRig::sceneFacing).
+        float fpFacing{};
+        uint64_t fpFacingMs{};
+        // When play (the gameplay camera) last began / the game's own camera last began, for the first-person view's
+        // quick entry and its hold across a blink of play inside one scene (a finisher's shots).
+        uint64_t fpPlayStart{}, fpIdleSince{}, fpWantStart{};
+        bool sceneFlick{};
+        uint32_t fpNoteSeen{};
+        game_record::Note recordSeen{};
         bool flatScreen{};
         Pose screenPose{};
         // MilesVR: the game screen's aspect as last shown, and the controllers as its mouse.
@@ -1473,6 +1507,10 @@ DWORD WINAPI run(void*) {
         // blow; the bursts still showing where the latest blows landed, each
         // since its display time; and the sounds, made once.
         uint64_t blowsBefore{}, strikesBefore{};
+        // MilesVR 0.1.80, v18 (game_guard): the blows a guard stopped and the web pulls it refused, as the
+        // previous frame had them.
+        // v21: and the counters enemies began and those that reached the hero.
+        uint32_t guardBlocksBefore{}, guardRefusalsBefore{}, guardBreaksBefore{}, guardCountersBefore{}, guardCounterHitsBefore{};
         HitStop hitStop;
         // The called blow's arrow over the thug it is on (web_strike.hpp's
         // Cues), since the display time it showed.
@@ -1496,6 +1534,14 @@ DWORD WINAPI run(void*) {
         };
         std::array<Burst, 6> bursts{};
         size_t nextBurst{};
+        // v29 (game_guard): the BLOCKED marks of the latest blows a guard stopped (web_visual.hpp's BlockView), each since
+        // its display time.
+        struct BlockMark {
+            BlockView view;
+            int64_t since{};
+        };
+        std::array<BlockMark, 4> blockMarks{};
+        size_t nextBlockMark{};
         // Spider-Sense's marks (spider_sense.hpp), one for each attacker the
         // game warned the player of: since the display time it showed, the
         // top of his head, what it asks for, its time left, when a counter
@@ -1516,9 +1562,32 @@ DWORD WINAPI run(void*) {
         uint32_t senseShown{}, senseFrames{}, senseSightFrames{}, senseTingles{};
         uint32_t senseBroken{}, senseDodges{};
         // (They outlive the session: one may still be playing as it ends.)
-        static const std::vector<uint8_t> sounds[6] = {
+        // v23: the four sounds of a blocked blow (a baton's, a brawler's, a slayer's and a shield's guard) are made at their
+        // own rate (blockWaveRate), the others as before.
+        // v26: and the four of a refused web pull, after them (indexed by ImpactSound, so in its order).
+        static_assert(static_cast<size_t>(ImpactSound::WebBlockShield) == 13, "sounds[] below is indexed by ImpactSound");
+        // (The sound played for a guard is BlockBaton or WebBlockBaton plus his guards::Sound: the four of each are in its
+        // order, baton, brawler, slayer, shield.)
+        static_assert(static_cast<unsigned>(ImpactSound::BlockShield) == static_cast<unsigned>(ImpactSound::BlockBaton) + 3 &&
+                          static_cast<unsigned>(ImpactSound::WebBlockBaton) == static_cast<unsigned>(ImpactSound::BlockBaton) + 4 &&
+                          static_cast<unsigned>(ImpactSound::WebBlockShield) == static_cast<unsigned>(ImpactSound::WebBlockBaton) + 3 &&
+                          static_cast<unsigned>(spidy::guards::Sound::Baton) == 0 && static_cast<unsigned>(spidy::guards::Sound::Brawler) == 1 &&
+                          static_cast<unsigned>(spidy::guards::Sound::Slayer) == 2 && static_cast<unsigned>(spidy::guards::Sound::Shield) == 3,
+                      "the guard sounds are in the order of guards::Sound");
+        static const std::vector<uint8_t> sounds[14] = {
             impactWave(ImpactSound::Light),    impactWave(ImpactSound::Firm), impactWave(ImpactSound::Heavy),
-            impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush), impactWave(ImpactSound::Mega)};
+            impactWave(ImpactSound::Finisher), impactWave(ImpactSound::Rush), impactWave(ImpactSound::Mega),
+            impactWave(ImpactSound::BlockBaton, blockWaveRate),    impactWave(ImpactSound::BlockBrawler, blockWaveRate),
+            impactWave(ImpactSound::BlockSlayer, blockWaveRate),   impactWave(ImpactSound::BlockShield, blockWaveRate),
+            impactWave(ImpactSound::WebBlockBaton, blockWaveRate), impactWave(ImpactSound::WebBlockBrawler, blockWaveRate),
+            impactWave(ImpactSound::WebBlockSlayer, blockWaveRate), impactWave(ImpactSound::WebBlockShield, blockWaveRate)};
+        // v23 (the user, November 8: "let these sounds overlap so if im spamming punch theres no silence after the
+        // first few"): PlaySound plays one sound at a time, the newest cutting the one before. The blocked-blow sounds
+        // go through a few voices of their own (voice_pool.hpp), which mix; PlaySound is the way if none opens.
+        // v24 (the user: "it only plays like 1 or 2 times before not playing again until i wait and attack him again"):
+        // nothing is opened here any more - the pool's own thread opens a voice when a sound needs one and says in the
+        // session log what the audio device did (game_fp::note).
+        voice_pool::open(blockWaveRate, 4);
         // One at a time, the newest cutting the one before short: a strike's
         // rush ends in its blow.
         // The Mega Venom Blast's sound is not cut short: nothing else plays until it ends (0.1.59, the
@@ -1531,6 +1600,9 @@ DWORD WINAPI run(void*) {
             if (sound == ImpactSound::Mega)
                 megaSoundUntil = now + static_cast<ULONGLONG>(impactSeconds(ImpactSound::Mega) * 1000);
             const auto& wave = sounds[static_cast<size_t>(sound)];
+            // (The whole WAV: the pool reads its format and plays it from this static memory.)
+            if (isBlockSound(sound) && voice_pool::play(wave.data(), wave.size()))
+                return;
             PlaySoundW(reinterpret_cast<LPCWSTR>(wave.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
         };
         // Web-shooter shots each hand had fired by the previous frame.
@@ -1753,6 +1825,8 @@ DWORD WINAPI run(void*) {
             s.ropeSteering = values.ropeSteering;
             s.webRange = static_cast<float>(values.webRange);
             s.webSpeed = static_cast<uint32_t>(values.webSpeed);
+            s.halfPunchDamage = values.halfPunchDamage;
+            s.enemyTypes = values.enemyTypes;
             sentSwingSettings = s;
             swingSettingsSent = true;
             // A hand-over owns the walls while it lasts; the player's own
@@ -1882,7 +1956,11 @@ DWORD WINAPI run(void*) {
             if (!player.hero)
                 follow({});
             scenePlayerAt = GetTickCount64();
-            scenePlaySeen = false;
+            // A new player is a new game (the title screen, a load): nothing of the story is on the screen until the
+            // game has been played in VR once (the title screen stays the flat theatre screen). A scene that goes on
+            // through the change keeps its view.
+            if (!wasFpScene)
+                scenePlaySeen = false;
             native_appearance::setPlayerRecord(player.record);
             native_body::retarget(player.record);
             if (websStarted)
@@ -1901,7 +1979,7 @@ DWORD WINAPI run(void*) {
             Presentation drawn{};
             // This frame shows the game's presented frame on the screen, or
             // (stereoScene) the scene's own two eye images once there are some.
-            bool showScreen{}, stereoScene{};
+            bool showScreen{}, stereoScene{}, fpScene{}, fpPlayBlip{}, fpPending{}, levelView{};
             if (!steamGuarded && GetTickCount64() >= steamRetryMs) {
                 const uint32_t code = game_steam::install(config.base);
                 steamGuarded = !code;
@@ -2768,6 +2846,15 @@ DWORD WINAPI run(void*) {
                     if (zipPriority || (flipZipPlay && zipPress.active())) {
                         controller.hands[1].stickX = controller.hands[1].stickY = 0;
                     }
+                    // Whether the game's time runs, for the rig to tell a scene's end from a menu's (after a scene
+                    // the view faces where the game's camera does).
+                    {
+                        const auto sceneTime = game_time::telemetry();
+                        rig.scene(sceneClock.running(sceneTime.installed && sceneTime.gameFrame > 0, GetTickCount64()));
+                        // The heading the first-person scene's view had at its last frame, for 4 s after it and only
+                        // while play has not come back (a menu later is no scene's end).
+                        rig.sceneFacing(fpFacingMs && GetTickCount64() - fpFacingMs < 4000 && !motion.active, fpFacing);
+                    }
                     motion = rig.update(seated::raised(controller, seatRaise), feet, {camera[8], camera[9], camera[10]}, gameplay,
                                         swingState.owned ? Vec3{0, 1, 0} : heroUp,
                                         game_swing::airborne(swingState, now.QuadPart, frequency.QuadPart), hold,
@@ -2818,9 +2905,124 @@ DWORD WINAPI run(void*) {
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
                     scenePlaySeen = scenePlaySeen || (vrPlay && player.hero);
-                    const bool aroundWanted = (config.options & 0x2000000) && screen && !flatScreen &&
-                                              player.hero && bridgeRunning && timeRuns && scenePlaySeen &&
-                                              GetTickCount64() - scenePlayerAt > sceneAfterPlayerMs;
+                    // FIRST-PERSON CUTSCENES: the scene is shown from inside the head of the character it plays,
+                    // round the viewer, instead of on the screen (game_fp.hpp). Wanted while a scene plays
+                    // (the same conditions, but the screen's 3D depth and its HUD panel); it is shown once the
+                    // character's head has been found, the screen's stereo scene until then.
+                    const bool sceneBase = screen && player.hero && bridgeRunning && timeRuns;
+                    // A cut from one scene to the next, a loading frame, a moment with no hero: the first-person view is
+                    // held up to 1.5 s (never into play, which is `vrPlay`), so the next scene replaces it in place.
+                    const uint64_t fpNow = GetTickCount64();
+                    const bool fpBase = (config.options & 0x4000000) && !flatScreen;
+                    // CUTSCENES: IMMERSIVE (options bit 25) is the theatre screen disabled entirely: every scene the game
+                    // plays is rendered around the viewer, from inside the character's head with first-person cutscenes
+                    // on, from the scene's own camera without them or where no head is found (game_fp::sceneCamera).
+                    // Menus, the pause screen and loading have no scene to put around you: they stay on the screen.
+                    const bool noTheater = (config.options & 0x2000000) && !flatScreen;
+                    // The title screen (and its menus) is never played: it stays on the theatre screen, as does
+                    // everything before the first moment of play after the game starts or a load. The opening
+                    // cutscene after NEW GAME follows a moment of play, so it is shown the chosen way.
+                    const bool sceneAny = (fpBase || noTheater) && scenePlaySeen;
+                    if (scenePlaySeen != wasPlaySeen) {
+                        message(3, 0, scenePlaySeen ? "Cutscenes: the game is past its title screen: scenes are shown the chosen way"
+                                                    : "Cutscenes: the title screen: it stays on the theatre screen");
+                        wasPlaySeen = scenePlaySeen;
+                    }
+                    // The first-person view needs none of the screen's 250 ms wait (screenDelayMs, there to keep a late
+                    // camera sample in play from flashing the screen): 60 ms of the game's own camera is enough, and
+                    // a blink of play (under 250 ms) inside a scene, as between a finisher's shots, keeps the view.
+                    if (vrPlay) {
+                        fpIdleSince = 0;
+                        if (!fpPlayStart)
+                            fpPlayStart = fpNow;
+                    } else {
+                        fpPlayStart = 0;
+                        if (!fpIdleSince)
+                            fpIdleSince = fpNow;
+                    }
+                    fpPlayBlip = vrPlay && wasFpScene && fpPlayStart && fpNow - fpPlayStart < 250;
+                    const bool fpOwn = !vrPlay && fpIdleSince && fpNow - fpIdleSince >= (wasFpScene ? 0u : 60u);
+                    const bool fpSceneBase =
+                        viewing && player.hero && bridgeRunning && timeRuns && (fpOwn || fpPlayBlip);
+                    // The right thumbstick's click (not with the left: both held are the game's pause) switches between the
+                    // first-person view and the theatre screen, for a scene that glitches in first person.
+                    const bool fpClick = frame.hands[1].stickClick && !frame.hands[0].stickClick;
+                    if (fpClick && !wasFpRightClick && fpBase && (sceneBase || fpSceneBase || fpTheatre)) {
+                        fpTheatre = !fpTheatre;
+                        fpClickTaken = true;
+                        message(3, 0, fpTheatre ? (noTheater ? "First-person cutscene: the scene's own camera (right stick)"
+                                                             : "First-person cutscene: theatre screen (right stick)")
+                                                : "First-person cutscene: first-person view (right stick)");
+                    }
+                    wasFpRightClick = fpClick;
+                    // (No character swap in MilesVR: the player is always Miles, and X stays the gadget wheel.)
+                    if (!frame.hands[1].stickClick)
+                        fpClickTaken = false;
+                    // Both sticks held is the game's pause: its menu is drawn only into the game's own frame, so the
+                    // theatre screen is wanted at once, and no cut-hold keeps the first-person view over it.
+                    const bool fpPausing = frame.hands[0].stickClick && frame.hands[1].stickClick;
+                    // The click's alternative view: the theatre screen, or with the theater screen disabled the scene's own
+                    // camera (cameraChosen: also what a session without first-person cutscenes always has).
+                    const bool theaterChosen = fpTheatre && !noTheater;
+                    const bool cameraChosen = noTheater && (!fpBase || fpTheatre);
+                    bool fpWanted = sceneAny && (sceneBase || fpSceneBase) && !theaterChosen && !fpPausing;
+                    if (fpWanted)
+                        fpLastWanted = fpNow;
+                    else if (sceneAny && !theaterChosen && !fpPausing && !vrPlay && wasFpScene &&
+                             fpNow - fpLastWanted < 1500)
+                        fpWanted = true;
+                    game_fp::sceneCamera(noTheater ? (cameraChosen ? 2 : 1) : 0);
+                    if (!fpWanted)
+                        fpWantStart = 0;
+                    else if (!fpWantStart)
+                        fpWantStart = fpNow;
+                    game_fp::want(fpWanted);
+                    fpScene = fpWanted && game_fp::available();
+                    // Wanted, the character's head not found yet: the last image stays up (the eye images' own hold)
+                    // for up to 0.7 s, not the theatre screen; a scene with no head to be found gets the theatre then.
+                    fpPending = fpWanted && !fpScene && fpNow - fpWantStart < 700;
+                    // One worker line every 120 ms, not one a frame: message() is a single slot that the session log
+                    // samples every 50 to 100 ms, so lines sent faster than that overwrite each other and only the last
+                    // of a burst reaches the log (the start of every listing was lost this way).
+                    if (static ULONGLONG lastNoteAt{}; GetTickCount64() - lastNoteAt >= 120) {
+                        char line[200];
+                        if (game_fp::note(fpNoteSeen, line, sizeof(line))) {
+                            message(3, 0, line);
+                            lastNoteAt = GetTickCount64();
+                        } else if (recordNote && recordNote(&recordSeen) == 0) {
+                            // v16: a line of the hit recorder's (the game's own hits).
+                            message(3, 0, recordSeen.text);
+                            lastNoteAt = GetTickCount64();
+                        }
+                    }
+                    if (const bool onCamera = fpScene && game_fp::onCamera(); onCamera != wasCameraView) {
+                        message(3, 0, onCamera ? "First-person cutscene: the scene's own camera is the view"
+                                               : "First-person cutscene: a head is the view");
+                        wasCameraView = onCamera;
+                    }
+                    if (fpScene != wasFpScene) {
+                        char text[96];
+                        std::snprintf(text, sizeof(text), "First-person cutscene: %s (at %llu ms)",
+                                      fpScene ? "started" : "ended",
+                                      static_cast<unsigned long long>(fpNow % 100000000ull));
+                        message(3, 0, text);
+                        wasFpScene = fpScene;
+                    }
+                    if (!fpScene || frame.recentered)
+                        sceneRefSet = false;
+                    // Head tracking off, or the scene's own camera the view by choice: a level frame at the character's (or
+                    // the camera's) place, and the right stick turns the view.
+                    levelView = (config.options & 0x8000000) != 0 || (noTheater && cameraChosen);
+                    if (!fpScene || !levelView) {
+                        sceneTurn = 0;
+                        sceneFlick = false;
+                    }
+                    // (While a first-person view is pending, no stereo-screen scene is asked for either: its images
+                    // would show the theatre screen the moment they arrive.)
+
+                    // (The old Cutscenes: Immersive, the scene around the viewer at the game's camera as eye command 4, is
+                    // replaced by the scene camera of game_fp above: sceneAround stays off.)
+                    const bool aroundWanted = false;
                     {
                         const float dt = std::isfinite(frame.seconds) ? std::clamp(frame.seconds, 0.f, .1f) : 0.f;
                         sceneSteady = aroundWanted ? sceneSteady + dt : 0.f;
@@ -2831,10 +3033,14 @@ DWORD WINAPI run(void*) {
                     if (aroundNow && !sceneAround)
                         sceneStart = native_eyes::levelHead(frame.head);
                     sceneAround = aroundNow;
+                    // (While a first-person view is pending, no stereo-screen scene is asked for either: its images
+                    // would show the theatre screen the moment they arrive.)
                     const bool scene =
-                        sceneAround ||
-                        scenePanel.wanted(screen && values.screenDepth > 0 && player.hero && bridgeRunning && timeRuns,
-                                          native_hud::onScreen(sceneHoldMs), GetTickCount64());
+                        fpScene || sceneAround ||
+                        (!fpPending &&
+                         scenePanel.wanted(screen && scenePlaySeen && values.screenDepth > 0 && player.hero &&
+                                               bridgeRunning && timeRuns,
+                                           native_hud::onScreen(sceneHoldMs), GetTickCount64()));
                     // On the screen the controllers are the game's Xbox
                     // controller; in VR it gets Start (menu), Back (X) and
                     // the native walking, jumping, dodge and interact
@@ -3348,7 +3554,8 @@ DWORD WINAPI run(void*) {
                     // A click the game names (its L3, its R3) is not slow motion.
                     const uint32_t clicksNamed = namedPress.claimed();
                     const bool slowLeft = stickClick(0) && !(clicksNamed & game_pad::NamedPress::leftClick);
-                    const bool slowRight = stickClick(1) && !(clicksNamed & game_pad::NamedPress::rightClick);
+                    const bool slowRight = stickClick(1) && !fpClickTaken &&
+                                           !(clicksNamed & game_pad::NamedPress::rightClick);
                     stepSlowMotion(frame.seconds, slowPress.update(frame.seconds, slowAllowed, slowLeft, slowRight),
                                    slowAllowed);
                     if (motion.active && !raysStarted) {
@@ -3774,6 +3981,145 @@ DWORD WINAPI run(void*) {
                             blowsBefore = strikes.blows;
                             strikesBefore = strikes.opened;
                             knockoutsBefore = strikes.knockouts;
+                        }
+                        // MilesVR 0.1.80, v18 (game_guard): a blow a guard stopped. The hand that threw it gets a
+                        // short hard bump (it met something that did not give) and the block sound plays - the user's
+                        // own, played the way the other blow sounds are (BLOW SOUNDS: OFF silences it); a web pull
+                        // refused on a guarding enemy ticks in both hands.
+                        // v21: and the enemy is seen to guard: his arms come up for a blocked punch or a refused web
+                        // pull (the pose job puts them up, native_body.cpp), swing for his counter, and come down when
+                        // his guard opens. The counter itself staggers the hero in the game (game_punch); here it is
+                        // felt - a hit on the body, a thump, and the view thrown back three times as far as a block's.
+                        game_guard::Report guardNow{};
+                        const game_guard::Report expectedGuard;
+                        const bool guarding = punchStarted && sampleGuard && !sampleGuard(&guardNow) &&
+                                              guardNow.magic == expectedGuard.magic &&
+                                              guardNow.version == expectedGuard.version &&
+                                              guardNow.bytes == expectedGuard.bytes && guardNow.status == 1;
+                        if (guarding) {
+                            // The module started over counts from nothing.
+                            guardBlocksBefore = std::min(guardBlocksBefore, guardNow.blocks);
+                            guardRefusalsBefore = std::min(guardRefusalsBefore, guardNow.refusals);
+                            guardBreaksBefore = std::min(guardBreaksBefore, guardNow.breaks);
+                            guardCountersBefore = std::min(guardCountersBefore, guardNow.counters);
+                            guardCounterHitsBefore = std::min(guardCounterHitsBefore, guardNow.counterHits);
+                            const bool posing = guardNow.pose != 0;
+                            if (guardNow.blocks > guardBlocksBefore && input.focused) {
+                                const unsigned hand = guardNow.lastHand & 1;
+                                const float strength = std::isfinite(guardNow.lastStrength)
+                                                           ? std::clamp(guardNow.lastStrength, 0.f, 1.f)
+                                                           : 0.f;
+                                runtime.haptic(hand, .75f + .25f * strength, .05f);
+                                runtime.haptic(1 - hand, .15f, .03f);
+                                feel(body_haptics::Kind::punch, static_cast<int>(hand), .5f + .3f * strength);
+                                pulseUntil[hand] = frame.predictedDisplayTime + 70'000'000;
+                                // v29 (the user: "we also need UI for when you attacking a blocking enemy"): the BLOCKED mark
+                                // where the fist met him, with how many blocked blows in a row he has taken and how many make
+                                // him swing back (drawn with the other combat marks, below: COMBAT VISUALS hides it).
+                                if (finite(guardNow.lastPoint)) {
+                                    auto& mark = blockMarks[nextBlockMark++ % blockMarks.size()];
+                                    mark.view = {guardNow.lastPoint, strength, static_cast<int>(guardNow.lastStreak),
+                                                 static_cast<int>(guardNow.counterBlows)};
+                                    mark.since = frame.predictedDisplayTime;
+                                }
+                                // v29 (the user: "if the blocked ui comes up then the combo symbol should disappear"): the
+                                // combo is over (game_punch's endCombo: the count starts over and the call - the arrow of
+                                // the blow it asked for - is gone, so the cue over him loses its arrow with the next sample),
+                                // and what the marks of the blows just before still show of it comes down with it: the
+                                // count in the flow, and the sign of a called blow.
+                                for (auto& burst : bursts) {
+                                    burst.view.count = std::min(burst.view.count, 1);
+                                    burst.view.called = false;
+                                }
+                                if (values.blowSounds != 2) {
+                                    // v23: the sound of his guard - a baton's, a brawler's, a slayer's or a shield's.
+                                    play(static_cast<ImpactSound>(static_cast<unsigned>(ImpactSound::BlockBaton) +
+                                                                  std::min(guardNow.lastSound & 0xffu, 3u)));
+                                    ++ownSounds;
+                                }
+                                // v20: and the view is knocked back a little, away from him, and comes home (the rig's
+                                // recoil; guard.txt `recoil`, 3 cm). A placement: Miles himself does not move. A weak
+                                // blow gives 60% of it, a full one all of it.
+                                if (std::isfinite(guardNow.recoil) && guardNow.recoil > 0 && motion.active &&
+                                    validTrackedPose(motion.headPose)) {
+                                    Vec3 away = finite(guardNow.lastPoint) ? motion.headPose.position - guardNow.lastPoint
+                                                                           : Vec3{};
+                                    away.y = 0;
+                                    // Right on top of him: back along the way the head faces.
+                                    if (length(away) < .05f)
+                                        away = motion.headPose.orientation.rotate({0, 0, 1});
+                                    rig.recoil(away, guardNow.recoil * (.6f + .4f * strength));
+                                }
+                                // v21: his arms come up, and the blow jolts him. (v23: not when he is in the middle of an
+                                // attack: he blocks it and follows his own attack through, and arms raised over the swing
+                                // would only tear it.)
+                                if (posing && !(guardNow.lastSound & game_guard::lastAttacking))
+                                    native_body::guardPose(guardNow.lastTarget, spidy::guard_pose::moveBlock, strength);
+                            }
+                            if (guardNow.refusals > guardRefusalsBefore && input.focused) {
+                                runtime.haptic(0, .3f, .04f);
+                                runtime.haptic(1, .3f, .04f);
+                                // v26 (the user, November 8: "when a player wants to try and yank the enemy, the web
+                                // lands, the enemy is blocking, and they cant pull, this plays when the web lands"): the
+                                // sound of his guard, one of the user's four web-block sounds, played the way a blocked
+                                // blow's is (BLOW SOUNDS: OFF silences it). It comes with the refusal, and only the long
+                                // web is refused: a web ball webs him and opens his guard (game_shooter), no refusal.
+                                if (values.blowSounds != 2) {
+                                    play(static_cast<ImpactSound>(static_cast<unsigned>(ImpactSound::WebBlockBaton) +
+                                                                  std::min(guardNow.refusedSound & 0xffu, 3u)));
+                                    ++ownSounds;
+                                }
+                                // v21: a web pull he refused: his arms come up too.
+                                if (posing)
+                                    native_body::guardPose(guardNow.refusedTarget, spidy::guard_pose::moveRefuse, 1.f);
+                            }
+                            // v21: blocked punches in a row made an enemy swing back: his arm swings (the stagger on the
+                            // hero comes when it arrives, below).
+                            if (guardNow.counters > guardCountersBefore && input.focused && posing)
+                                native_body::guardPose(guardNow.counterTarget, spidy::guard_pose::moveCounter, 1.f);
+                            // v21: the swing reached the hero (game_punch asked the game for the stagger): felt on the
+                            // body, a thump in both hands, and the view thrown back well beyond a block's.
+                            if (guardNow.counterHits > guardCounterHitsBefore && input.focused) {
+                                runtime.haptic(0, 1.f, .12f);
+                                runtime.haptic(1, 1.f, .12f);
+                                const Vec3 to = finite(guardNow.lastPoint) && motion.active
+                                                    ? guardNow.lastPoint - (motion.headPose.position - Vec3{0, .4f, 0})
+                                                    : Vec3{};
+                                if (length(to) > .1f)
+                                    feelFrom(body_haptics::Kind::hit, -1, .6f, to);
+                                else
+                                    feel(body_haptics::Kind::hit, -1, .6f);
+                                if (values.blowSounds != 2) {
+                                    play(ImpactSound::Firm);
+                                    ++ownSounds;
+                                }
+                                if (std::isfinite(guardNow.recoil) && guardNow.recoil > 0 && motion.active &&
+                                    validTrackedPose(motion.headPose)) {
+                                    Vec3 away = finite(guardNow.lastPoint) ? motion.headPose.position - guardNow.lastPoint
+                                                                           : Vec3{};
+                                    away.y = 0;
+                                    if (length(away) < .05f)
+                                        away = motion.headPose.orientation.rotate({0, 0, 1});
+                                    rig.recoil(away, guardNow.recoil * 3.f);
+                                }
+                            }
+                            // A guard opened or broken: his arms come down (a venom punch, a gadget, a thrown prop, a
+                            // dodge over him). One opened by a gadget, a thrown prop or a dodge over him (the blow that
+                            // breaks one by venom has its own feel): a firm double tick says "now".
+                            if (guardNow.breaks > guardBreaksBefore && input.focused) {
+                                if (posing)
+                                    native_body::guardPose(guardNow.openedTarget, spidy::guard_pose::moveDrop, 0.f);
+                                if (guardNow.lastCause == static_cast<uint32_t>(spidy::guards::Cause::Stagger) ||
+                                    guardNow.lastCause == static_cast<uint32_t>(spidy::guards::Cause::Dodge)) {
+                                    runtime.haptic(0, .5f, .06f);
+                                    runtime.haptic(1, .5f, .06f);
+                                }
+                            }
+                            guardBlocksBefore = guardNow.blocks;
+                            guardRefusalsBefore = guardNow.refusals;
+                            guardBreaksBefore = guardNow.breaks;
+                            guardCountersBefore = guardNow.counters;
+                            guardCounterHitsBefore = guardNow.counterHits;
                         }
                         // The mark over the thug the next punch would go to, with
                         // the arrow of the blow the flow calls. A new call ticks
@@ -5257,8 +5603,8 @@ DWORD WINAPI run(void*) {
                     }
                     // Copies of the game's presented frame, for the screen.
                     if (gpuStarted)
-                        native_gpu::wantScreen(viewing && !vrPlay);
-                    showScreen = screen;
+                        native_gpu::wantScreen(viewing && !vrPlay && !fpScene);
+                    showScreen = screen && !fpScene && !fpPending;
                     if (!viewing)
                         return false;
                     if (!gpuStarted) {
@@ -5345,6 +5691,81 @@ DWORD WINAPI run(void*) {
                         // Initialization can exceed one predicted display
                         // interval. A scene's screen keeps the game's frame.
                         return !vrPlay;
+                    }
+                    if ((!vrPlay || fpPlayBlip) && fpScene) {
+                        // A first-person scene: the headset's own two eyes, inside the head of the character the
+                        // scene plays. The eyes are sent relative to that head (anchored 2); the native views
+                        // put them on the head of the frame they render (stereo_probe.cpp, resolveScene).
+                        if (!sceneRefSet) {
+                            // The view starts where the character looks, from where the headset is.
+                            sceneRef = {frame.head.position, screenAhead(frame.head, 0).orientation};
+                            sceneRefSet = validTrackedPose(frame.head);
+                        }
+                        const bool follow = !levelView; // CUTSCENE HEAD TRACKING (off, or the scene's own camera: level)
+                        const Pose toRef = inverse(sceneRef);
+                        const Mat4 axes = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                        native_eyes::Command eyes;
+                        eyes.enabled = 1;
+                        eyes.serial = ++serial;
+                        eyes.leaseMs = 250;
+                        // Head tracking on: the view turns with the character's head as well as with yours. Off: only
+                        // his place follows him, on a level frame (anchored 4); you look about freely from there.
+                        eyes.anchored = follow ? 2 : 4;
+                        if (!follow) {
+                            // The right stick turns the view, as it turns you in play: smooth while held, or a snap
+                            // a flick (the launcher's turn settings).
+                            const float x = frame.hands[1].stickX;
+                            const float degrees = 3.14159265f / 180;
+                            if (values.smoothTurn > 0) {
+                                if (std::abs(x) > .15f)
+                                    sceneTurn -= x * static_cast<float>(values.smoothTurn) * degrees * frame.seconds;
+                            } else if (values.snapTurn > 0) {
+                                if (!sceneFlick && std::abs(x) > .7f) {
+                                    sceneFlick = true;
+                                    sceneTurn -= (x > 0 ? 1.f : -1.f) * static_cast<float>(values.snapTurn) * degrees;
+                                } else if (sceneFlick && std::abs(x) < .4f)
+                                    sceneFlick = false;
+                            }
+                        }
+                        const Pose turned{{}, Quat::yaw(sceneTurn)};
+                        {
+                            // The heading the view has now: the character's head (or the level frame, head tracking
+                            // off) turned by how far your head has turned from where it was when the scene began.
+                            float base{};
+                            const Vec3 headLook = frame.head.orientation.rotate({0, 0, -1});
+                            const Vec3 refLook = sceneRef.orientation.rotate({0, 0, -1});
+                            if (game_fp::sceneYaw(!follow, base) && std::hypot(headLook.x, headLook.z) > .3f &&
+                                std::hypot(refLook.x, refLook.z) > .3f) {
+                                const float turnedBy = std::remainder(
+                                    std::atan2(-headLook.x, -headLook.z) - std::atan2(-refLook.x, -refLook.z),
+                                    6.2831853f);
+                                fpFacing = base + turnedBy + (follow ? 0.f : sceneTurn);
+                                fpFacingMs = GetTickCount64();
+                            }
+                        }
+                        for (unsigned i = 0; i < 2; ++i) {
+                            Pose eye = compose(turned, compose(toRef, frame.eyes[i].pose));
+                            eyes.eyes[i].world = native_view::relativePose(axes, eye);
+                            const auto& f = frame.eyes[i].fov;
+                            eyes.eyes[i].fov[0] = f.left;
+                            eyes.eyes[i].fov[1] = f.right;
+                            eyes.eyes[i].fov[2] = f.down;
+                            eyes.eyes[i].fov[3] = f.up;
+                        }
+                        // The HUD panel (the scene's subtitles) goes in front of the head, as in play.
+                        const Quat hudFacing = hudFollow.update(frame.head.orientation, frame.seconds);
+                        native_hud::follow(eyes.serial, frame.head.orientation.conjugate() * hudFacing);
+                        NativeEyeFrame saved;
+                        saved.serial = eyes.serial;
+                        saved.motion.predictedDisplayTime = frame.predictedDisplayTime;
+                        saved.trackingEyes = frame.eyes;
+                        saved.scene = true;
+                        saved.screenAspect = SpidyFlatAspect();
+                        history.remember(saved);
+                        const auto code = SpidySetEyes(&eyes);
+                        if (code && code != 4003)
+                            check(code, "First-person scene eye command");
+                        return !code;
                     }
                     if (!vrPlay && sceneAround) {
                         // The scene around the viewer: each tracked eye, as it has
@@ -5590,7 +6011,6 @@ DWORD WINAPI run(void*) {
                     saved.motion = motion;
                     saved.trackingEyes = frame.eyes;
                     saved.flatScreen = flatScreen;
-                    saved.uiStyle = values.uiStyle == 1 ? UiStyle::tech : UiStyle::comic;
                     saved.combatVisuals = values.combatVisuals;
                     saved.screenPose = screenPose;
                     saved.screenAspect = SpidyFlatAspect();
@@ -5881,6 +6301,9 @@ DWORD WINAPI run(void*) {
                                                     : Presentation::immersive;
                         runtime.presentation(saved->flatScreen, saved->screenPose, saved->screenAspect,
                                              vr_settings::screenWidth(values.screenSize), saved->stereoScreen);
+                        runtime.headLocked(saved->headLocked);
+                        // A first-person scene gets none of Spidy's own marks, webs or hands over it.
+                        const bool bare = saved->flatScreen || saved->scene;
                         const auto& rendered = saved->motion;
                         for (unsigned eye = 0; eye < 2; ++eye) {
                             const auto& pose = saved->trackingEyes[eye].pose;
@@ -5914,7 +6337,7 @@ DWORD WINAPI run(void*) {
                         Vec3 shooters[2]{}, ropeStarts[2]{};
                         uint32_t shooterHands{}, ropeHands{};
                         float webGap = -1;
-                        for (unsigned hand = 0; !saved->flatScreen && hand < 2; ++hand) {
+                        for (unsigned hand = 0; !bare && hand < 2; ++hand) {
                             const auto& web = saved->webs[hand];
                             const auto& timing = saved->webTimes[hand];
                             // The game's rope is part of the scene image already: the
@@ -6002,7 +6425,7 @@ DWORD WINAPI run(void*) {
                         for (unsigned hand = 0; hand < 2; ++hand) {
                             auto& steady = aimMotion[hand];
                             const auto& input = rendered.swing.hands[hand];
-                            if (saved->flatScreen) {
+                            if (bare) {
                                 steady.reset();
                                 continue;
                             }
@@ -6075,7 +6498,7 @@ DWORD WINAPI run(void*) {
                                             saved->uiStyle);
                         // Slow motion's focus meter over the back of the left wrist, moved
                         // with the player to this image as the glove is.
-                        if (!saved->flatScreen && saved->slow.meter > 0 && rendered.swing.hands[0].tracked) {
+                        if (!bare && saved->slow.meter > 0 && rendered.swing.hands[0].tracked) {
                             auto wrist = rendered.hands[0];
                             wrist.position += travel;
                             const double clock = std::fmod(static_cast<double>(shown) * 1e-9, 3600.);
@@ -6084,13 +6507,13 @@ DWORD WINAPI run(void*) {
                         }
                         // Miles's venom round the right fist, moved with the player
                         // to this image as the glove is; and where venom punches landed.
-                        if (!saved->flatScreen && saved->venomGlow > 0 && rendered.swing.hands[venomSide].tracked) {
+                        if (!bare && saved->venomGlow > 0 && rendered.swing.hands[venomSide].tracked) {
                             auto fist = rendered.hands[venomSide];
                             fist.position += travel;
                             appendVenomFist(translucent, saved->venomGlow, fist, viewer, pixelAngle,
                                             static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 3600.)));
                         }
-                        if (!saved->flatScreen)
+                        if (!bare)
                             for (const auto& burst : venomBursts) {
                                 if (!burst.since)
                                     continue;
@@ -6100,13 +6523,13 @@ DWORD WINAPI run(void*) {
                             }
                         // The pad layer's sign over the back of the right wrist while
                         // it is on: until October 25 only a buzz said so.
-                        if (!saved->flatScreen && saved->padLayer && rendered.swing.hands[1].tracked) {
+                        if (!bare && saved->padLayer && rendered.swing.hands[1].tracked) {
                             auto wrist = rendered.hands[1];
                             wrist.position += travel;
                             appendPadLayerSign(translucent, wrist, viewer, pixelAngle, saved->uiStyle);
                         }
                         // Hide combat artwork only; targeting, damage, counters and haptics still update.
-                        const bool combatVisuals = values.combatVisuals && saved->combatVisuals && !saved->flatScreen;
+                        const bool combatVisuals = values.combatVisuals && saved->combatVisuals && !bare;
                         // The bursts where the latest blows landed: fixed in the world.
                         if (combatVisuals)
                             for (const auto& burst : bursts) {
@@ -6116,9 +6539,19 @@ DWORD WINAPI run(void*) {
                                 view.age = static_cast<float>(static_cast<double>(shown - burst.since) * 1e-9);
                                 appendImpact(translucent, view, viewer, pixelAngle, saved->uiStyle);
                             }
+                        // v29: the BLOCKED marks, where the latest blows a guard stopped met him: fixed in the world, as the
+                        // bursts are, and printed or drawn in the chosen UI STYLE.
+                        if (combatVisuals)
+                            for (const auto& mark : blockMarks) {
+                                if (!mark.since)
+                                    continue;
+                                auto view = mark.view;
+                                view.age = static_cast<float>(static_cast<double>(shown - mark.since) * 1e-9);
+                                appendBlock(translucent, view, viewer, pixelAngle, saved->uiStyle);
+                            }
                         // The enemy the charged venom fist will hit: the marked one, the
                         // venom's orange icon over his head while the fist glows.
-                        if (!saved->flatScreen && cue.left > 0 && saved->venomGlow > 0)
+                        if (!bare && cue.left > 0 && saved->venomGlow > 0)
                             appendVenomTarget(translucent,
                                               {cue.point, saved->venomGlow,
                                                static_cast<float>(std::fmod(static_cast<double>(shown) * 1e-9, 1000.))},
@@ -6142,7 +6575,7 @@ DWORD WINAPI run(void*) {
                         // Spider-Sense's marks: over each attacker's head, and for one out of
                         // view in the sightline as well, moved with the player as the eyes are.
                         // Attack warnings remain visible independently of optional combat artwork.
-                        if (!saved->flatScreen && validTrackedPose(rendered.headPose)) {
+                        if (!bare && validTrackedPose(rendered.headPose)) {
                             Pose eyes = rendered.headPose;
                             eyes.position += travel;
                             bool marked{}, sighted{};
@@ -6174,7 +6607,7 @@ DWORD WINAPI run(void*) {
                         // The T-pose calibration's panel and controller rings, moved with
                         // the player to this image as the hands are. The tech style's
                         // panel is translucent, as the game's menus are.
-                        if (!saved->flatScreen && saved->calibration.phase != body_calibration::Phase::idle) {
+                        if (!bare && saved->calibration.phase != body_calibration::Phase::idle) {
                             auto view = saved->calibration;
                             view.panel.position += travel;
                             for (auto& grip : view.grips)
@@ -6183,7 +6616,7 @@ DWORD WINAPI run(void*) {
                             body_calibration::appendView(panel, view, viewer, saved->uiStyle);
                         }
                         // The wrist menu over the left wrist, drawn from this image's hand.
-                        if (!saved->flatScreen && !wristHudFault && wristToggle.opacity() > 0 &&
+                        if (!bare && !wristHudFault && wristToggle.opacity() > 0 &&
                             validTrackedPose(rendered.grips[wristHand])) {
                             const size_t from = translucent.size();
                             try {
@@ -6282,7 +6715,7 @@ DWORD WINAPI run(void*) {
                         // The gadget wheel in front of its hand, moved with the
                         // player to this image as the hands are: printed, so
                         // laid down in order over all the rest.
-                        if (!saved->flatScreen && saved->gadgetWheel.open) {
+                        if (!bare && saved->gadgetWheel.open) {
                             auto view = saved->gadgetWheel;
                             view.frame.centre += travel;
                             appendGadgetWheel(translucent, view, viewer, pixelAngle, saved->uiStyle);
@@ -6304,7 +6737,7 @@ DWORD WINAPI run(void*) {
                         // The phone where it is now - in the hand, where the hand is
                         // now - through this image's own way into its world, and
                         // moved with the player to this image as the wheel is.
-                        if (!saved->flatScreen && saved->phone.open && phoneAppDraw.on && phoneAppDraw.inPlay) {
+                        if (!bare && saved->phone.open && phoneAppDraw.on && phoneAppDraw.inPlay) {
                             // The game's app on the phone: its body here, the app's part of the HUD's
                             // texture on its glass and the fingertip and where it lands after the
                             // rest (phoneMarks), into this image's world.
@@ -6345,7 +6778,7 @@ DWORD WINAPI run(void*) {
                                                  vp};
                         }
                         drawSafely([&] {
-                            if (!saved->flatScreen)
+                            if (!bare)
                                 overlay.renderViews(overlayViews, vertices, true, false, translucent, &grade);
                             if (native_gpu::Screen app; finite(phoneGlass.centre) &&
                                                         native_gpu::latestHud(app, imageHoldMs)) {
@@ -6507,6 +6940,7 @@ DWORD WINAPI run(void*) {
     // the main menu after VR from closing the game.
     game_time::uninstall();
     PlaySoundW(nullptr, nullptr, 0);
+    voice_pool::close();
     bridge::Control release;
     release.serial = ++serial;
     release.leaseMs = 0;
@@ -6574,7 +7008,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
         config.runtime[std::size(config.runtime) - 1] ||
         config.base != reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr)) ||
         !GetModuleHandleW(L"MilesMorales.exe") || !config.queue || !config.bridgeModule || !config.rayModule ||
-        !config.motionModule || config.options > 0x3ffffff /* bits 0-25 (0.1.80: 24 no eye FXAA, 25 Immersive cutscenes); 0.1.39 shipped 0x7fffff and refused bit 23 */ || config.snapTurn > 90 || config.haptics > 100 ||
+        !config.motionModule || config.options > 0xfffffff /* bits 0-27 (0.1.80: 24 no eye FXAA, 25 Immersive cutscenes; 26 first-person cutscenes, 27 their level view); 0.1.39 shipped 0x7fffff and refused bit 23 */ || config.snapTurn > 90 || config.haptics > 100 ||
         !validEyeUpscale(config.upscale) || !validMonitorRate(config.monitorRate) ||
         config.screenSize > 2 || config.screenDepth > 3 || config.bodyHaptics > 100 || config.smoothTurn > 360 ||
         config.hud > 3 || config.flipSpeed < 90 ||
@@ -6611,6 +7045,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
     // Optional: an older ray module has no web grab, nor punching, nor aim previews.
     sampleGrab = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyGrabSample"));
     sampleAim = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyAimSample"));
+    recordNote = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyRecordNote"));
+    // Optional: an older ray module has no guards.
+    sampleGuard = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyGuardSample"));
     startPunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchStart"));
     samplePunch = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyPunchSample"));
     // Optional too: without them the VR settings' grab, speed and punch

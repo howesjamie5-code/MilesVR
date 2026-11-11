@@ -503,6 +503,13 @@ struct SessionOptions {
     int screenDepth = 2; // the depth cutscenes have on that screen: 0 off (flat), 1 low, 2 medium, 3 high
     // Cutscenes: 0 Screen (the game screen above, flat or 3D); 1 Immersive, around you at the game's camera.
     int cutscenes = 0;
+    // First person cutscenes (experimental, game_fp.hpp): while a scene plays, the headset is inside the
+    // character's head and the scene is 3D around you. The right stick's click switches to the camera chosen
+    // above. Off (the default), a scene is shown as chosen above.
+    bool firstPersonCutscenes = false;
+    // With first-person cutscenes: your head turns the view in a scene. Off, the scene's own camera aims the
+    // view (your position still follows the headset).
+    bool cutsceneHeadTracking = true;
     int smoothTurn = 0; // degrees a second the right stick turns you while held over; 0: it snap turns
     int weight = 100;   // how heavy you are while webs fly you, percent of real gravity
     bool flips = false; // basic flips: airborne right stick; release holds orientation, A returns upright
@@ -586,6 +593,10 @@ inline std::vector<std::wstring> sessionArguments(const SessionOptions& options,
         args.emplace_back(L"--arcade-webs");
     if (options.cutscenes == 1)
         args.emplace_back(L"--immersive-cutscenes");
+    if (options.firstPersonCutscenes)
+        args.emplace_back(L"--first-person-cutscenes");
+    if (options.firstPersonCutscenes && !options.cutsceneHeadTracking)
+        args.emplace_back(L"--no-cutscene-head-tracking");
     if (options.gameDepthOfField)
         args.emplace_back(L"--game-depth-of-field");
     if (options.gameSharpening)
@@ -676,6 +687,10 @@ inline bool headsetSettings(std::string_view line, SessionOptions& options) {
             next.arcadeWebs = number != 0;
         else if (key == "cutscenes")
             next.cutscenes = std::clamp(number, 0, 1);
+        else if (key == "first_person_cutscenes")
+            next.firstPersonCutscenes = number != 0;
+        else if (key == "cutscene_head_tracking")
+            next.cutsceneHeadTracking = number != 0;
         else if (key == "swing_speed")
             next.swingSpeed = std::clamp(number, 10, 65);
         else if (key == "snap_turn")

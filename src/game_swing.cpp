@@ -6,8 +6,10 @@
 #include "spidy/game_sound.hpp"
 #include "spidy/crawl_hands.hpp"
 #include "spidy/game_grab.hpp"
+#include "spidy/game_guard.hpp"
 #include "spidy/game_offers.hpp"
 #include "spidy/game_punch.hpp"
+#include "spidy/game_record.hpp"
 #include "spidy/game_shooter.hpp"
 #include "spidy/game_throw.hpp"
 #include "spidy/game_warp.hpp"
@@ -108,6 +110,7 @@ uint64_t aimSerial{}, aimMadeMs{};
 // The hands whose motion lands no blow (Settings::noBlows).
 std::atomic<uint32_t> noBlows{};
 std::atomic<bool> combatVisuals{true};
+std::atomic<bool> halfPunchDamage{};
 bool copy(void* destination, const void* source, size_t bytes) {
     __try {
         if (reinterpret_cast<uintptr_t>(source) < 0x10000 ||
@@ -500,6 +503,7 @@ void visit(const native_rays::QueryContext& world) {
                           gameMoveFlying.load(std::memory_order_relaxed);
             for (unsigned i = 0; i < 2; ++i)
                 webbed |= solver.webs()[i].attached && (owned || !motion.grounded);
+            game_record::hero(config.record);
             game_dodge::carry(config.record, webbed, motion.grounded == 0,
                               player.velocity * game_punch::worldScale());
         }
@@ -520,6 +524,7 @@ void visit(const native_rays::QueryContext& world) {
             fighter.velocity = player.velocity * game_punch::worldScale();
             fighter.busy = noBlows.load(std::memory_order_relaxed);
             fighter.combatVisuals = combatVisuals.load(std::memory_order_relaxed);
+            fighter.halfPunchDamage = halfPunchDamage.load(std::memory_order_relaxed);
             for (unsigned i = 0; i < 2; ++i) {
                 const bool carried = solver.webs()[i].attached && (owned || !motion.grounded);
                 fighter.swinging |= carried;
@@ -1089,6 +1094,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingStart(void* input) {
         if ((result = startMotion(&motion)))
             break;
         combatVisuals = true;
+        halfPunchDamage = false;
         started = true;
         solver = Swing(physicsConfig(config));
         QueryPerformanceFrequency(&frequency);
@@ -1117,6 +1123,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingStart(void* input) {
         // without it a warned blow finds him on the swing undodged.
         strikeFlying = gameMoveFlying = false;
         game_dodge::start(config.base);
+        // v16: the recorder of the game's own hits (game_record): log lines only, no change to play. v18: it hooks
+        // the game's damage getter, which nothing in play needs, so it runs only when guard.txt says `record`.
+        if (game_guard::recorderWanted())
+            game_record::start(config.base);
         // A start after a stop takes input from the first sample on: the
         // last one's serial would have every new sample refused as old.
         AcquireSRWLockExclusive(&control);
@@ -1191,7 +1201,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingSettings(void* input) {
          header[2] != settingsBytesV9 && header[2] != settingsBytesV10 && header[2] != settingsBytesV11 &&
          header[2] != settingsBytesV12 && header[2] != settingsBytesV13 && header[2] != settingsBytesV14 &&
          header[2] != settingsBytesV15 && header[2] != settingsBytesV16 && header[2] != settingsBytesV17 &&
-         header[2] != settingsBytesV18 && header[2] != settingsBytesV19 && header[2] != sizeof(s)) ||
+         header[2] != settingsBytesV18 && header[2] != settingsBytesV19 && header[2] != settingsBytesV20 &&
+         header[2] != settingsBytesV21 && header[2] != sizeof(s)) ||
         !copy(&s, input, header[2]) || !validSettings(s))
         return 2001;
     AcquireSRWLockExclusive(&lifecycle);
@@ -1225,6 +1236,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingSettings(void* input) {
             solver.allowPhysical(s.physical != 0);
         noBlows = s.version >= 6 ? s.noBlows : 0u;
         combatVisuals = s.version < 11 || s.combatVisuals != 0;
+        halfPunchDamage = s.version >= 21 && s.halfPunchDamage != 0;
+        // v31 (the launcher's Enemy types): off, nobody guards. An older sender leaves the guards on.
+        game_guard::setEnemyTypes(s.version < 22 || s.enemyTypes != 0);
         if (s.version >= 7)
             solver.allowArcade(s.arcade != 0);
         if (s.version >= 8)
@@ -1414,6 +1428,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidySwingStop(void*) {
     game_offers::stop();
     game_throw::stop();
     game_dodge::stop();
+    game_record::stop();
     ReleaseSRWLockExclusive(&simulation);
     const DWORD result = started ? stopMotion(nullptr) : 0;
     AcquireSRWLockExclusive(&output);

@@ -248,6 +248,29 @@ int main() {
         options.arcadeWebs = true;
         args = sessionArguments(options, L"r.json", L"", L"");
         check(args.size() == 8 && args[7] == L"--arcade-webs", "arcade webs chosen");
+        options = {};
+        check(options.cutscenes == 0 && !options.firstPersonCutscenes && options.cutsceneHeadTracking,
+              "cutscenes on the screen, first person off, with head tracking, in a new launcher");
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 7, "a session with the cutscenes on the screen is told nothing of them");
+        options.cutscenes = 1;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 8 && args[7] == L"--immersive-cutscenes", "immersive cutscenes chosen");
+        options.firstPersonCutscenes = true;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 9 && args[7] == L"--immersive-cutscenes" && args[8] == L"--first-person-cutscenes",
+              "first-person cutscenes chosen beside immersive ones");
+        options.cutscenes = 0;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 8 && args[7] == L"--first-person-cutscenes", "first-person cutscenes chosen");
+        options.cutsceneHeadTracking = false;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 9 && args[8] == L"--no-cutscene-head-tracking",
+              "first-person cutscenes aimed by the scene's own camera");
+        options.firstPersonCutscenes = false;
+        args = sessionArguments(options, L"r.json", L"", L"");
+        check(args.size() == 7, "head tracking is said only with first-person cutscenes");
+        options = {};
         // The view turning onto a wall is no option of its own: it turns whoever holds the player there (the
         // player, October 14: "i like how it feel to walk on building and stand on their side"). Nor, since
         // October 25, are the swing's own walls: off, the game's crawl took every wall, and walls are Spidy's
@@ -692,6 +715,8 @@ int main() {
         t.wallRunCameraTilt = false;
         t.uiStyle = 1;
         t.combatVisuals = false;
+        t.halfPunchDamage = true;
+        t.enemyTypes = false; // on by default
         t.blowSounds = 1;
         t.webSlingshot = true;
         t.betterClimbing = true;
@@ -724,7 +749,7 @@ int main() {
                   "smooth_turn=0\nhaptics=100\nblow_sounds=0\n"
                   "body_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\n"
                   "body_haptics_combat=1\nbody_haptics_movement=1\nscreen_size=1\nscreen_depth=2\nhud=2\n"
-                  "ui_style=0\ncombat_visuals=1\nnear_clip_mm=20\nseated=0\nflips=0\ncontrolled_flips=0\nflip_speed=180\nhand_climb=0\n"
+                  "ui_style=0\ncombat_visuals=1\nhalf_punch_damage=0\nenemy_types=1\nnear_clip_mm=20\nseated=0\nflips=0\ncontrolled_flips=0\nflip_speed=180\nhand_climb=0\n"
                   "wall_run_camera_tilt=1\n"
                   "wall_distance_cm=25\n"
                   "realistic_flips=0\nrotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"

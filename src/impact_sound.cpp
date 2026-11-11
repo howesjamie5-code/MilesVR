@@ -1,4 +1,6 @@
 #include "spidy/impact_sound.hpp"
+#include "spidy/block_sound.hpp"
+#include "spidy/web_block_sound.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -24,6 +26,47 @@ constexpr float rushSeconds = .22f, rushGain = .2f;
 // 0.1.59 (the user: "way too loud and the sound cut off abruptly"): half the
 // level, less pressed, two and a half seconds with its last 0.9 faded out.
 constexpr float megaSeconds = 2.5f, megaCharge = .22f, megaFade = .9f, megaDrive = 1.4f, megaGain = .45f;
+// The blocked blow's sounds (ImpactSound::BlockBaton .. BlockShield) are the user's own files (block_sound.hpp), at the
+// level they were set to there (v23: the same for all four, about 2 dB under v21's single sound at its blockGain of
+// .55). v24 (the user, November 8: "the baton ... needs to be turned down a lil"): 3 dB lower still, the same for
+// all four - blockLevel, a factor on the samples, 10^(-3/20) = .708.
+// v26: the four sounds of a refused web pull (web_block_sound.hpp) were set to the loudness of the four of a blocked
+// blow, so they play at the same blockLevel. v27 (the user, November 8, with v26 in the game: "sounds works, maybe turn
+// volume down a tad"): all eight 2 dB lower again, by this one factor so that they stay as loud as one another -
+// blockLevel is 10^(-5/20), 5 dB under the levels of the files as they were set (block_sound.hpp, web_block_sound.hpp).
+constexpr float blockLevel = .562f;
+// v29 (the user, November 8, with the log of 23:20: "lower the slayer web block volume a bit"): the slayer's web-block
+// sound (slayerwebblock.mp3) alone plays 3 dB lower than the other seven - this factor on blockLevel, 10^(-3/20) = .708 -
+// so it sits 8 dB under the files' own level, the other seven 5 dB. (The file has more high frequencies than the
+// others, which K-weighted loudness counts for little: it was matched to them on that measure, and is the one that
+// sounded loud.) One number for one sound: the others' levels are untouched.
+constexpr float webBlockSlayerTrim = .708f;
+constexpr float trimOf(ImpactSound sound) {
+    return sound == ImpactSound::WebBlockSlayer ? webBlockSlayerTrim : 1.f;
+}
+static_assert(blockWaveRate == blockSoundRate, "impact_sound.hpp's blockWaveRate is block_sound.hpp's blockSoundRate");
+static_assert(blockWaveRate == webBlockSoundRate, "impact_sound.hpp's blockWaveRate is web_block_sound.hpp's webBlockSoundRate");
+struct Recorded {
+    const std::int16_t* samples;
+    size_t count;
+};
+// In the order of ImpactSound::BlockBaton .. WebBlockShield (recordedFor indexes it by the difference).
+constexpr Recorded recorded[] = {
+    {blockBatonSound, sizeof(blockBatonSound) / sizeof(blockBatonSound[0])},
+    {blockBrawlerSound, sizeof(blockBrawlerSound) / sizeof(blockBrawlerSound[0])},
+    {blockSlayerSound, sizeof(blockSlayerSound) / sizeof(blockSlayerSound[0])},
+    {blockShieldSound, sizeof(blockShieldSound) / sizeof(blockShieldSound[0])},
+    {webBlockBatonSound, sizeof(webBlockBatonSound) / sizeof(webBlockBatonSound[0])},
+    {webBlockBrawlerSound, sizeof(webBlockBrawlerSound) / sizeof(webBlockBrawlerSound[0])},
+    {webBlockSlayerSound, sizeof(webBlockSlayerSound) / sizeof(webBlockSlayerSound[0])},
+    {webBlockShieldSound, sizeof(webBlockShieldSound) / sizeof(webBlockShieldSound[0])},
+};
+static_assert(sizeof(recorded) / sizeof(recorded[0]) ==
+                  static_cast<size_t>(ImpactSound::WebBlockShield) - static_cast<size_t>(ImpactSound::BlockBaton) + 1,
+              "one recorded sound for each of ImpactSound::BlockBaton .. WebBlockShield");
+const Recorded& recordedFor(ImpactSound sound) {
+    return recorded[static_cast<unsigned>(sound) - static_cast<unsigned>(ImpactSound::BlockBaton)];
+}
 // Uniform noise in -1..1, the same every time.
 struct Noise {
     std::uint32_t state = 0x2545f491;
@@ -35,9 +78,10 @@ struct Noise {
 } // namespace
 
 float impactSeconds(ImpactSound sound) {
-    return sound == ImpactSound::Rush   ? rushSeconds
-           : sound == ImpactSound::Mega ? megaSeconds
-                                        : shapes[static_cast<unsigned>(sound) & 3].seconds;
+    return sound == ImpactSound::Rush      ? rushSeconds
+           : sound == ImpactSound::Mega    ? megaSeconds
+           : isBlockSound(sound) ? static_cast<float>(recordedFor(sound).count) / static_cast<float>(blockSoundRate)
+                                 : shapes[static_cast<unsigned>(sound) & 3].seconds;
 }
 std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate) {
     rate = std::clamp(rate, 8000u, 48000u);
@@ -79,6 +123,24 @@ std::vector<std::uint8_t> impactWave(ImpactSound sound, unsigned rate) {
             const float left = (megaSeconds - t) / megaFade;
             const float tail = left >= 1 ? 1.f : left <= 0 ? 0.f : left * left * (3 - 2 * left);
             samples[i] = std::tanh(sum * megaDrive) / std::tanh(megaDrive) * megaGain * tail;
+        }
+    } else if (isBlockSound(sound)) {
+        // The user's sound, read at its own rate and laid out at the one asked for: linear between its samples, and
+        // at a lower rate each sample is the mean of the stretch of the original it stands for (no aliasing).
+        const Recorded& r = recordedFor(sound);
+        const double step = static_cast<double>(blockSoundRate) / static_cast<double>(rate);
+        const int taps = std::max(1, static_cast<int>(std::lround(step)));
+        const auto at = [&](double position) {
+            const size_t low = std::min(static_cast<size_t>(std::max(position, 0.)), r.count - 1);
+            const size_t high = std::min(low + 1, r.count - 1);
+            const float mix = std::clamp(static_cast<float>(position - static_cast<double>(low)), 0.f, 1.f);
+            return static_cast<float>(r.samples[low]) * (1 - mix) + static_cast<float>(r.samples[high]) * mix;
+        };
+        for (std::uint32_t i = 0; i < count; ++i) {
+            float sum = 0;
+            for (int k = 0; k < taps; ++k)
+                sum += at(static_cast<double>(i) * step + step * (static_cast<double>(k) + .5) / taps - step * .5);
+            samples[i] = sum / static_cast<float>(taps) / 32768.f * blockLevel * trimOf(sound);
         }
     } else if (sound == ImpactSound::Rush) {
         // Noise through a band that rises and falls back, swelling and fading.

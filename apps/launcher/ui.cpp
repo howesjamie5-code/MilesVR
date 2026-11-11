@@ -1393,6 +1393,14 @@ void App::optionsCard(ImVec2 size) {
                static constexpr int choices[] = {0, 1};
                stepCombo("##cutscenes", kCutscenes, choices, 2, &o.cutscenes);
            });
+    option("First person cutscenes (experimental)",
+           "Renders all cutscenes in full VR first person, works with finishers and car chases. Press right "
+           "stick to switch between first person and the normal camera. Expect bugs",
+           S(42), [&] { changed |= toggle("##fpscenes", &o.firstPersonCutscenes); });
+    if (o.firstPersonCutscenes)
+        option("Cutscene head tracking",
+               "On by default, disable to remove head tracking from cutscenes. Best if you get motion sickness.",
+               S(42), [&] { changed |= toggle("##fpscenehead", &o.cutsceneHeadTracking); });
     option("HUD", "How large the game's HUD shows in front of you; off, there is none in VR.", S(150), [&] {
         static constexpr int sizes[] = {0, 1, 2, 3};
         stepCombo("##hud", kHudSizes, sizes, 4, &o.hud);
@@ -1404,6 +1412,16 @@ void App::optionsCard(ImVec2 size) {
     option("Hand wall climbing (experimental)",
            "On a wall, stick at rest: squeeze a grip near the wall and pull to climb. Both grips = roll the view.",
            S(40), [&] { tabToggle("##handclimb", Item::handClimb); });
+    option("Half punch damage (experimental)",
+           "Punches and web strikes deal half their damage; launches, smashes and knockback stay the same.",
+           S(40), [&] { tabToggle("##halfpunchdamage", Item::halfPunchDamage); });
+    // v31 (the user, November 9: "title: enemy types", with this description): the guards of v18 to v30 as one switch, on.
+    // game_guard::setEnemyTypes has it from the game's settings (spidy_vr.ini's enemy_types).
+    // v32 (the user, seeing it in the launcher: "delete all the text after 'stunned'"): the description ends there.
+    option("Enemy types",
+           "Enemy types that block in the base game now block base attacks until they are webbed "
+           "or stunned.",
+           S(40), [&] { tabToggle("##enemytypes", Item::enemyTypes); });
     option("Flips (experimental)", "In the air the left stick turns you over; tap A for one flip, hold A to stay.",
            S(40), [&] { changed |= toggle("##flips", &o.flips); });
     option("Flip speed", "How fast a flip turns you over, at full tilt of the left stick.", S(150), [&] {

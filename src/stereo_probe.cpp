@@ -3,6 +3,7 @@
 #include <string>
 #include "spidy/eye_job_table.hpp"
 #include "spidy/eye_resolution.hpp"
+#include "spidy/game_fp.hpp"
 #include "spidy/native_appearance.hpp"
 #include "spidy/native_body.hpp"
 #include "spidy/native_eye_frame.hpp"
@@ -356,6 +357,9 @@ struct FrameHead {
     // the XR worker with the command), and whether the worker sent one.
     Mat4 panel{};
     bool followed{};
+    // The command is a first-person scene's (anchored 2 or 4): its head is where the character's head was when this
+    // head was latched, which in a scene can be a frame of travel before the eyes are placed (placeEyes).
+    bool scene{};
     // MilesVR 0.1.80: the panel pinned elsewhere (native_hud::Pinned), its size then its own.
     native_hud::Pinned pinned{};
 };
@@ -685,6 +689,18 @@ void updateHero(bool immersive, bool hide) {
 }
 bool heroPosition(Vec3& position);
 bool retiring();
+// A first-person scene's command (anchored 2) with its eyes put on the head of
+// the character the scene plays, as that head is now (game_fp.hpp). Without a
+// head the command is switched off, and the eyes follow the game's own camera.
+void resolveScene(native_eyes::Command& c) {
+    if ((c.anchored != 2 && c.anchored != 4) || !c.enabled)
+        return;
+    Mat4 head{};
+    if (c.anchored == 4 ? game_fp::frameLevel(head) : game_fp::frame(head))
+        c = native_eyes::resolvedOnHead(c, head);
+    else
+        c.enabled = 0;
+}
 // The newest eye command's head for this frame, not yet moved with the player.
 FrameHead commandHead() {
     FrameHead head;
@@ -696,6 +712,9 @@ FrameHead commandHead() {
     // A scene around the viewer (4, Cutscenes: Immersive, from SM2VR 0.0.107): its eyes on the game's
     // camera now, so the HUD's panel, its prompts (a QTE's) and the game's subtitles follow the head as
     // in play.
+    head.scene = head.command.enabled && (head.command.anchored == 2 || head.command.anchored == 4);
+    resolveScene(head.command);
+    head.controlled = head.command.enabled && head.controlled;
     auto placed = head.command;
     Descriptor main{};
     const bool around = head.command.enabled == 4 && read(pointer(base + 0x83ea910), &main, sizeof(main)) &&
@@ -746,7 +765,7 @@ const FrameHead& latchHead() {
     const bool shared = activeHero.fresh(ropeSamples, ropeHero);
     frameHead = commandHead();
     // The player is where that sample has him, else at the hero's render transform.
-    if (frameHead.viewed && frameHead.command.anchored && (shared || heroPosition(rendered))) {
+    if (frameHead.viewed && frameHead.command.anchored == 1 && (shared || heroPosition(rendered))) {
         activeHeroPosition = shared ? ropeHero : rendered;
         activeHeroPlaced = true;
         moveHead(frameHead, activeHeroPosition);
@@ -772,7 +791,7 @@ const FrameHead& earlyHead() {
         return earlyFrameHead;
     earlyFrameHead = commandHead();
     Vec3 hero{};
-    if (earlyFrameHead.viewed && earlyFrameHead.command.anchored &&
+    if (earlyFrameHead.viewed && earlyFrameHead.command.anchored == 1 &&
         (heroTravel.ahead(frameIndex, hero) || heroPosition(hero)))
         moveHead(earlyFrameHead, hero);
     return earlyFrameHead;
@@ -1311,6 +1330,7 @@ bool activeView(const Descriptor* incoming, Descriptor& out) {
                  (stock.values[0x40c / 4] - stock.values[0x408 / 4]);
     // What that camera shows of the HUD panel sizes the panel in VR.
     stockHalfWidth = (stock.values[0x404 / 4] - stock.values[0x400 / 4]) / 2;
+    game_fp::camera(stock.pose(), stockHalfWidth, (stock.values[0x40c / 4] - stock.values[0x408 / 4]) / 2);
     if (!(config.createViews & 8) || stopRequested || GetTickCount64() >= deadline || live.load() != 2)
         return false;
     // Play only (1). Not a scene around the viewer (4): its eyes are placed on this very view's camera
@@ -1615,6 +1635,8 @@ void enqueueCommand(void* list, uint32_t command, uint64_t order, void* payload)
 // each eye's previous camera equal to its current one, so motion vectors and
 // temporal anti-aliasing saw no camera motion.
 void placeEyes() {
+    // First-person scenes: this frame's player entity for the head search, and the hiding the worker asked for.
+    game_fp::hero(playerRecord.load() ? pointer(playerRecord.load()) : 0);
     Descriptor main{};
     const auto primary = pointer(base + 0x83ea910);
     const bool render = read(primary, &main, sizeof(main)) && native_view::valid(main) && !retiring();
@@ -1627,7 +1649,10 @@ void placeEyes() {
     activeHeroPlaced = false;
     native_eyes::Command desired{};
     bool controlled{};
-    if (render && frameHead.frame == frameIndex) {
+    // A first-person scene's eyes are put on the character's head as it is NOW: the head latched earlier in the frame
+    // (the HUD's placement, inside the frame's gameplay) can be a step of the character's travel behind it, which at a
+    // swing's speed left the eyes trailing the head by up to a metre. The active view and the HUD keep the latched one.
+    if (render && frameHead.frame == frameIndex && !frameHead.scene) {
         // The active view and the HUD went to this command's head (latchHead).
         desired = frameHead.command;
         controlled = frameHead.controlled;
@@ -1636,8 +1661,13 @@ void placeEyes() {
         desired = command;
         controlled = desired.enabled && GetTickCount64() < commandDeadline;
         ReleaseSRWLockShared(&commandLock);
+        resolveScene(desired);
+        controlled = controlled && desired.enabled;
     }
     latchedImmersive = render && enabled && controlled && desired.enabled == 1;
+    // A first-person scene: the eyes are on the head of the character the scene plays, and the hero is
+    // that character, in view, as the scene has him: not hidden, and not moved with the player.
+    const bool sceneEyes = latchedImmersive && desired.anchored == 3;
     // The game's view is on the head and both eyes render: it need not, unless
     // RECORDING FOV wants it in the window.
     restGameView(primary, latchedImmersive && (config.createViews & 32) && live.load() == 2 &&
@@ -1660,9 +1690,9 @@ void placeEyes() {
     if (render && enabled && controlled && (config.createViews & 4) &&
         (desired.enabled != 3 || screenHudFrame == frameIndex))
         native_hud::eyesShown(desired.enabled == 3);
-    latchedHide = latchedImmersive && !native_body::drawn();
-    if ((config.createViews & 4) && (latchedImmersive || hiddenHero.load()))
-        updateHero(latchedImmersive, latchedHide);
+    latchedHide = latchedImmersive && !sceneEyes && !native_body::drawn();
+    if ((config.createViews & 4) && ((latchedImmersive && !sceneEyes) || hiddenHero.load()))
+        updateHero(latchedImmersive && !sceneEyes, latchedHide);
     if (!render)
         return;
     latchedSerial = controlled ? desired.serial : 0;
@@ -1684,7 +1714,7 @@ void placeEyes() {
     // game's web lines started from this frame; they then leave the wrists.
     bool anchored{}, rejected{};
     float lag = -1, activeLag = -1;
-    if (latchedImmersive && desired.anchored) {
+    if (latchedImmersive && desired.anchored == 1) {
         const auto& hero = heroFrames[heroSlot.load(std::memory_order_acquire) % heroFrames.size()];
         const Vec3 transform{hero.transform[12], hero.transform[13], hero.transform[14]};
         const Vec3 rendered = shared ? ropeHero : transform;
@@ -1713,6 +1743,13 @@ void placeEyes() {
         Mat4 pose{};
         native_eyes::Bounds lens{};
         if (native_eyes::headView(desired, pose, lens)) {
+            if (frameHead.frame == frameIndex && frameHead.scene && frameHead.viewed) {
+                // How far the head latched earlier in the frame was from the one the eyes now stand on: the report's
+                // offset mismatch, for a scene (what the HUD and the eyes did not move alike by).
+                const float apart =
+                    length(Vec3{pose[12] - frameHead.pose[12], pose[13] - frameHead.pose[13], pose[14] - frameHead.pose[14]});
+                native_hud::publish([&](native_hud::Data& d) { d.offsetMismatch = std::max(d.offsetMismatch, apart); });
+            }
             pose[12] += placed.offset.x;
             pose[13] += placed.offset.y;
             pose[14] += placed.offset.z;
@@ -2145,6 +2182,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyStart(void* value) {
         if (enabled)
             break;
         base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        // The first-person cutscenes' worker; idle until a scene wants first person.
+        game_fp::start(base);
         Config incoming{};
         if (!read(reinterpret_cast<uintptr_t>(value), &incoming, sizeof(incoming))) {
             result = 1001;

@@ -94,6 +94,13 @@ class XrRuntime {
         screenWidth_ = std::isfinite(width) && width > .5f && width < 10 ? width : 3.2f;
     }
 
+    // The next image is locked to the head (a first-person scene whose own camera aims): the projection layer is
+    // submitted in the headset's own space, as the eyes lie in the head, so it turns with the viewer exactly and
+    // is never placed in the room. Set with the image, as presentation().
+    void headLocked(bool on) {
+        headLocked_ = on;
+    }
+
   private:
     std::string systemName_;
     struct Graphics {
@@ -158,7 +165,7 @@ class XrRuntime {
     XrTime previousTime_{};
     bool running_{}, exit_{};
     bool lastFrameSubmitted_{};
-    bool flatScreen_{}, stereoScreen_{};
+    bool flatScreen_{}, stereoScreen_{}, headLocked_{};
     Pose screenPose_{};
     float screenAspect_ = 16.f / 9, screenWidth_ = 3.2f;
     float hapticScale_ = 1;

@@ -4,6 +4,7 @@
 #include "spidy/game_shooter.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/game_focus.hpp"
+#include "spidy/game_guard.hpp"
 #include "spidy/game_sound.hpp"
 #include "spidy/game_warp.hpp"
 #include "spidy/game_targets.hpp"
@@ -811,6 +812,13 @@ void collided(uintptr_t shot, uintptr_t event) {
                 d.statusType = 19; // kWebEncase
                 d.statusAmount = webbingPerHit;
                 webbed = native_bodies::damage(d) != 0;
+                // v24 (game_guard) opened the guard of a guarding enemy here for a few seconds, whatever state the game put
+                // him in next (the user: "i can punch them once but then they block everything else while webbed"). v28: no
+                // more - one ball or two only twitch an enemy (11 of the 30 a thug takes, and it decays), so that he ran on
+                // with his guard open, unwebbed (the log of 04:02: 24 of the 34 he hit were never webbed). The ball is the
+                // mod's own damage, nothing else; his state says when he is webbed.
+                if (webbed && c.kind == game_targets::Kind::bot)
+                    game_guard::ballHit(c);
             } else if (c.kind == game_targets::Kind::throwable && c.physics &&
                        !(c.traits & game_targets::breakable)) {
                 // As a throw launches it: once, along the shot, tumbling.

@@ -387,6 +387,27 @@ struct KnockoutView {
 // pixelAngle as for appendWeb.
 void appendKnockout(std::vector<Vertex>& out, const KnockoutView& knockout, Vec3 viewer, float pixelAngle,
                     UiStyle style = UiStyle::comic);
+// MilesVR 0.1.80, v29 (the user, November 9: "we also need UI for when you attacking a blocking enemy, make it fit the
+// current UI style and make it different for the tech and comic option"): a blow a guard stopped (game_guard), lettered
+// where the fist met him, facing the viewer. The comic's: a white flash and sparks, a printed steel shield that pops in
+// as a sound word does, "BLOCKED!" over it in paper on a red drop, and under it a pip for each blocked blow he takes
+// before he swings back - red for those he has taken, paper for those to come. The blow that sets off his counter
+// has the lettering in yellow and every pip red: look out. Held three poses, gone in two, eight in all. The tech's is
+// tech_marks.hpp's, and has no lettering ("remove the 'blocked' text on the tech style, keep it on comic").
+struct BlockView {
+    static constexpr float seconds = 8.f / 12; // eight poses
+    Vec3 point{};
+    float strength{}; // 0..1: the blow's
+    // The blocked blows in a row he has taken, this one included (Report::lastStreak; 0: not told), and the one that
+    // sets off his counter (guard.txt `counter`, Report::counterBlows; 0: he never counters, or not told). Pips are drawn
+    // for 2 to maxPips of them; for more there are none.
+    int streak{}, counterAt{};
+    float age = -1; // seconds since it was blocked; below 0, or past `seconds`: nothing
+    static constexpr int maxPips = 6;
+};
+// pixelAngle as for appendWeb.
+void appendBlock(std::vector<Vertex>& out, const BlockView& block, Vec3 viewer, float pixelAngle,
+                 UiStyle style = UiStyle::comic);
 // Miles's venom round the venom fist (venom_punch.hpp): orange bioelectric
 // bolts crackling out of the front of the fist in a soft orange glow, with hot
 // sparks flicking round it, fewer and fainter while it charges, all of them

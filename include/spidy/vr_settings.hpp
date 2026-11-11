@@ -149,6 +149,11 @@ struct Values {
     int heightCm = 0;
     bool seated = false;
     bool combatVisuals = true; // combat overlays and automatic combat slow-motion VFX
+    bool halfPunchDamage = false; // half health damage, unchanged punch reactions
+    // ENEMY TYPES (the launcher's Enemy types, v31; game_guard): the enemy types that block in the base game block the base
+    // attacks (punches and web strikes) until they are webbed or stunned. On by default (v30, final); off, nobody guards, as
+    // in the 2018 mod. First person cutscenes and half punch damage are other settings and do not change with it.
+    bool enemyTypes = true;
     // Aiming with the eyes (the tab's EYE AIM; eyeAimShots, eyeAimZips): web
     // balls go where the eyes look, from the hand that pulled; a zip goes to
     // the point the eyes look at, the game's camera being turned onto it.
@@ -304,8 +309,10 @@ enum class Item : uint8_t {
     ropeSteering,
     webRange,
     webSpeed,
+    halfPunchDamage,
+    enemyTypes,
 };
-inline constexpr Item lastItem = Item::webSpeed;
+inline constexpr Item lastItem = Item::enemyTypes;
 // Where a row shows: in the tab; on the pause menu's first page instead,
 // under RESUME: VR VIEW (the user, October 15: "move the VIEW: GAME SCREEN to
 // the first menu (the one with resume)"); or only in the launcher's options:
@@ -328,7 +335,7 @@ struct Row {
     std::span<const char* const> choices{};
     Place place{};
 };
-const std::array<Row, 65>& rows();
+const std::array<Row, 67>& rows();
 // The most choices a row shows (game_menu's buffers): a row with more would
 // lose its last ones.
 inline constexpr size_t maxChoices = 9;

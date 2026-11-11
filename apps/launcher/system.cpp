@@ -547,6 +547,8 @@ Settings loadSettings() {
         else if (key == "venom_left_hand") o.venomLeftHand = number() != 0;
         else if (key == "venom_trigger") o.venomTrigger = number() != 0;
         else if (key == "arcade_webs") o.arcadeWebs = number() != 0;
+        else if (key == "first_person_cutscenes") o.firstPersonCutscenes = number() != 0;
+        else if (key == "cutscene_head_tracking") o.cutsceneHeadTracking = number() != 0;
         // wall_run (before October 25) and stand_on_walls (written until then, read until October 15) are no
         // longer read: the swing's walls and the view on them are always on.
         else if (key == "game_depth_of_field") o.gameDepthOfField = number() != 0;
@@ -567,7 +569,7 @@ Settings loadSettings() {
         else if (key == "smooth_turn") o.smoothTurn = std::clamp(number(), 0, 360);
         else if (key == "haptics") o.haptics = std::clamp(number(), 0, 100);
         else if (key == "body_haptics") o.bodyHaptics = std::clamp(number(), 0, 100);
-        else if (key == "screen_size") o.screenSize = std::clamp(number(), 0, 2);
+        else if (key == "screen_size") o.screenSize = std::clamp(number(), 0, 1);
         else if (key == "screen_depth") o.screenDepth = std::clamp(number(), 0, 3);
         else if (key == "cutscenes") o.cutscenes = std::clamp(number(), 0, 1);
         else if (key == "hud") o.hud = std::clamp(number(), 0, 3);
@@ -614,6 +616,8 @@ void saveSettings(const Settings& settings) {
          << "\naim_markers=" << o.aimMarkers << "\nair_webs=" << o.airWebs << "\nflips=" << o.flips
          << "\ntrigger_webs=" << o.triggerWebs << "\nvenom_left_hand=" << o.venomLeftHand
          << "\nvenom_trigger=" << o.venomTrigger << "\narcade_webs=" << o.arcadeWebs
+         << "\nfirst_person_cutscenes=" << o.firstPersonCutscenes
+         << "\ncutscene_head_tracking=" << o.cutsceneHeadTracking
          << "\ngame_depth_of_field=" << o.gameDepthOfField
          << "\ngame_sharpening=" << o.gameSharpening << "\ngame_effects=" << o.gameEffects
          << "\nrender_scale=" << o.renderScale << "\nupscale=" << o.upscale

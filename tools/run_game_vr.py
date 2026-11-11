@@ -2285,6 +2285,12 @@ def main():
     p.add_argument('--arcade-webs', action='store_true',
                    help='Arcade webs (WEB STYLE: ARCADE): webs go through lamp posts, signs, cars and other thin or '
                         'loose things, and swings stay above the street')
+    p.add_argument('--first-person-cutscenes', action='store_true',
+                   help="Cutscenes and story moments play in 3D around the player, from inside Spider-Man's head "
+                        '(loaded as they play), instead of on the game screen')
+    p.add_argument('--no-cutscene-head-tracking', action='store_true',
+                   help="With --first-person-cutscenes: the scene's own camera aims the view instead of the "
+                        "player's head (the position still follows the headset)")
     p.add_argument('--no-body', action='store_true',
                    help="Keep the hero hidden in VR (gloves drawn over the image) instead of your own body")
     p.add_argument('--no-punch', action='store_true', help='Fists pass through thugs instead of punching them')
@@ -2572,7 +2578,9 @@ def session(a, startup):
                              (0x100000 if a.no_prompt_help else 0) | (0x80000 if a.eye_lens_distances else 0) |
                              (0x200000 if a.venom_left_hand else 0) | (0x400000 if a.arcade_webs else 0) |
                              (0x800000 if a.venom_trigger else 0) | (0x1000000 if a.no_eye_fxaa else 0) |
-                             (0x2000000 if a.immersive_cutscenes else 0)) + \
+                             (0x2000000 if a.immersive_cutscenes else 0) |
+                             (0x4000000 if a.first_person_cutscenes else 0) |
+                             (0x8000000 if a.first_person_cutscenes and a.no_cutscene_head_tracking else 0)) + \
             runtime_path(manifest) + struct.pack('<14I', a.snap_turn, a.haptics, a.screen_size, a.smooth_turn,
                                                  a.render_scale, a.weight, a.eye_height, a.arm_length, a.hud,
                                                  a.flip_speed, a.upscale, a.monitor_rate, a.screen_depth,

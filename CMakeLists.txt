@@ -55,6 +55,14 @@ if(WIN32)
   target_sources(spidy_tests PRIVATE src/game_targets.cpp)
 endif()
 add_test(NAME core COMMAND spidy_tests)
+# The hit recorder's text (game_record_text.hpp): a request's bytes read, its log lines written.
+add_executable(spidy_record_text_tests tests/record_text_tests.cpp)
+target_include_directories(spidy_record_text_tests PRIVATE include)
+add_test(NAME record_text COMMAND spidy_record_text_tests)
+# The guards (guard.hpp): which classes give a guard, the rules file, and each enemy's guard book.
+add_executable(spidy_guard_tests tests/guard_tests.cpp)
+target_include_directories(spidy_guard_tests PRIVATE include)
+add_test(NAME guards COMMAND spidy_guard_tests)
 # Settings profiles (launcher_profile.hpp) hold the SPIDY VR tab's settings: the launcher's programs build
 # vr_settings themselves, as the launcher has the static runtime and spidy_core the DLL one.
 add_executable(spidy_launcher_tests tests/launcher_tests.cpp src/vr_settings.cpp)
@@ -88,7 +96,7 @@ if(SPIDY_BUILD_OBSERVER)
   target_compile_options(spidy_view PRIVATE /W4 /permissive-)
   target_link_libraries(spidy_view PRIVATE minhook)
   add_library(spidy_stereo_probe SHARED src/stereo_probe.cpp src/native_eye_gpu.cpp src/native_webs.cpp
-              src/native_body.cpp src/native_hud.cpp)
+              src/native_body.cpp src/native_hud.cpp src/game_fp.cpp)
   target_include_directories(spidy_stereo_probe PRIVATE include)
   target_compile_definitions(spidy_stereo_probe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(spidy_stereo_probe PRIVATE /W4 /permissive-)
@@ -116,7 +124,7 @@ if(SPIDY_BUILD_OBSERVER)
   add_library(spidy_ray_bridge SHARED src/native_rays.cpp src/game_swing.cpp src/game_targets.cpp
               src/game_grab.cpp src/native_bodies.cpp src/game_punch.cpp src/game_shooter.cpp
               src/game_warp.cpp src/game_offers.cpp src/game_sense.cpp src/game_focus.cpp
-              src/game_sound.cpp src/game_throw.cpp src/game_dodge.cpp)
+              src/game_sound.cpp src/game_throw.cpp src/game_dodge.cpp src/game_record.cpp src/game_guard.cpp)
   target_include_directories(spidy_ray_bridge PRIVATE include)
   target_compile_definitions(spidy_ray_bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(spidy_ray_bridge PRIVATE /W4 /permissive-)
@@ -214,7 +222,7 @@ if(SPIDY_BUILD_XR)
   if(SPIDY_BUILD_OBSERVER)
     target_sources(spidy_stereo_probe PRIVATE src/game_xr.cpp src/game_venom.cpp src/game_venom_events.cpp src/game_player.cpp src/game_pad.cpp
                    src/game_menu.cpp src/game_time.cpp src/game_prompts.cpp src/game_steam.cpp
-                   src/phone_music.cpp)
+                   src/phone_music.cpp src/voice_pool.cpp)
     target_link_libraries(spidy_stereo_probe PRIVATE spidy_openxr spidy_bhaptics shell32 ole32 uuid)
   endif()
   add_executable(spidy_xr_lab apps/xr_lab.cpp)

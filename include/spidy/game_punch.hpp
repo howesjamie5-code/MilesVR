@@ -183,6 +183,9 @@ struct Player {
     bool grounded{}, swinging{};
     // Off: no hidden directional calls may override a launcher or ground smash.
     bool combatVisuals = true;
+    // HALF PUNCH DAMAGE: punches and web strikes deal half their health damage (not the venom punch, a power of
+    // its own); launches, smashes and knockback stay.
+    bool halfPunchDamage{};
     // A bit per hand whose web holds something or carries the player: it
     // neither punches nor opens a strike. And the bot each hand's web holds
     // (an actor record, 0 for none): a punch at him with that hand strikes.

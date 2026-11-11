@@ -835,7 +835,8 @@ VR settings
                    recenter. Stand up with SEATED on and you tower: switch
                    it off first.
   COMBAT VISUALS ... in DISPLAY, on by default. Off hides Spidy's punch
-                   arrows, target circle, impact/combo effects, KO text and
+                   arrows, target circle, impact/combo effects, the shield
+                   of a blow an enemy's guard stopped, KO text and
                    automatic combat slow-motion screen effects. Spider-Sense
                    attack warnings and offscreen direction markers remain
                    visible. Off also removes directional combo requirements:
