@@ -1180,6 +1180,9 @@ DWORD WINAPI run(void*) {
         game_pad::PadLayer padLayer;
         game_pad::NamedPress namedPress;
         game_pad::State namedPad{};
+        // Both grips held as the game's LB + RB (the bus QTE), and the presses so far.
+        bool gripPairHeld{}, gripPairBefore[2]{};
+        uint32_t gripPairPresses{};
         bool namedFists{}, fistsBlows{};
         uint32_t namedPressesBefore{}, slamsBefore{};
         // The gadget wheel (X held; gadget_wheel.hpp): the player's gadgets
@@ -2859,6 +2862,35 @@ DWORD WINAPI run(void*) {
                         const bool namedPlay =
                             gesturesPlay && !padLayer.latched() && !gadgetWheel.open();
                         namedPad = namedPress.update(frame.seconds, namedPlay, named, asked);
+                        // MilesVR 0.1.84: both grips squeezed while the game names LB + RB together are its LB +
+                        // RB, held as long as both stay squeezed - Time to Rally's bus (the user, November 3: "in
+                        // game prompt doesn't work when trying to web the bus this is a QTE ... the button for it
+                        // should be grip"). Only a fresh squeeze of both with neither hand on a web, so a swing
+                        // past a trash can's throw prompt (the same pair) still swings.
+                        {
+                            const bool pairNamed = (asked.buttons & game_pad::bumpers) == game_pad::bumpers;
+                            const bool down[2]{frame.hands[0].squeeze > (gripPairHeld ? .3f : .6f),
+                                               frame.hands[1].squeeze > (gripPairHeld ? .3f : .6f)};
+                            const bool fresh = down[0] && down[1] && !(gripPairBefore[0] && gripPairBefore[1]);
+                            if (!gripPairHeld && namedPlay && pairNamed && fresh && !swingState.webs[0].attached &&
+                                !swingState.webs[1].attached) {
+                                gripPairHeld = true;
+                                ++gripPairPresses;
+                                runtime.haptic(0, .4f);
+                                runtime.haptic(1, .4f);
+                                if (gripPairPresses <= 20)
+                                    game_prompts::note("both grips with LB + RB named -> the game's LB + RB (held)");
+                            }
+                            if (gripPairHeld && (!down[0] || !down[1] || !namedPlay))
+                                gripPairHeld = false;
+                            gripPairBefore[0] = down[0];
+                            gripPairBefore[1] = down[1];
+                            if (gripPairHeld) {
+                                namedPad.buttons |= game_pad::bumpers;
+                                // The grips are the game's meanwhile: no webs from them.
+                                controller.hands[0].squeeze = controller.hands[1].squeeze = 0;
+                            }
+                        }
                         const uint32_t claimed = namedPress.claimed();
                         if (claimed & game_pad::NamedPress::controlA) {
                             controller.jump = false;

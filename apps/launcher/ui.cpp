@@ -2076,6 +2076,9 @@ void App::controls(ImVec2 origin, ImVec2 size) {
           {"FNSM APP", "Opens the game's own Friendly Neighborhood app on your HUD (the wrist menu closes). Work it "
                        "as a gamepad: stick to move, A to choose, B back / close",
            "FNSM app open on your HUD - stick to move, A to choose, B back / close"}}},
+        {"STORY MOMENTS",
+         {{"Game asks for LB + RB (the bridge's bus)", "Squeeze both grips (no web out) and hold them"},
+          {"Game asks for camouflage on the game screen", "Either hand at your temple + trigger (Time to Rally)"}}},
         {"MENUS, CUTSCENES, BODY",
          {{"Game screen", "Menus, loading and cutscenes show on a screen in the headset. Controllers = Xbox controller. "
                           "Mouse: point at it + pull the trigger. Any button = controller again",
