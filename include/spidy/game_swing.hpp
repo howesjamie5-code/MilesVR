@@ -134,9 +134,25 @@ struct Command {
     // (a zip to a point), its Y (a web strike; a car's in a chase), a
     // prompt's button - and the swing lets it have the hero once it takes
     // him (AirYield). Zero until October 18, when it was `reserved`.
-    // Bit 1 (SM2VR 0.0.56): the game's B in the air, its air dodge - the swing
-    // lets go at once for AirYield::dodgeMs (the dodge never quiets the air
-    // handler, so it cannot wait for that).
+    // Bit 1: the right thumbstick's click alone, in VR play with WEB TIE or
+    // WEB LINES on, when the game does not name its R3 (game_pad::NamedPress)
+    // and the pad layer is off: the web tie's and a web line's click, and
+    // held, the aim of the zip to a web line (web_line.hpp). No change of
+    // layout or version: an older swing module refuses such a command (asks >
+    // 1), and both come in one package.
+    // Bit 2 (COMBAT RESPONSIVE): the player fights now (Input::fighting). Bit 1
+    // was this before WEB TIE took it upstream (0.8.0); an older swing module
+    // refuses such a command (asks > 3), and both come in one package.
+    // Bit 3 (SPIDY RUN JUMP): A out of the swing's run is its own jump
+    // (Input::runJump); bit 2 before the port to 0.8.0.
+    // Bit 4 (WEB LINES): of bit 0's moves, the game's zip to a point: the one
+    // that takes the player off a web line. Bit 5 (WEB LINES): the dodge's
+    // button (B) held: on a web line, a dash along it. Bits 2 and 3 in pull
+    // request #79, after #77's since; an older swing module refuses either
+    // (asks > 15).
+    // Bit 6 (MilesVR, SM2VR 0.0.56; bit 1 until WEB TIE took it): the game's B in the
+    // air, its air dodge - the swing lets go at once for AirYield::dodgeMs (the dodge
+    // never quiets the air handler, so it cannot wait for that).
     uint32_t asks{};
     uint64_t sampleTimeNs = 1;
     // Version 3: a flip's tilt of the tracking space (Input::tilt). Version 2
@@ -165,7 +181,8 @@ struct Command {
 constexpr uint32_t commandBytesV2 = 168, commandBytesV3 = 184, commandBytesV4 = 200, commandBytesV5 = 240;
 // attached: 0 none, else bits: 1 a web; 2 both hands hold it (Swing::shared:
 // the other hand's web is the same one); 4 this hand took hold of it and did
-// not shoot it (Web::taken; it stays when the other hand lets go).
+// not shoot it (Web::taken; it stays when the other hand lets go); 8 this
+// hand reels it in now (Swing::reeling; its trigger, reel_haptics.hpp).
 struct WebState {
     uint32_t attached{}, bodyId{};
     Vec3 anchor{};
@@ -206,7 +223,25 @@ static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 2
               offsetof(Command, tilt) == commandBytesV2 && offsetof(Command, leap) == commandBytesV3 &&
               offsetof(Command, wallPositions) == commandBytesV4 && offsetof(Command, wallRotate) == 232 &&
               offsetof(Command, gazeOrigin) == commandBytesV5);
-// SpidySwingSettings: what the VR settings (the MILES VR tab in the game's
+// Let real custom wall velocity drive the momentum pose without also asking
+// the stock game to walk. Never suppress ground, vent or stale native input.
+inline bool momentumWallDrive(bool requested, bool fresh, const Data& d) {
+    return requested && fresh && d.status && d.owned && d.wall == static_cast<uint32_t>(Surface::wall);
+}
+// NATIVE RUN (game_pad::NativeRun): the game, not the swing, has the player
+// on his feet on the ground. A fresh sample (the caller's `fresh`: under 100
+// ms old), the swing not owning the body, grounded, on no wall of either kind
+// (the game's crawl keeps its own RT, game_xr), no web held by either hand, no
+// mount onto a wall, none of the swing's takeoffs, and the mover not in its
+// airborne mode (collision flags 0x10). The same states the swing drives in
+// (game_swing.cpp's `drive`: owned, attached, airborne) are all excluded: RT
+// held off the ground is the game's own web swing.
+inline bool gameOwnsGround(bool fresh, const Data& d) {
+    return fresh && d.status && !d.owned && d.grounded && d.wall == static_cast<uint32_t>(Surface::none) &&
+           !d.webs[0].attached && !d.webs[1].attached && !d.mount && !d.takeoff && !d.takeoffPhase &&
+           !(d.collisionFlags & 0x10u);
+}
+// SpidySwingSettings: what the VR settings (the VR tabs in the game's
 // Settings) change during play.
 // grab: webs catch props and thugs (a swing started without them starts
 // them here); off lets go of what they hold. maxSpeed: the speed limit, up to
@@ -234,11 +269,35 @@ static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 2
 // arcade: arcade webs (the VR settings' WEB STYLE: ARCADE; SwingConfig::
 // arcade). Version 6 (settingsBytesV6) ends before it and leaves the webs'
 // style as it is.
-// Version 22 appends enemyTypes (on by default; the launcher's Enemy types):
+// Version 32 (MilesVR) appends enemyTypes (on by default; the launcher's Enemy types):
 // the enemy types that block in the base game guard against the base attacks
 // until they are webbed or stunned (game_guard::setEnemyTypes); 0, nobody
-// guards, as in the 2018 mod. Version 21 (settingsBytesV21) ends before it and
-// leaves the guards on.
+// guards, as in the 2018 mod. Older versions end before it and leave the guards on
+// (PR #1 had it as version 22, never released).
+// Version 23 appends webTie (off by default): the web tie's gesture, and a
+// webbed enemy who comes only on the yank (WEB TIE; web_tie.hpp).
+// Version 31 appends webLines (off by default): web lines (WEB LINES;
+// web_line.hpp). Version 24 in pull request #79, after #77's since.
+// Version 30 appends webLandingSmooth (off by default) and webLandingImpact
+// (m/s, 24 by default): a landing with a web held below that speed is a
+// smooth one (Swing::allowWebLandingSmooth, SMOOTH WEB LANDING).
+// Version 29 appends spidyRunStanding (off by default): with spidyRun, the
+// run also starts on the ground from a stand, the stick held fully
+// (Swing::allowGroundRunFromStanding, SPIDY RUN FROM STANDING).
+// Version 28 appends spidyRun (off by default): a landing faster than the
+// game's sprint is the swing's own run on the ground (Swing::allowGroundRun,
+// SPIDY RUN).
+// Version 27 appends softLanding (off by default): a fall with no web eases
+// to 9 m/s down over its last metres (Swing::allowSoftLanding, SOFT LANDING).
+// Version 26 appends momentumLeap (off by default): a charged leap keeps the
+// run's speed (Swing::allowMomentumLeap, RUNNING LEAP).
+// Version 25 appends webAngle, degrees -45 to 45 (0 as before), and
+// wristShooters (off by default): the line each hand's webs leave along
+// (web_aim.hpp, WEB ANGLE and WRIST SHOOTERS).
+// Version 24 appends airSlingshot (off by default): the slingshot's draw and
+// release in the air, from two webs under tension (Swing::allowAirSlingshot).
+// Version 22 appends singleHandYankPercent: 50 to 300, how much speed a fast
+// one-hand yank adds (Swing::singleHandYankStrength); 100 as before.
 // Version 21 appends halfPunchDamage (off by default): punches and web
 // strikes deal half their health damage (HALF PUNCH DAMAGE).
 // Version 20 appends webSpeed (0 off, a web sticks at once; 1 to 3 it flies
@@ -261,7 +320,7 @@ static_assert(sizeof(Config) == 64 && sizeof(Hand) == 52 && sizeof(Command) == 2
 // Version 8 appends handClimb without changing the upstream phone or arcade
 // fields. Older official settings keep their original layout and meaning.
 struct Settings {
-    uint32_t magic = 0x53575354, version = 22, bytes = sizeof(Settings), grab = 1;
+    uint32_t magic = 0x53575354, version = 32, bytes = sizeof(Settings), grab = 1;
     float maxSpeed = 32;
     uint32_t airWebs = 1;
     float gravity = 6;
@@ -283,14 +342,30 @@ struct Settings {
     float webRange = 100;
     uint32_t webSpeed{};
     uint32_t halfPunchDamage{};
+    uint32_t singleHandYankPercent = 100;
+    uint32_t webTie{};
+    uint32_t airSlingshot{};
+    int32_t webAngle{};
+    uint32_t wristShooters{};
+    uint32_t momentumLeap{};
+    uint32_t softLanding{};
+    uint32_t spidyRun{};
+    uint32_t spidyRunStanding{};
+    uint32_t webLandingSmooth{};
+    float webLandingImpact = 24;
+    uint32_t webLines{};
     uint32_t enemyTypes = 1;
 };
 constexpr uint32_t settingsBytesV3 = 28, settingsBytesV4 = 32, settingsBytesV5 = 36, settingsBytesV6 = 40,
                    settingsBytesV7 = 44, settingsBytesV8 = 48, settingsBytesV9 = 52, settingsBytesV10 = 56,
                    settingsBytesV11 = 60, settingsBytesV12 = 64, settingsBytesV13 = 68,
                    settingsBytesV14 = 72, settingsBytesV15 = 76, settingsBytesV16 = 80, settingsBytesV17 = 84,
-                   settingsBytesV18 = 88, settingsBytesV19 = 92, settingsBytesV20 = 96, settingsBytesV21 = 100;
-static_assert(sizeof(Settings) == 104 && offsetof(Settings, walls) == settingsBytesV3 &&
+                   settingsBytesV18 = 88, settingsBytesV19 = 92, settingsBytesV20 = 96,
+                   settingsBytesV21 = 100, settingsBytesV22 = 104, settingsBytesV23 = 108,
+                   settingsBytesV24 = 112, settingsBytesV25 = 120, settingsBytesV26 = 124,
+                   settingsBytesV27 = 128, settingsBytesV28 = 132, settingsBytesV29 = 136,
+                   settingsBytesV30 = 144, settingsBytesV31 = 148;
+static_assert(sizeof(Settings) == 152 && offsetof(Settings, walls) == settingsBytesV3 &&
               offsetof(Settings, physical) == settingsBytesV4 &&
               offsetof(Settings, noBlows) == settingsBytesV5 &&
               offsetof(Settings, arcade) == settingsBytesV6 &&
@@ -308,7 +383,41 @@ static_assert(sizeof(Settings) == 104 && offsetof(Settings, walls) == settingsBy
               offsetof(Settings, webRange) == settingsBytesV18 &&
               offsetof(Settings, webSpeed) == settingsBytesV19 &&
               offsetof(Settings, halfPunchDamage) == settingsBytesV20 &&
-              offsetof(Settings, enemyTypes) == settingsBytesV21);
+              offsetof(Settings, singleHandYankPercent) == settingsBytesV21 &&
+              offsetof(Settings, webTie) == settingsBytesV22 &&
+              offsetof(Settings, airSlingshot) == settingsBytesV23 &&
+              offsetof(Settings, webAngle) == settingsBytesV24 &&
+              offsetof(Settings, momentumLeap) == settingsBytesV25 &&
+              offsetof(Settings, softLanding) == settingsBytesV26 &&
+              offsetof(Settings, spidyRun) == settingsBytesV27 &&
+              offsetof(Settings, spidyRunStanding) == settingsBytesV28 &&
+              offsetof(Settings, webLandingSmooth) == settingsBytesV29 &&
+              offsetof(Settings, webLines) == settingsBytesV30 &&
+              offsetof(Settings, enemyTypes) == settingsBytesV31);
+// SpidySwingWebTurns (WEB AIM: MODEL FOREARM, web_aim::ForearmAim): the turn
+// each hand's aim pose takes before WEB ANGLE and WRIST SHOOTERS, in the aim
+// pose's own frame, sent by the VR worker each frame while the setting is on
+// (and the identity once when it goes off). Only the webs' line takes it - the
+// swing, the grab, the web balls and the aim previews - never the fists, the
+// walls or the vents. Turns older than webTurnsMaxAgeMs are the identity, so a
+// worker that stops sending leaves the controller's line. An optional export:
+// a module without it aims as before.
+struct WebTurns {
+    uint32_t magic = 0x53575754, version = 1, bytes = sizeof(WebTurns), active{};
+    Quat turns[2]{};
+};
+static_assert(sizeof(WebTurns) == 48);
+constexpr uint64_t webTurnsMaxAgeMs = 250;
+inline bool validWebTurns(const WebTurns& t) {
+    if (t.magic != 0x53575754 || t.version != 1 || t.bytes != sizeof(WebTurns) || t.active > 1)
+        return false;
+    for (const auto& q : t.turns) {
+        const float n = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+        if (!std::isfinite(n) || std::abs(n - 1) > .01f)
+            return false;
+    }
+    return true;
+}
 // SpidyWebFlightSample: each hand's web in flight (WEB SPEED). phases: 0 no
 // web, 1 flying, 2 just arrived and catching softly, 3 holding.
 struct WebFlightData {
@@ -448,7 +557,17 @@ inline bool validSettings(const Settings& s) {
          (s.version == 19 && s.bytes == settingsBytesV19) ||
          (s.version == 20 && s.bytes == settingsBytesV20) ||
          (s.version == 21 && s.bytes == settingsBytesV21) ||
-         (s.version == 22 && s.bytes == sizeof(Settings))) &&
+         (s.version == 22 && s.bytes == settingsBytesV22) ||
+         (s.version == 23 && s.bytes == settingsBytesV23) ||
+         (s.version == 24 && s.bytes == settingsBytesV24) ||
+         (s.version == 25 && s.bytes == settingsBytesV25) ||
+         (s.version == 26 && s.bytes == settingsBytesV26) ||
+         (s.version == 27 && s.bytes == settingsBytesV27) ||
+         (s.version == 28 && s.bytes == settingsBytesV28) ||
+         (s.version == 29 && s.bytes == settingsBytesV29) ||
+         (s.version == 30 && s.bytes == settingsBytesV30) ||
+         (s.version == 31 && s.bytes == settingsBytesV31) ||
+         (s.version == 32 && s.bytes == sizeof(Settings))) &&
         s.grab <= 1 && std::isfinite(s.maxSpeed) && s.maxSpeed > 0 && s.maxSpeed <= motionSpeedLimit &&
         s.airWebs <= 1 && std::isfinite(s.gravity) && s.gravity >= 0 && s.gravity <= maxGravity &&
         s.walls <= 4 && s.physical <= 1 && s.noBlows <= 3 && s.arcade <= 1 && s.handClimb <= 1 &&
@@ -456,7 +575,16 @@ inline bool validSettings(const Settings& s) {
         s.elasticWeb <= 3 && s.softRelease <= 3 && s.swingAssist <= 1 && std::isfinite(s.slingshotSpeed) &&
         (s.slingshotSpeed == 0 || (s.slingshotSpeed >= 20 && s.slingshotSpeed <= 300)) && s.twoHandZip <= 1 &&
         s.ropeSteering <= 1 && std::isfinite(s.webRange) && s.webRange >= 10 && s.webRange <= 1000 &&
-        s.webSpeed <= 3 && s.halfPunchDamage <= 1 && s.enemyTypes <= 1;
+        s.webSpeed <= 3 && s.halfPunchDamage <= 1 &&
+        (s.version < 22 || (s.singleHandYankPercent >= 50 && s.singleHandYankPercent <= 300)) &&
+        s.webTie <= 1 &&
+        (s.version < 24 || s.airSlingshot <= 1) &&
+        (s.version < 25 || (s.webAngle >= -45 && s.webAngle <= 45 && s.wristShooters <= 2)) &&
+        (s.version < 26 || s.momentumLeap <= 1) && (s.version < 27 || s.softLanding <= 1) &&
+        (s.version < 28 || s.spidyRun <= 1) && (s.version < 29 || s.spidyRunStanding <= 1) &&
+        (s.version < 30 || (s.webLandingSmooth <= 1 && std::isfinite(s.webLandingImpact) &&
+                            s.webLandingImpact >= 5 && s.webLandingImpact <= 100)) &&
+        (s.version < 31 || s.webLines <= 1) && (s.version < 32 || s.enemyTypes <= 1);
 }
 static_assert(sizeof(WebState) == 28 && sizeof(Data) == 272 && offsetof(Data, wall) == 240);
 // The player is in the air: Spidy's own flight, or the game's jump or fall,
@@ -464,9 +592,18 @@ static_assert(sizeof(WebState) == 28 && sizeof(Data) == 272 && offsetof(Data, wa
 // 0x10: the steps the game's air state runs). A perch, a wall crawl and a
 // wall run are neither, and a sample whose step is over 100 ms older than
 // `nowQpc` says nothing (a perch or ledge the game animates without steps).
+// A body the swing runs on the ground (SPIDY RUN, SMOOTH WEB LANDING's carry:
+// owned and grounded) is not in the air. Until November 11 every owned step
+// was: REALISTIC FLIPS turned a player who walked into SPIDY RUN and moved
+// the arms ("when walking if you move your arms you start flipping on
+// ground", with a video), the wind's body haptics blew there, and the A of a
+// jump there never reached the game's jump that game_pad::JumpRelay waits to
+// give it (with SPIDY RUN JUMP off). One 0.8.5 session ran 495 such steps,
+// all at a standstill up and down and 10 to 14 m/s across.
 inline bool airborne(const Data& d, int64_t nowQpc, int64_t qpcFrequency) {
     const bool recent = d.qpc && static_cast<int64_t>(d.qpc) > nowQpc - qpcFrequency / 10;
-    return recent && (d.status == 1 || d.status == 2) && (d.owned || (!d.grounded && (d.collisionFlags & 0x10u)));
+    return recent && (d.status == 1 || d.status == 2) && !d.grounded &&
+           (d.owned || (d.collisionFlags & 0x10u));
 }
 // What a grip press would do now with each hand (SpidyAimSample), for the
 // headset's aim markers: worked out in the world-query callback with the rays
@@ -510,7 +647,7 @@ inline bool valid(const Command& c) {
           (c.version == 6 && c.bytes == sizeof(c))) ||
         !std::isfinite(c.leap) || c.leap < 0 || c.leap > 1 || !finite(c.look) || length(c.look) > 1.01f ||
         !c.serial || c.focused > 1 || c.jump > 1 || c.leaseMs > 250 || (c.focused && !c.leaseMs) ||
-        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 3 ||
+        !finite(c.move) || length(c.move) > 1.001f || !std::isfinite(c.trackingYaw) || c.asks > 127 ||
         !std::isfinite(c.sampleSeconds) || c.sampleSeconds <= 0 || c.sampleSeconds > .1f ||
         (c.focused && !c.sampleTimeNs) || !std::isfinite(tilt) || tilt < .99f || tilt > 1.01f)
         return false;
@@ -551,10 +688,33 @@ class InputSampleClock {
   private:
     uint64_t serial_{}, time_{};
 };
+// The game's running time, ms: the time from one of the swing's visits (a
+// game frame) to the next, each gap counted up to maxGapMs. A load hitch
+// stops the game's whole frame, visits too, and counts as one long frame:
+// timed by the wall clock, a hitch over half a second let go of every web
+// (the input held for controlHoldMs ran out, or the mover had not stepped
+// for that long), the player, November 2: "with load stutters while swinging
+// I very often lose the web, as if it were cut or I let go".
+class RunClock {
+  public:
+    static constexpr uint64_t maxGapMs = 100;
+    uint64_t update(uint64_t nowMs) {
+        if (started_ && nowMs >= lastMs_)
+            runMs_ += std::min(nowMs - lastMs_, maxGapMs);
+        lastMs_ = nowMs;
+        started_ = true;
+        return runMs_;
+    }
+
+  private:
+    uint64_t lastMs_{}, runMs_{};
+    bool started_{};
+};
 // The input the swing acts on. A focused sample stays in use for
 // controlHoldMs after input stops coming or turns unfocused, as if no new
 // sample had arrived: a game frame of over 100 ms closes the XR worker's
-// gameplay gate. Letting go there handed a swinging player to the game's own
+// gameplay gate. The time is the game's running time (RunClock), so a load
+// hitch of any length is a stutter here. Letting go there handed a swinging player to the game's own
 // fall, which counts the time airborne through Spidy's flight and starts at
 // 36-48 m/s down (October 6-7 headset reports).
 class InputHold {
@@ -671,6 +831,10 @@ inline Input input(const Command& c) {
     Input out;
     out.focused = c.focused != 0;
     out.jump = c.jump != 0;
+    // Bit 2 of asks (COMBAT RESPONSIVE): the player fights now.
+    out.fighting = (c.asks & 4u) != 0;
+    // Bit 3 (SPIDY RUN JUMP): A out of the swing's run is its own jump.
+    out.runJump = (c.asks & 8u) != 0;
     out.move = c.move;
     out.trackingYaw = c.trackingYaw;
     const float n =

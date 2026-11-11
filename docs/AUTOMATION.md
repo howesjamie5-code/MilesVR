@@ -182,7 +182,13 @@ holding, done; `hint`: what the panel asks for; `progress`; `done` and
 the session's last line hands a calibration made or skipped to the launcher;
 `body` has `arm_scale`. XrConfig is version 23 and XrData version 23 (664 and 824
 bytes; a sample's `heals` and `zips` count the right stick's pushes that reached the
-game as its D-pad down and its LT + RT; `run_game_vr.py --screen-depth 0`..`3` is the depth cutscenes have on
+game as its D-pad down and its LT + RT; `run_game_vr.py --first-person-cutscenes`
+plays scenes from inside the hero's head instead of on the game screen (options
+bit 22; `--no-cutscene-head-tracking`, bit 23: the scene's camera aims;
+`game_fp.cpp`), and `--disable-theater-screen` (bit 24) plays every scene
+around you with no theatre screen, from the scene's own camera when
+first-person cutscenes are off;
+`run_game_vr.py --screen-depth 0`..`3` is the depth cutscenes have on
 the game screen, 2 by default and 0 flat, a sample's `vr_settings`
 `screen_depth`; `run_game_vr.py --upscale 50`..`100` is the share of the eye's size, per
 side, that its scene is rendered at, 67 by default; `--no-eye-antialiasing`
@@ -278,6 +284,27 @@ the game's view). `tools/probe_hud.py` takes `--views` and `--upscale` too.
 median, 99th percentile and longest, and those over 1.5 and 2 medians;
 `probe_vr_load.py --pacing` runs it beside each phase. A frame rate is those
 intervals' mean, stutter their spread.
+`tools/probe_vr_swing.py` (free roam, outdoors) renders the eyes as a VR
+session does, sends them eye commands 90 times a second from a thread of
+its own as the XR worker does once a headset frame, and lets the game's own
+swing carry the hero (the virtual controller's right trigger and left stick;
+it jumps and turns where he stops against something). Phases
+(`name:seconds:pacing[:cone[:reach[:blur]]]`) report the frame rate and its
+intervals, how old the newest pair was at each command, pacing's waits, the
+slot pool and its refusals, the texture budget, the hero's speed, the card's
+load, and how often the game asked its speed blur of its own view and of the
+eyes (`blur` 1 lets the eyes keep it, as before November 1). A phase's name
+picks the moves: `stand...` none, `zip...` web zips, `dive...` the swing let
+go, `point...` point launches (left trigger), `launch...`, `fall...` and
+`boost...` the hero carried by the movement bridge (a climb and a 50 m/s
+dive, a fall from some 100 m, 46 m/s with the swing's rope on). `--pictures
+N` saves the left eye while the game asks its blur, and in those moves'
+fastest moments; every pair is read back then, so compare no frame rates.
+Each run first calls the game's blur function for the left eye, where the
+entry is the hook's jump, and reports what the hook did (`blur_hook_check`).
+On November 1 nothing in nine games made the game ask its blur. Probes that
+send eye commands at their own rate leave pacing off (the stereo module's
+default); the VR launcher turns it on.
 `probe_vr_load.py`'s phase `sway` moves the eyes as a head that is never
 still does (2 cm, a degree, about once a second): what holds on a still eye
 (reflections, anti-aliasing) is checked there as well. Judge an effect in an

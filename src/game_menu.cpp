@@ -1,4 +1,4 @@
-// The MILES VR tab in the game's own Settings (game_menu.hpp; Spidy's SPIDY VR
+// The VR category tabs (MILES VR among them) in the game's own Settings (game_menu.hpp; Spidy's SPIDY VR
 // tab, ported). Addresses are image offsets in the supported MilesMorales.exe.
 //
 // The game's Settings are Scaleform (Flash) screens fed by its settings system
@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -82,7 +83,8 @@ constexpr uintptr_t openOptionsName = 0x3df9568, resetAllHash = 0x77f76e8;
 constexpr uintptr_t settingType = 0x4099560, headingType = 0x40996b0;
 // The tab's id: the game's run 0-10, and its RESET ALL ignores any above (it
 // must not be 2, 7 or 8, which the tab builder treats as special pages).
-constexpr uint32_t tabId = 93;
+constexpr uint32_t tabId = 93; // the first VR category; one native tab per category (93-100)
+constexpr size_t screenCount = vr_settings::categoryCount;
 // The rows' setting numbers: the game's run 0-136 (its row filter, 9867e0,
 // passes any number above).
 constexpr int firstSetting = 0x200;
@@ -149,21 +151,24 @@ AddItemFn originalAddItem{};
 uintptr_t imageBase{};
 SRWLOCK lock = SRWLOCK_INIT;
 vr_settings::Values shown;
-// Bits 1 << Item changed in the tab and not taken yet. 64 of them: the haptics'
-// groups took Item past 31, where a 32-bit shift is undefined (x86 wraps it
-// onto another setting's bit).
-uint64_t pending{};
-static_assert(static_cast<unsigned>(vr_settings::lastItem) < 64, "more settings than pending's bits");
+// A bit per Item changed in the tab and not taken yet, one for every value an
+// Item can have: a 32-bit mask overflowed once the haptics' groups took Item
+// past 31 (x86 wrapped the shift onto another setting's bit), and a 64-bit
+// one ended at Item 63 (WEB TIE is 64).
+constexpr size_t itemBits = size_t{1} << (8 * sizeof(Item));
+using ItemBits = std::bitset<itemBits>;
+ItemBits pending;
+static_assert(static_cast<size_t>(vr_settings::lastItem) < itemBits, "more settings than pending's bits");
 std::atomic<uint64_t> tabsBuilt{}, changesMade{};
 std::atomic<uint32_t> failure{};
 std::atomic<bool> hooked{}, created{};
 // The tab and its items: 0 not built yet, 1 ready, 2 cannot be built.
 std::atomic<int> built{};
-alignas(16) unsigned char tab[tabBytes];
+alignas(16) unsigned char tab[screenCount][tabBytes];
 alignas(16) unsigned char items[rowCount][itemBytes];
 // The tab's own items (its Place's rows), and the row on the first page.
-alignas(16) unsigned char tabItems[rowCount][itemBytes];
-size_t tabRows{};
+alignas(16) unsigned char tabItems[screenCount][rowCount][itemBytes];
+size_t tabRows[screenCount]{};
 int pageRow = -1;
 std::atomic<uint64_t> pagesBuilt{};
 // The page's own build is this game's (checked at install): without it VR
@@ -181,7 +186,7 @@ struct Text {
     uint32_t hash;
     const char* text;
 };
-std::array<Text, 2 + rowCount * 2 + rowCount * maxChoices> texts{};
+std::array<Text, screenCount * 2 + rowCount * 2 + rowCount * maxChoices> texts{};
 size_t textCount{};
 // Indices into texts, sorted by hash.
 std::array<uint16_t, std::size(texts)> byHash{};
@@ -203,7 +208,7 @@ const Text* addText(const char* tag, const char* text) {
     ++textCount;
     return &t;
 }
-const Text *tabName{}, *tabHeading{};
+const Text *tabName[screenCount]{}, *tabHeading[screenCount]{};
 const Text *titles[rowCount]{}, *helps[rowCount]{};
 // The first page's button's name, which says what A does (pageTitles).
 Text* pageTitle{};
@@ -211,9 +216,13 @@ const Text* choiceTexts[rowCount][maxChoices]{};
 void addTexts() {
     if (textCount)
         return;
-    tabName = addText("MILES_VR_TAB", "MILES VR");
-    tabHeading = addText("MILES_VR_HEADING", "MILES VR SETTINGS");
     char tag[24];
+    for (size_t s = 0; s < screenCount; ++s) {
+        sprintf_s(tag, "SPIDY_VR_TAB_%zu", s);
+        tabName[s] = addText(tag, vr_settings::screens()[s].tabTitle);
+        sprintf_s(tag, "SPIDY_VR_HEAD_%zu", s);
+        tabHeading[s] = addText(tag, vr_settings::screens()[s].tabTitle);
+    }
     for (size_t r = 0; r < rowCount; ++r) {
         const auto& row = vr_settings::rows()[r];
         sprintf_s(tag, "MILES_VR_%zu", r);
@@ -316,21 +325,27 @@ uint32_t buildItems() {
                 std::memset(c + choiceClearFrom, 0, choiceClearTo - choiceClearFrom);
             }
         }
-        // The tab's rows, and the one for the first page; the launcher's own are in neither.
-        tabRows = 0;
+        // Stable setting numbers, grouped in short category tabs. Legacy section
+        // headings stay in the catalog for compatibility but are not repeated here.
         pageRow = -1;
         for (size_t r = 0; r < rowCount; ++r)
             if (vr_settings::rows()[r].place == vr_settings::Place::page)
                 pageRow = static_cast<int>(r);
-            else if (vr_settings::rows()[r].place == vr_settings::Place::tab)
-                std::memcpy(tabItems[tabRows++], items[r], itemBytes);
-        std::memcpy(tab, reinterpret_cast<const void*>(menu), tabBytes);
-        put<uint32_t>(tab, 8, tabId);
-        putText(tab, 0x10, tabName);
-        putText(tab, 0x20, tabHeading);
-        put<uint64_t>(tab, tabItems_, reinterpret_cast<uint64_t>(tabItems));
-        put<uint32_t>(tab, tabCount, static_cast<uint32_t>(tabRows));
-        put<uint32_t>(tab, tabRoom, static_cast<uint32_t>(tabRows));
+        for (size_t s = 0; s < screenCount; ++s) {
+            tabRows[s] = 0;
+            for (Item wanted : vr_settings::screens()[s].items)
+                for (size_t r = 0; r < rowCount; ++r)
+                    if (vr_settings::rows()[r].item == wanted &&
+                        vr_settings::rows()[r].place == vr_settings::Place::tab)
+                        std::memcpy(tabItems[s][tabRows[s]++], items[r], itemBytes);
+            std::memcpy(tab[s], reinterpret_cast<const void*>(menu), tabBytes);
+            put<uint32_t>(tab[s], 8, tabId + static_cast<uint32_t>(s));
+            putText(tab[s], 0x10, tabName[s]);
+            putText(tab[s], 0x20, tabHeading[s]);
+            put<uint64_t>(tab[s], tabItems_, reinterpret_cast<uint64_t>(tabItems[s]));
+            put<uint32_t>(tab[s], tabCount, static_cast<uint32_t>(tabRows[s]));
+            put<uint32_t>(tab[s], tabRoom, static_cast<uint32_t>(tabRows[s]));
+        }
         return 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return 9501;
@@ -354,18 +369,36 @@ void addTab(GfxValue& tabs) {
     if (!ready())
         return;
     __try {
-        GfxValue value{};
-        std::memset(value.head, 0xff, sizeof(value.head));
         void* movie = reinterpret_cast<void*(__fastcall*)()>(imageBase + uiMovie)();
         if (!movie)
             return;
-        buildingTab = true;
-        const bool made =
-            reinterpret_cast<bool(__fastcall*)(GfxValue*, void*, const void*)>(imageBase + buildTab)(&value, movie, tab);
-        buildingTab = false;
-        if (made && pushBack(tabs, value))
+        AcquireSRWLockShared(&lock);
+        for (size_t r = 0; r < rowCount; ++r)
+            if (helps[r]) {
+                const auto& row = vr_settings::rows()[r];
+                const char* reason = vr_settings::inactiveReason(row.item, shown);
+                const_cast<Text*>(helps[r])->text = reason ? reason : row.help;
+            }
+        ReleaseSRWLockShared(&lock);
+        bool allMade = true;
+        for (size_t s = 0; s < screenCount; ++s) {
+            GfxValue value{};
+            std::memset(value.head, 0xff, sizeof(value.head));
+            buildingTab = true;
+            const bool made = reinterpret_cast<bool(__fastcall*)(GfxValue*, void*, const void*)>(
+                imageBase + buildTab)(&value, movie, tab[s]);
+            buildingTab = false;
+            const bool added = made && pushBack(tabs, value);
+            releaseValue(value);
+            if (!added) {
+                allMade = false;
+                failure = 9503;
+                break;
+            }
+        }
+        // Count completed Settings builds, as before (the diagnostics protocol is unchanged).
+        if (allMade)
             ++tabsBuilt;
-        releaseValue(value);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         // Not again this session; the game's own tabs go on.
         buildingTab = false;
@@ -412,7 +445,7 @@ void change(Item item, int index) {
     AcquireSRWLockExclusive(&lock);
     const bool changed = vr_settings::choose(item, index, shown);
     if (changed)
-        pending |= uint64_t{1} << static_cast<unsigned>(item);
+        pending.set(static_cast<size_t>(item));
     ReleaseSRWLockExclusive(&lock);
     if (changed)
         ++changesMade;
@@ -482,11 +515,19 @@ void __fastcall callbackHook(void* ui, uint32_t hash, GfxValue* args, uint32_t c
     }
     // Y RESET ALL on the MILES VR tab: the game's RESET ALL takes only its own tabs.
     if (built == 1 && args && count >= 1 && (args[0].type & typeMask) == intType &&
-        static_cast<uint32_t>(args[0].data) == tabId && hash == get<uint32_t>(imageBase + resetAllHash)) {
-        // The tab's own rows: VR VIEW is on the first page, and the launcher keeps its own.
-        for (size_t r = 0; r < rowCount; ++r)
-            if (vr_settings::rows()[r].place == vr_settings::Place::tab)
-                change(itemOf(static_cast<int>(r)), vr_settings::defaultChoice(itemOf(static_cast<int>(r))));
+        static_cast<uint32_t>(args[0].data) >= tabId &&
+        static_cast<uint32_t>(args[0].data) < tabId + screenCount &&
+        hash == get<uint32_t>(imageBase + resetAllHash)) {
+        const size_t category = static_cast<uint32_t>(args[0].data) - tabId;
+        AcquireSRWLockExclusive(&lock);
+        const auto reset = vr_settings::resetCategory(static_cast<vr_settings::Category>(category), shown);
+        for (Item item : vr_settings::screens()[category].items)
+            if (const auto* row = vr_settings::rowFor(item); row && row->place == vr_settings::Place::tab)
+                if (vr_settings::choose(item, vr_settings::choice(item, reset), shown)) {
+                    pending.set(static_cast<size_t>(item));
+                    ++changesMade;
+                }
+        ReleaseSRWLockExclusive(&lock);
         // Built again, every tab shows its values, as after the game's own RESET ALL.
         reinterpret_cast<void(__fastcall*)(void*)>(imageBase + openOptions)(ui);
         return;
@@ -510,10 +551,15 @@ float __fastcall valueHook(void* system, int setting) {
     ReleaseSRWLockShared(&lock);
     return static_cast<float>(index);
 }
-// Whether it can be changed now: always.
+// Dependent controls retain their values while their parent or overriding mode is inactive.
 bool __fastcall activeHook(void* system, int setting) {
     const int r = rowOf(setting);
-    return r < 0 ? originalActive(system, setting) : true;
+    if (r < 0)
+        return originalActive(system, setting);
+    AcquireSRWLockShared(&lock);
+    const bool active = vr_settings::inactiveReason(itemOf(r), shown) == nullptr;
+    ReleaseSRWLockShared(&lock);
+    return active;
 }
 // Its default, as a value and as a choice: what X RESET puts back.
 float __fastcall defaultHook(void* system, int setting) {
@@ -615,9 +661,10 @@ bool matches(uintptr_t at, const unsigned char* bytes, size_t count) {
         return false;
     }
 }
-vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Values to, uint64_t which) {
+vr_settings::Values copyItems(const vr_settings::Values& from, vr_settings::Values to,
+                              const ItemBits& which) {
     for (unsigned i = 1; i <= static_cast<unsigned>(vr_settings::lastItem); ++i)
-        if (which & (uint64_t{1} << i))
+        if (which.test(i))
             vr_settings::choose(static_cast<Item>(i), vr_settings::choice(static_cast<Item>(i), from), to);
     return to;
 }
@@ -665,17 +712,17 @@ void game_menu::uninstall() {
 void game_menu::publish(const vr_settings::Values& values) {
     AcquireSRWLockExclusive(&lock);
     // A change from the tab not taken yet stays as the tab left it.
-    shown = pending ? copyItems(shown, values, pending) : values;
+    shown = pending.any() ? copyItems(shown, values, pending) : values;
     ReleaseSRWLockExclusive(&lock);
 }
 bool game_menu::take(vr_settings::Values& values) {
     AcquireSRWLockExclusive(&lock);
-    const uint64_t which = pending;
-    if (which)
+    const ItemBits which = pending;
+    if (which.any())
         values = copyItems(shown, values, which);
-    pending = 0;
+    pending.reset();
     ReleaseSRWLockExclusive(&lock);
-    return which != 0;
+    return which.any();
 }
 Telemetry game_menu::telemetry() {
     Telemetry t;

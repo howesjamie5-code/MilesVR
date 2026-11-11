@@ -65,6 +65,7 @@ struct GameMotionFrame {
     // tracking space turns onto it; and how far it leans from the world's up
     // now, radians (0 level, a quarter turn on a wall).
     bool standing{};
+    bool joystickWallRun{}; // locomotion, independent of the optional camera transition
     float wallRoll{};
     bool wallRotate{};
     bool ventCrawl{};
@@ -87,8 +88,10 @@ struct GameMotionFrame {
     bool climbTracking{};
     std::array<Vec3, 2> climbGrips{}; // tracking metres relative to the head at hold entry
     std::array<float, 2> climbHold{};
-    Quat bodyTilt() const {
-        return standing ? flipTilt : swing.tilt;
+    Quat bodyTilt(bool runningPose = false) const {
+        // The travel-driven wall-run gait stays in the wall frame. The camera
+        // may stand on that wall, but it must not select a different body pose.
+        return runningPose ? Quat{} : standing ? flipTilt : swing.tilt;
     }
 };
 // Only wall-climb locomotion/stride cues use the fixed tracking reference.
@@ -372,6 +375,13 @@ class GameTrackingRig {
     void standOnWalls(bool on) {
         standOnWalls_ = on;
     }
+    // DODGE TUMBLE (dodge_tumble.hpp): a world turn the eyes alone take about
+    // the head at the next updates, until set back to the identity. The head
+    // pose, the hands and all placed from them stay where they are. The
+    // identity until set; reset() keeps it.
+    void viewTurn(Quat turn) {
+        viewTurn_ = finite(Vec3{turn.x, turn.y, turn.z}) && std::isfinite(turn.w) ? turn : Quat{};
+    }
     // The eyes out of what the world is built of (HeadClearance). Before an
     // update: a point inside the player's body, where no wall is (the rays'
     // start), and each surface found since the last one - by the rays the
@@ -439,6 +449,9 @@ class GameTrackingRig {
     void wallRunCameraDistance(float metres) {
         runCameraDistance_ = std::isfinite(metres) ? std::clamp(metres, .4f, 1.6f) : .9f;
     }
+    void joystickWallRunCamera(bool enabled) {
+        joystickRunCamera_ = enabled;
+    }
     void wallRunCameraTilt(bool enabled) { runCameraTilt_ = enabled; }
     // Actual solved body stance, not the player's momentary look direction.
     void outwardCrawl(float weight) {
@@ -475,6 +488,7 @@ class GameTrackingRig {
     Quat surfaceTurn_{};
     Vec3 surfaceShift_{};
     bool standing_{}, standOnWalls_ = true;
+    Quat viewTurn_{};
     bool handClimb_{};
     unsigned wallHands_{};
     float runCameraDistance_ = .9f;
@@ -493,6 +507,7 @@ class GameTrackingRig {
     bool ventViewActive_{};
     float runYaw_{}, runHeadYaw_{};
     bool wallRunning_{};
+    bool joystickRunCamera_ = true;
     bool runViewEnabled_{}, runViewActive_{}, runCameraTilt_{};
     float runCameraBank_{};
     unsigned runViewSupports_{};

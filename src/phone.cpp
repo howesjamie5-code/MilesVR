@@ -574,12 +574,9 @@ bool PocketDraw::update(float seconds, bool play, const Pose& head, const Pose g
     return out;
 }
 
-std::string phoneSongName(const std::string& fileName, int track) {
-    std::string name = fileName;
-    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
-        name.erase(0, slash + 1);
-    if (const auto dot = name.find_last_of('.'); dot != std::string::npos && dot > 0)
-        name.erase(dot);
+namespace {
+// A name as the phone draws it (phoneSongName), empty with nothing drawable.
+std::string phoneText(const std::string& name) {
     std::string letters;
     for (size_t i = 0; i < name.size();) {
         const uint32_t c = nextCodePoint(name, i);
@@ -599,7 +596,23 @@ std::string phoneSongName(const std::string& fileName, int track) {
             out += c;
     while (!out.empty() && out.back() == ' ')
         out.pop_back();
-    if (!out.empty())
+    return out;
+}
+std::string lower(std::string s) {
+    for (auto& c : s)
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<char>(c - 'A' + 'a');
+    return s;
+}
+} // namespace
+
+std::string phoneSongName(const std::string& fileName, int track) {
+    std::string name = fileName;
+    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
+        name.erase(0, slash + 1);
+    if (const auto dot = name.find_last_of('.'); dot != std::string::npos && dot > 0)
+        name.erase(dot);
+    if (auto out = phoneText(name); !out.empty())
         return out;
     return track >= 0 ? "TRACK " + std::to_string(track + 1) : "SONG";
 }
@@ -753,5 +766,45 @@ void appendPhone(std::vector<Vertex>& out, const PhoneView& view) {
         gearScreen(out, p, view);
         break;
     }
+}
+std::string phoneMediaSong(const std::string& artist, const std::string& title) {
+    const std::string a = phoneText(artist), t = phoneText(title);
+    if (!a.empty() && !t.empty())
+        return a + " - " + t;
+    return !t.empty() ? t : !a.empty() ? a : "SONG";
+}
+
+std::string phoneMediaSource(const std::string& appId) {
+    std::string name = appId;
+    // A Store app's ID is its package and then its app: Spotify's
+    // "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify".
+    if (const auto bang = name.find_last_of('!'); bang != std::string::npos)
+        name.erase(0, bang + 1);
+    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
+        name.erase(0, slash + 1);
+    if (name.size() > 4 && lower(name.substr(name.size() - 4)) == ".exe")
+        name.erase(name.size() - 4);
+    const std::string id = lower(name);
+    if (id == "msedge")
+        return "EDGE";
+    // A hash for a name (Firefox's, from its folder): no app to say.
+    const bool hash = id.size() >= 12 && id.find_first_not_of("0123456789abcdef") == std::string::npos;
+    std::string out = hash ? std::string{} : phoneText(name);
+    for (auto& c : out)
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    if (out.empty())
+        return "PC";
+    return out.substr(0, 23);
+}
+
+bool phoneMediaAppMatches(const std::string& appId, const std::string& process) {
+    std::string name = process;
+    if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos)
+        name.erase(0, slash + 1);
+    name = lower(name);
+    if (name.size() > 4 && name.substr(name.size() - 4) == ".exe")
+        name.erase(name.size() - 4);
+    return name.size() >= 3 && lower(appId).find(name) != std::string::npos;
 }
 } // namespace spidy

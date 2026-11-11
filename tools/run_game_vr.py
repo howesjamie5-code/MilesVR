@@ -25,12 +25,12 @@ from bridge_game import (ROOT, HOOKS, prepare, snapshot as bridge_snapshot, Game
 from inspect_game import PE, EXPECTED_VERSION
 from observe_game import call_remote, call_with_payload, modules
 from probe_stereo_gpu import MAX_EYE_SIZE, discover_queue, snapshot as gpu_snapshot, save_eye_images
-from probe_stereo import (frame_snapshot, render_memory_snapshot, snapshot as stereo_snapshot, encode_mip_bias,
-                          mip_bias_snapshot)
+from probe_stereo import (frame_snapshot, render_memory_snapshot, scene_pool_snapshot, snapshot as stereo_snapshot,
+                          encode_mip_bias, mip_bias_snapshot)
 from probe_native_rays import snapshot as ray_snapshot
 from probe_game_swing import snapshot as swing_snapshot
 from probe_native_motion import snapshot as motion_snapshot
-from vr_launcher import (LauncherLock, alive, bring_to_front, wait_for_game, enlarge_render_memory, elevated,
+from vr_launcher import (LauncherLock, alive, exit_status, bring_to_front, wait_for_game, enlarge_render_memory, elevated,
                          RENDER_MEMORY_HOOKS, NeedsAdministrator, NEEDS_ADMINISTRATOR_EXIT, CLOSE_GAME_EXIT,
                          close_game)
 import game_freeze
@@ -591,9 +591,12 @@ def start_settings(a):
 
 
 def settings_line(start, sample):
-    """The line for the launcher, or None while the settings are as the session started."""
+    """The line for the launcher, or None while the settings are as the session started. A session that showed
+    no frame held none: the XR worker reports its settings with its first frame and zeros before it, and a
+    session that ended there (Virtual Desktop refused the eye images, November 1) handed the launcher zeros,
+    which it saved, so the next session started at every setting's least (swing speed 10, weight 40%)."""
     now = (sample or {}).get('vr_settings')
-    if not now or now == start:
+    if not now or now == start or not (sample or {}).get('frames'):
         return None
     return SETTINGS_LINE + ' '.join(f'{k}={int(round(v))}' for k, v in now.items())
 
@@ -1520,10 +1523,10 @@ def stream_snapshot(game, address):
     """SpidyStreamData (native_stream.hpp): the far buildings' cone about the head, the scene's slot pool their
     full models share with the nearby details, and the texture streamer's budget."""
     for _ in range(8):
-        raw = game.read(address, 88)
-        if len(raw) != 88:
+        raw = game.read(address, 128)
+        if len(raw) != 128:
             return None
-        if struct.unpack_from('<3I', raw) != (0x53545244, 1, 88):
+        if struct.unpack_from('<3I', raw) != (0x53545244, 2, 128):
             raise RuntimeError('Native stream protocol mismatch')
         if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
             continue
@@ -1532,6 +1535,8 @@ def stream_snapshot(game, address):
         margin, across, up_down = struct.unpack_from('<3f', raw, 40)
         capacity, used, most, full = struct.unpack_from('<3iI', raw, 52)
         texture_game, texture_budget, video_budget, video_usage, drops = struct.unpack_from('<5I', raw, 68)
+        building_checks, building_refusals, zone_checks, zone_refusals = struct.unpack_from('<4Q', raw, 88)
+        most_asked = struct.unpack_from('<i', raw, 120)[0]
         # Frames the left eye's query for far buildings took the cone (the lens over both eyes, widened by
         # the margin), and frames it kept its own lens while standing in for the game's view.
         return dict(cone=bool(features & 1), cone_frames=cone_frames, own_lens_frames=own_frames,
@@ -1543,7 +1548,71 @@ def stream_snapshot(game, address):
                     # game and the game's use of it at the last look; drops = given back for lack of room.
                     texture_budget_raise=bool(features & 2), texture_game_mb=texture_game,
                     texture_budget_mb=texture_budget, video_budget_mb=video_budget, video_usage_mb=video_usage,
-                    texture_drops=drops)
+                    texture_drops=drops,
+                    # The pool's room checks by who asked, and the refused: a far building left a card, a
+                    # hibernate zone's props and details left unshown, until a later frame found room.
+                    pool_checks_counted=bool(features & 4), building_checks=building_checks,
+                    building_refusals=building_refusals, zone_checks=zone_checks, zone_refusals=zone_refusals,
+                    pool_most_asked=most_asked)
+    return None
+
+
+def pace_snapshot(game, address):
+    """SpidyPaceData (native_pace.hpp): the game's frames paced by the headset's, one eye pair a headset frame."""
+    for _ in range(8):
+        raw = game.read(address, 64)
+        if len(raw) != 64:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x50414345, 1, 64):
+            raise RuntimeError('Native pace protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        on = struct.unpack_from('<I', raw, 12)[0]
+        frames, waits, timeouts, waited_us = struct.unpack_from('<4Q', raw, 24)
+        most_us, period_us = struct.unpack_from('<2I', raw, 56)
+        # Frames that took their head while paced; those that waited for the headset's next frame, and those
+        # that gave up after a frame and a half; the wait in all (mean per waiting frame) and the longest.
+        return dict(on=bool(on), frames=frames, waits=waits, timeouts=timeouts,
+                    wait_mean_ms=round(waited_us/waits/1000, 3) if waits else None,
+                    wait_most_ms=round(most_us/1000, 3), headset_period_ms=round(period_us/1000, 3))
+    return None
+
+
+def blur_snapshot(game, address):
+    """SpidyBlurData (stereo_probe.cpp): the game's speed blur, which the eyes go without."""
+    raw = game.read(address, 48)
+    if len(raw) != 48:
+        return None
+    if struct.unpack_from('<3I', raw) != (0x424c5552, 1, 48):
+        raise RuntimeError('Speed blur protocol mismatch')
+    on, keep = struct.unpack_from('<2I', raw, 12)
+    game_views, left_out, kept = struct.unpack_from('<3Q', raw, 24)
+    # How often the game asked its blur, a frame and a view at a time: of its own views, and of an eye, which
+    # went without it (eyes_left_out) or, kept for a comparison, had it (eyes_kept).
+    return dict(on=bool(on), eyes_keep=bool(keep), game_views=game_views, eyes_left_out=left_out,
+                eyes_kept=kept)
+
+
+def reproject_snapshot(game, address):
+    """SpidyReprojectData (flip_reprojection.hpp): FLIP REPROJECTION, the eye pair turned by the player's own
+    turn since it was rendered."""
+    for _ in range(8):
+        raw = game.read(address, 72)
+        if len(raw) != 72:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53525052, 1, 72):
+            raise RuntimeError('Flip reprojection protocol mismatch')
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        features = struct.unpack_from('<I', raw, 12)[0]
+        turned, still, passed, reused = struct.unpack_from('<4Q', raw, 24)
+        last, most = struct.unpack_from('<2f', raw, 56)
+        total = struct.unpack_from('<d', raw, 64)[0]
+        # Immersive frames: turned (over 0.05 degrees), shown as rendered (no turn to make), passed over (a
+        # turn past the limit, a snap turn or a recenter, or none known), and turned while a pair was shown again.
+        return dict(on=bool(features & 1), turned=turned, still=still, passed=passed, reused_turned=reused,
+                    last_deg=round(last, 2), most_deg=round(most, 2),
+                    mean_deg=round(total / turned, 2) if turned else 0.0)
     return None
 
 
@@ -1698,6 +1767,70 @@ def sharpen_line(sharp):
     cost = (f"GPU {sharp['gpu_ms_mean']:.2f} ms mean, {sharp['gpu_ms_max']:.2f} max over {sharp['measured']} pairs"
             if sharp['measured'] else 'GPU time not measured')
     return f"Headset sharpening: {sharp['percent']}%, {sharp['sharpened_pairs']} pairs sharpened; {cost}."
+HUD_SHOTS = 6
+HUD_CAPTURE_SKIPS = ('copied', 'no_resource', 'unknown_state', 'other_device', 'busy', 'format', 'failed', 'stale', 'blank')
+HUD_CAPTURE_PATHS = ('none', 'texture', 'wrapped', 'target')
+
+
+def hud_capture_snapshot(game, address):
+    """The steadier-HUD probe (include/spidy/hud_capture.hpp): the panel texture's resource, its barriers
+    and copies, the header of its newest snapshot, and STEADY HUD's layer (include/spidy/steady_hud.hpp)."""
+    for _ in range(8):
+        raw = game.read(address, 184)
+        if len(raw) != 184:
+            return None
+        if struct.unpack_from('<3I', raw) != (0x53484350, 2, 184):
+            raise RuntimeError('HUD capture protocol mismatch')
+        sequence = struct.unpack_from('<Q', raw, 16)[0]
+        if sequence & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        path = struct.unpack_from('<I', raw, 12)[0]
+        resource = struct.unpack_from('<Q', raw, 24)[0]
+        width, height, fmt, mips, flags, samples = struct.unpack_from('<6I', raw, 32)
+        barriers, executed, other, odd, mismatched = struct.unpack_from('<5Q', raw, 56)
+        state, known = struct.unpack_from('<2I', raw, 96)
+        presents, copies = struct.unpack_from('<2Q', raw, 104)
+        skip, refused = struct.unpack_from('<2I', raw, 120)
+        snapshots, pixels = struct.unpack_from('<2Q', raw, 128)
+        row_pitch, swap = struct.unpack_from('<2I', raw, 144)
+        staged, layer_copies, layer_frames = struct.unpack_from('<3Q', raw, 152)
+        stage_skip, registered = struct.unpack_from('<2I', raw, 176)
+        return dict(sequence=sequence, path=HUD_CAPTURE_PATHS[path] if path < len(HUD_CAPTURE_PATHS) else path,
+                    found=bool(resource), width=width, height=height, format=fmt, mips=mips, flags=flags,
+                    samples=samples, barriers=barriers, executed=executed, other_queue=other, odd=odd,
+                    mismatched=mismatched, state=state, known=bool(known), presents=presents, copies=copies,
+                    skip=HUD_CAPTURE_SKIPS[skip] if skip < len(HUD_CAPTURE_SKIPS) else skip, refused=refused,
+                    snapshots=snapshots, pixels=pixels, row_pitch=row_pitch, swap=bool(swap), staged=staged,
+                    layer_copies=layer_copies, layer_frames=layer_frames, registered=registered,
+                    stage_skip=HUD_CAPTURE_SKIPS[stage_skip] if stage_skip < len(HUD_CAPTURE_SKIPS) else stage_skip)
+    return None
+
+
+def save_hud_capture(game, address, shot, folder, name, view=960):
+    """Save the newest HUD snapshot: its colours and its alpha (as grey), reduced to about `view` pixels.
+    Returns the file names, or None if the snapshot was replaced or unreadable."""
+    width, height, pitch = shot['width'], shot['height'], shot['row_pitch']
+    if not (64 <= width <= 16384 and 64 <= height <= 16384 and pitch == width*4) or shot['pixels'] < 0x10000:
+        return None
+    data = game.read(shot['pixels'], pitch*height)
+    again = hud_capture_snapshot(game, address)
+    if len(data) != pitch*height or not again or again['snapshots'] != shot['snapshots']:
+        return None
+    if shot['swap']:
+        swapped = bytearray(data)
+        swapped[0::4], swapped[2::4] = data[2::4], data[0::4]
+        data = bytes(swapped)
+    folder.mkdir(parents=True, exist_ok=True)
+    step = max(1, math.ceil(max(width, height)/view))
+    columns, rows, rgb = rgb_rows(data, pitch, 0, 0, width, height, step)
+    write_rgb_png(folder/f'{name}-color.png', columns, rows, rgb)
+    alpha = bytearray(data)
+    alpha[0::4] = alpha[1::4] = alpha[2::4] = data[3::4]
+    columns, rows, grey = rgb_rows(bytes(alpha), pitch, 0, 0, width, height, step)
+    write_rgb_png(folder/f'{name}-alpha.png', columns, rows, grey)
+    lit = sum(1 for a in data[3::4*step*step] if a)
+    return dict(color=f'{name}-color.png', alpha=f'{name}-alpha.png', scale=step,
+                covered=round(lit/max(1, len(data[3::4*step*step])), 4))
 
 
 def timing_snapshot(game, address):
@@ -1949,6 +2082,109 @@ CONTROLLER_BUTTONS = ((1, 'a'), (2, 'b'), (4, 'x'), (8, 'y'), (16, 'menu'), (32,
 def controller_buttons(bits):
     """The names of the controller buttons in `bits`."""
     return [name for bit, name in CONTROLLER_BUTTONS if bits & bit]
+
+
+# SESSION DIAGNOSTICS (diag_log.hpp, SpidyDiagData): the build, the feature settings and the features' own lines
+# (RUN LOGS' "run log:", WEB AIM's "forearm aim:", DODGE TUMBLE's, the state changes on and off the ground).
+# With RUN LOGS on the console and reports/<session>-diag.log get them; off, the module publishes none.
+DIAG_MAGIC, DIAG_VERSION = 0x47414944, 1
+DIAG_MAIN, DIAG_AIM, DIAG_CHARS, DIAG_BUILD = 128, 16, 240, 96
+DIAG_MAIN_AT = 120
+DIAG_AIM_AT = DIAG_MAIN_AT + 8 + DIAG_MAIN*DIAG_CHARS
+DIAG_BYTES = DIAG_AIM_AT + 8 + DIAG_AIM*DIAG_CHARS
+
+
+def diag_snapshot(game, address):
+    """The diagnostics' two rings as they stand: {'build', 'main': (written, slots), 'aim': (written, slots)},
+    a protocol mismatch reported (never raised: these are diagnostics), or None while it is being written or
+    before anything was published (RUN LOGS off: only the header is read)."""
+    head = game.read(address, 24)
+    if len(head) == 24 and struct.unpack_from('<3I', head) == (DIAG_MAGIC, DIAG_VERSION, DIAG_BYTES) and \
+            struct.unpack_from('<Q', head, 16)[0] == 0:
+        return None
+    for _ in range(8):
+        raw = game.read(address, DIAG_BYTES)
+        if len(raw) != DIAG_BYTES:
+            return None
+        magic, version, size = struct.unpack_from('<3I', raw)
+        if (magic, version, size) != (DIAG_MAGIC, DIAG_VERSION, DIAG_BYTES):
+            return dict(protocol_mismatch=dict(magic=hex(magic), version=version, bytes=size))
+        if struct.unpack_from('<Q', raw, 16)[0] & 1 or raw[16:24] != game.read(address+16, 8):
+            continue
+        text = lambda at, size: raw[at:at+size].split(b'\0', 1)[0].decode('utf-8', 'replace')
+        rings = {}
+        for name, at, count in (('main', DIAG_MAIN_AT, DIAG_MAIN), ('aim', DIAG_AIM_AT, DIAG_AIM)):
+            written = struct.unpack_from('<Q', raw, at)[0]
+            rings[name] = (written, [text(at+8+i*DIAG_CHARS, DIAG_CHARS) for i in range(count)])
+        return dict(build=text(24, DIAG_BUILD), **rings)
+    return None
+
+
+class DiagLog:
+    """What diag_snapshot adds since the last look: each new line printed to the console (where the launcher
+    shows it) and appended to the diagnostics file beside the session report, with the build first."""
+    SIZES = dict(main=DIAG_MAIN, aim=DIAG_AIM)
+
+    def __init__(self, path, echo=None):
+        self.path, self.echo = pathlib.Path(path), echo or (lambda line: print(line, flush=True))
+        self.seen = dict(main=0, aim=0)
+        self.build = None
+        self.lines = 0
+        self.stage = None  # the last "stage:" line (diag_log::Stages), for crash_advice
+
+    def _out(self, line):
+        self.echo(line)
+        self.lines += 1
+        try:
+            with self.path.open('a', encoding='utf-8') as f:
+                f.write(line + '\n')
+        except OSError:
+            pass  # a full disk or a locked file must not end the session
+
+    def take(self, snapshot):
+        if not snapshot or 'protocol_mismatch' in snapshot:
+            return
+        if snapshot['build'] and snapshot['build'] != self.build:
+            self.build = snapshot['build']
+            self._out(f'Spidy diagnostics: build {self.build} (this file: {self.path})')
+        for name in ('main', 'aim'):
+            written, slots = snapshot[name]
+            size, seen = self.SIZES[name], self.seen[name]
+            if written < seen:  # the module started again
+                seen = 0
+            first = max(seen, written-size)
+            if first > seen:
+                self._out(f'Spidy diagnostics: {first-seen} {name} lines lost (read too late)')
+            for index in range(first, written):
+                line = slots[index % size]
+                if '] stage: ' in line:
+                    self.stage = line.split('] stage: ', 1)[1]
+                self._out('diag ' + line)
+            self.seen[name] = written
+
+
+CRASH_CODES = {0xC0000005: 'an access violation', 0xC0000409: 'a stack buffer overrun',
+               0xC00000FD: 'a stack overflow', 0xC000001D: 'an illegal instruction',
+               0xC0000374: 'a heap corruption', 0xE06D7363: 'an unhandled C++ exception'}
+
+
+def crash_advice(code, stage=None):
+    """The console's line when the game ended with a crash's exit code, else None. November 3: three sessions
+    'froze' in the headset (the compositor keeps the last frame); the game had crashed, an access violation,
+    and only the game's own log said so."""
+    if code is None or code < 0xC0000000:
+        return None
+    what = CRASH_CODES.get(code, 'an error')
+    return (f'The game crashed (exit code 0x{code:08X}, {what})'
+            + (f' at stage: {stage}' if stage else '') +
+            ". The headset kept its last picture. Send this console, the diagnostics file and the game's "
+            "log (Documents\\Marvel's Spider-Man Remastered\\*.log, the newest; its .mdmp beside it too).")
+
+
+def diag_path(output):
+    """reports/game-vr-<time>.json -> reports/game-vr-<time>-diag.log"""
+    output = pathlib.Path(output)
+    return output.with_name(output.stem + '-diag.log')
 
 
 def prompt_snapshot(game, address):
@@ -2232,10 +2468,14 @@ def main():
                    help="Each eye makes its own set of the sun's shadow maps, as builds before October 11 did; "
                         'without it both use one set, fitted to a lens covering both (fewer render commands, '
                         'shadow edges a little softer)')
-    p.add_argument('--building-reach', type=int, default=150,
+    p.add_argument('--building-reach', type=int, default=200,
                    help="How far away the far buildings draw their full models (lit windows, the rooms behind them) "
-                        "in percent of the game's own distance, 145 m (50-400; default 150). More costs a little "
-                        'frame rate and video memory')
+                        "in percent of the game's own distance, 145 m (50-400; default 200, 150 before November 1). "
+                        "More costs a little frame rate, video memory and room in the scene's slot pool")
+    p.add_argument('--no-eye-pacing', action='store_true',
+                   help='The game draws eye pairs as fast as it can, as builds before November 1 did; without it '
+                        'it draws one pair a headset frame, each begun at the same point of the frame (no pairs '
+                        'the headset never shows, no uneven steps in what moves)')
     p.add_argument('--eye-lens-distances', action='store_true',
                    help="The eyes keep the distances their own wide lenses give the game, as builds before "
                         'October 19 did: models get their detail, people and props appear and textures sharpen '
@@ -2542,13 +2782,13 @@ def session(a, startup):
                                        'SpidyRaySample', 'SpidyRayData', 'SpidySwingData', 'SpidyGrabData',
                                        'SpidyPunchData', 'SpidyStrikeData', 'SpidyShooterData', 'SpidyRopeData',
                                        'SpidySenseData', 'SpidyFocusData', 'SpidySoundData',
-                                       'SpidyDodgeData'))
+                                       'SpidyDodgeData', 'SpidyTieData', 'SpidyStateLog', 'SpidyLineData'))
         # Imported here: probe_game_grab imports from this module.
-        from probe_game_grab import grab_snapshot
+        from probe_game_grab import grab_snapshot, tie_snapshot, state_log_snapshot, line_snapshot, line_rope_snapshot
         ray_module = next(m['base'] for m in modules(game.pid) if m['name'].lower() == 'spidy_ray_bridge.dll')
         motion, motion_hash = prepare(game.pid,process,ROOT/'build/windows-ninja/spidy_movement_bridge.dll',
             ROOT/'reports/motion-modules',('SpidyMotionStart','SpidyMotionSubmit','SpidyMotionSample',
-                                         'SpidyMotionStop','SpidyMotionData'))
+                                         'SpidyMotionStop','SpidyMotionData','SpidyMotionSupport'))
         motion_module = next(m['base'] for m in modules(game.pid) if m['name'].lower() == 'spidy_movement_bridge.dll')
         xr, xr_hash = prepare(game.pid, process, ROOT/'build/windows-ninja/spidy_stereo_probe.dll',
             ROOT/'reports/stereo-modules', ('SpidyXrStart', 'SpidyXrStop', 'SpidyXrKeepAlive', 'SpidyXrData',
@@ -2557,7 +2797,9 @@ def session(a, startup):
                                            'SpidyBodyData', 'SpidySlowMotionData', 'SpidyHudData',
                                            'SpidySteamData', 'SpidyPromptData', 'SpidyVenomEventData', 'SpidyImpostorReach',
                                            'SpidyHapticsData', 'SpidyStreamData', 'SpidyEyeHistoryData',
-                                           'SpidySessionFpsData', 'SpidyWristData'))
+                                           'SpidySessionFpsData', 'SpidyWristData', 'SpidyDiagData',
+                                           'SpidyPaceData', 'SpidyEyePacing', 'SpidyBlurData',
+                                           'SpidyReprojectData', 'SpidyHudCapture', 'SpidyLineRopeData'))
         stage_haptics(xr_hash)
 
         saved = vr_display.Registry().read(('ScreenSpaceReflections', 'RTReflections'))
@@ -2595,17 +2837,41 @@ def session(a, startup):
         # The far buildings' full models, while the left eye chooses them for the game's resting view.
         if call_remote(process, xr['SpidyImpostorReach'], a.building_reach):
             print(f'WARNING: the building reach {a.building_reach}% was refused; the eyes keep 150%.', flush=True)
+        # One eye pair a headset frame (native_pace.hpp), unless asked for the game's own frame rate.
+        if not a.no_eye_pacing and call_remote(process, xr['SpidyEyePacing'], 1):
+            print('WARNING: the game could not be paced by the headset; it draws pairs as fast as it can.',
+                  flush=True)
         started = time.monotonic()
+        # What this sampling costs: the launcher's own processor time, each pass's reading of the game, and
+        # the call into the game that keeps VR alive (a thread made in the game once a second).
+        cost = dict(cpu_start=time.process_time(), pass_count=0, pass_s=0.0, pass_most_s=0.0, call_count=0,
+                    call_s=0.0, call_most_s=0.0)
         samples = deque(maxlen=12000)
         ray_samples = deque(maxlen=12000)
         swing_samples = deque(maxlen=12000)
         # The web grab: a sample when a counter or a hand's grab changes, else once a second.
         grab_samples = deque(maxlen=12000)
+        tie_samples = deque(maxlen=12000)
+        # The state log (research for ties under ceilings): read every 2 s, kept as last read.
+        state_log = {}
+        state_log_read = [0.0]
+        # Web lines: a sample when one is made or goes, every 2 s while one is up; the game's
+        # ropes for them as last read.
+        line_samples = deque(maxlen=4000)
+        line_ropes = {}
+        # The support on a web line (native_movement's classifyContact): hooked, and steps answered.
+        support = {}
         motion_samples = deque(maxlen=12000)
         eye_shots = deque()
         eye_folder = a.output.with_name(a.output.stem+'-eyes')
         shot_count = 0
-        appearance = streaming = None
+        # The steadier-HUD probe's snapshots, the newest few.
+        hud_shots = deque()
+        hud_coverage = deque(maxlen=20000)
+        hud_folder = a.output.with_name(a.output.stem+'-hud')
+        hud_shot_count = 0
+        hud_capture = None
+        appearance = streaming = paced = blurred = reprojection = None
         # The player's body and fists: the latest of each, and a sample when punches land.
         body = punch = None
         punch_samples = deque(maxlen=2000)
@@ -2629,6 +2895,7 @@ def session(a, startup):
         # Body haptics: the latest, once the session has written it.
         haptics_last = None
         prompt_last = None
+        diag_log = DiagLog(diag_path(a.output))
         eye_jobs = None
         timing = None
         render_memory = None
@@ -2681,6 +2948,31 @@ def session(a, startup):
                 out.setdefault(key, value)
             return out
 
+        def note_cost(kind, seconds):
+            """kind: 'pass' (one reading of the game's counters) or 'call' (a keep-alive)."""
+            cost[kind+'_count'] += 1
+            cost[kind+'_s'] += seconds
+            cost[kind+'_most_s'] = max(cost[kind+'_most_s'], seconds)
+
+        def launcher_cost():
+            """The sampling's own cost (cost above): the share of one processor core the launcher used, and
+            the milliseconds a pass over the game's counters and a keep-alive call took."""
+            wall = max(time.monotonic()-started, 1e-6)
+            mean = lambda kind: round(1000*cost[kind+'_s']/cost[kind+'_count'], 2) if cost[kind+'_count'] else None
+            return dict(seconds=round(wall, 1),
+                        cpu_core_share=round((time.process_time()-cost['cpu_start'])/wall, 4),
+                        passes=cost['pass_count'], pass_mean_ms=mean('pass'),
+                        pass_most_ms=round(1000*cost['pass_most_s'], 2), keep_alive_calls=cost['call_count'],
+                        keep_alive_mean_ms=mean('call'), keep_alive_most_ms=round(1000*cost['call_most_s'], 2))
+
+        def scene_pool():
+            """The scene's slot pool as the render memory module made it (SCENE_POOL_PERCENT), if it is there."""
+            address = render_module.get('SpidyScenePoolData')
+            try:
+                return scene_pool_snapshot(game, address) if address else None
+            except (OSError, RuntimeError):
+                return None
+
         def session_report(**extra):
             """Everything sampled so far. It is written however the session ends."""
             return dict(pid=game.pid, eye_size=a.size, render_scale=a.render_scale, swing_speed=a.swing_speed,
@@ -2690,20 +2982,22 @@ def session(a, startup):
                         xr_runtime=runtime, motion_hash=motion_hash,
                         xr_hash=xr_hash, ray_hash=ray_hash, samples=list(samples),
                         swing_samples=list(swing_samples), motion_samples=list(motion_samples),
-                        grab_samples=list(grab_samples), body=body, punch=punch,
+                        grab_samples=list(grab_samples), tie_samples=list(tie_samples), state_log=dict(state_log), line_samples=list(line_samples), line_ropes=dict(line_ropes), support=dict(support), body=body, punch=punch,
                         punch_samples=list(punch_samples), strikes=strikes, strike_samples=list(strike_samples),
                         focus=focus, sense=sense, sense_samples=list(sense_samples), dodge=dodge,
                         ropes=ropes, steam_guard=steam, venom_events=venom_events,
                         shooter=shooter, shooter_samples=list(shooter_samples),
                         slow_motion=slow_motion, slow_motion_samples=list(slow_motion_samples), hud=hud_last,
                         haptics=haptics_last, prompts=prompt_section(list(samples)),
-                        ray_samples=list(ray_samples), appearance=appearance, streaming=streaming,
-                        eye_jobs=eye_jobs,
-                        render_memory=render_memory, timing=timing, network=links,
+                        ray_samples=list(ray_samples), appearance=appearance, streaming=streaming, pacing=paced,
+                        flip_reprojection=reprojection, eye_jobs=eye_jobs,
+                        render_memory=render_memory, scene_pool=scene_pool(), timing=timing, network=links,
                         stream_stalls=stream_stalls(list(samples)),
                         free_commit_mb=dict(start=start_commit, lowest=lowest_commit),
                         eye_snapshots=list(eye_shots), eye_snapshot_folder=str(eye_folder) if eye_shots else None,
-                        frame_rates=frame_rates(list(samples)), freeze=freeze,
+                        hud_capture=hud_capture, hud_captures=list(hud_shots), hud_coverage=list(hud_coverage),
+                        hud_capture_folder=str(hud_folder) if hud_shots else None,
+                        frame_rates=frame_rates(list(samples)), freeze=freeze, launcher=launcher_cost(),
                         final=samples[-1] if samples else None, **extra)
 
         lost_device = {}
@@ -2754,17 +3048,31 @@ def session(a, startup):
                    (not a.seconds or time.monotonic()-started < a.seconds+40) and alive(game)):
                 if a.stop_after and time.monotonic()-started>=a.stop_after: break
                 if not a.seconds and time.monotonic()-renewed>=1:
+                    called = time.perf_counter()
                     if call_remote(process,xr['SpidyXrKeepAlive']): break
+                    note_cost('call', time.perf_counter()-called)
                     renewed=time.monotonic()
+                began = time.perf_counter()
                 sample = snapshot(game, xr['SpidyXrData'])
                 if sample:
                     sample['seconds'] = time.monotonic()-started
                     appearance = appearance_snapshot(game, xr['SpidyAppearanceData']) or appearance
                     sample['appearance'] = appearance
+                    paced = pace_snapshot(game, xr['SpidyPaceData']) or paced
+                    if paced:
+                        sample['pacing'] = {k: paced[k] for k in ('frames', 'waits', 'timeouts')}
+                    blurred = blur_snapshot(game, xr['SpidyBlurData']) or blurred
+                    if blurred:
+                        sample['speed_blur'] = {k: blurred[k] for k in ('game_views', 'eyes_left_out')}
                     streaming = stream_snapshot(game, xr['SpidyStreamData']) or streaming
+                    reprojection = reproject_snapshot(game, xr['SpidyReprojectData']) or reprojection
+                    if reprojection:
+                        sample['flip_reprojection'] = {k: reprojection[k] for k in ('on', 'turned', 'passed',
+                                                                                    'last_deg')}
                     if streaming:
                         sample['streaming'] = {k: streaming[k] for k in ('cone_margin_deg', 'pool_used',
-                                                                         'texture_budget_mb', 'video_usage_mb')}
+                                                                         'texture_budget_mb', 'video_usage_mb',
+                                                                         'building_refusals', 'zone_refusals')}
                     body = body_snapshot(game, xr['SpidyBodyData']) or body
                     if body:
                         sample['body'] = {k: body[k] for k in ('state', 'problem', 'weight', 'hand_error_m',
@@ -2826,7 +3134,32 @@ def session(a, startup):
                     # What the game asked for, and the census of the calls its UI
                     # makes: kept for the report however the session ends.
                     prompt_last = prompt_snapshot(game, xr['SpidyPromptData']) or prompt_last
+                    # The features' diagnostics, to the console and the diagnostics file (DiagLog).
+                    diag_log.take(diag_snapshot(game, xr['SpidyDiagData']))
                     hud = hud_snapshot(game, xr['SpidyHudData'])
+                    capture = hud_capture_snapshot(game, xr['SpidyHudCapture'])
+                    if capture:
+                        hud_capture = capture
+                        sample['hud_capture'] = {k: capture[k] for k in ('found', 'known', 'copies', 'snapshots',
+                                                                         'skip', 'state', 'executed', 'staged',
+                                                                         'layer_copies', 'layer_frames',
+                                                                         'stage_skip', 'registered')}
+                        if capture['snapshots'] != hud_shot_count and capture['pixels']:
+                            hud_shot_count = capture['snapshots']
+                            try:
+                                files = save_hud_capture(game, xr['SpidyHudCapture'], capture, hud_folder,
+                                                         f"{capture['snapshots']:04d}")
+                            except OSError:
+                                files = None  # a full disk must not end the session
+                            if files:
+                                # The HUD's coverage over the whole session, its images or not: when the
+                                # game stopped drawing it (November 4: the last captures all empty).
+                                hud_coverage.append([sample['seconds'], files.get('covered')])
+                                hud_shots.append(dict(seconds=sample['seconds'], files=files))
+                                while len(hud_shots) > HUD_SHOTS:
+                                    for name in ('color', 'alpha'):
+                                        (hud_folder/hud_shots[0]['files'][name]).unlink(missing_ok=True)
+                                    hud_shots.popleft()
                     if hud:
                         hud_last = hud
                         sample['hud'] = {k: hud[k] for k in ('placed_frames', 'layer_frames', 'marker_projections',
@@ -2905,6 +3238,49 @@ def session(a, startup):
                         if not last or last['key'] != key or grab['seconds']-last['seconds'] >= 1:
                             grab['key'] = key
                             grab_samples.append(grab)
+                    try:
+                        raw = game.read(motion['SpidyMotionSupport'], 16)
+                        if len(raw) == 16:
+                            hooked, steps = struct.unpack('<2Q', raw)
+                            support.update(hooked=hooked, steps=steps)
+                    except OSError:
+                        pass
+                    lines_now = line_snapshot(game, rays['SpidyLineData'])
+                    if lines_now and lines_now['status']:
+                        lines_now['seconds'] = round(time.monotonic()-started, 3)
+                        key = [lines_now['made'], lines_now['expired'], lines_now['armed'], lines_now['zips'],
+                               lines_now['perches'], lines_now['jumps'], lines_now['landings'], lines_now['phase'],
+                               bool(lines_now['target_id'])]
+                        last = line_samples[-1] if line_samples else None
+                        if not last or last['key'] != key or (lines_now['lines'] and
+                                                               lines_now['seconds']-last['seconds'] >= 2):
+                            lines_now['key'] = key
+                            line_samples.append(lines_now)
+                    if time.monotonic() - state_log_read[0] >= 2:
+                        state_log_read[0] = time.monotonic()
+                        try:
+                            rope_now = line_rope_snapshot(game, xr['SpidyLineRopeData'])
+                            if rope_now:
+                                line_ropes.clear()
+                                line_ropes.update(rope_now)
+                        except (OSError, KeyError, NameError):
+                            pass
+                        try:
+                            log = state_log_snapshot(game, rays['SpidyStateLog'])
+                            if log:
+                                state_log.clear()
+                                state_log.update(log)
+                        except OSError:
+                            pass
+                    # The web tie: a sample when a tie is made or ends, and twice a second while one holds.
+                    tie = tie_snapshot(game, rays['SpidyTieData'])
+                    if tie and tie['status']:
+                        tie['seconds'] = round(time.monotonic()-started, 3)
+                        key = [tie[k] for k in ('made', 'ended', 'taken', 'gone', 'down', 'stuck', 'armed')]
+                        last = tie_samples[-1] if tie_samples else None
+                        if not last or last['key'] != key or (tie['ties'] and tie['seconds']-last['seconds'] >= .5):
+                            tie['key'] = key
+                            tie_samples.append(tie)
                     movement = motion_snapshot(game, motion['SpidyMotionData'])
                     if movement and movement['steps'] and (not motion_samples or movement['steps'] != motion_samples[-1]['steps']):
                         motion_samples.append(movement)
@@ -2949,6 +3325,7 @@ def session(a, startup):
                         print(flat_fallback_line(sample['message']), flush=True)
                     if sample['status'] in (4, 5):
                         break
+                note_cost('pass', time.perf_counter()-began)
                 time.sleep(.05)
         except (OSError, RuntimeError) as error:
             # A closing game fails remote calls while its process handle still reports it running.
@@ -2971,14 +3348,27 @@ def session(a, startup):
                       f"of a second each ({stalls['seconds']} s in all). That is the stream to the headset, not "
                       'the game' + (': this PC was on Wi-Fi.' if links.get('wifi') else '.'), flush=True)
             tell_device_lost()
+            crashed = crash_advice(exit_status(game), diag_log.stage)
+            if crashed:
+                diag_log._out(crashed)
+            if diag_log.lines:
+                print(f'Diagnostics: {diag_log.path.resolve()}', flush=True)
             print(f'Game closed. Session report: {a.output.resolve()}',flush=True)
             return 0
         if loop_error is not None:
             write_report(session_report(game_exited=False, error=str(loop_error)))
             hand_over_settings(samples[-1] if samples else None)
             tell_device_lost()
+            if diag_log.lines:
+                print(f'Diagnostics: {diag_log.path.resolve()}', flush=True)
             print(f'Session report: {a.output.resolve()}',flush=True)
             raise loop_error
+        try:
+            diag_log.take(diag_snapshot(game, xr['SpidyDiagData']))  # the last lines before VR stops
+        except (OSError, RuntimeError):
+            pass
+        if diag_log.lines:
+            print(f'Diagnostics: {diag_log.path.resolve()}', flush=True)
         xr_stop = call_remote(process, xr['SpidyXrStop'])
         xr_active = xr_stop != 0
         bridge_stop = call_remote(process, bridge['SpidyStop'])
@@ -2995,7 +3385,7 @@ def session(a, startup):
             venom_hand='left' if a.venom_left_hand else 'right', xr_runtime=runtime,
             game_settings_refused=startup.fields.get('game_settings_refused'),
             swing_samples=list(swing_samples),
-            grab_samples=list(grab_samples), grab=grab_snapshot(game, rays['SpidyGrabData']),
+            grab_samples=list(grab_samples), tie_samples=list(tie_samples), state_log=dict(state_log), line_samples=list(line_samples), line_ropes=dict(line_ropes), support=dict(support), grab=grab_snapshot(game, rays['SpidyGrabData']),
             body=body_snapshot(game, xr['SpidyBodyData']) or body,
             punch=punch_snapshot(game, rays['SpidyPunchData']) or punch, punch_samples=list(punch_samples),
             strikes=strike_snapshot(game, rays['SpidyStrikeData']) or strikes, strike_samples=list(strike_samples),
@@ -3012,10 +3402,15 @@ def session(a, startup):
             slow_motion_samples=list(slow_motion_samples), haptics=haptics_last,
             motion_samples=list(motion_samples), appearance=appearance_snapshot(game,xr['SpidyAppearanceData']),
             streaming=stream_snapshot(game, xr['SpidyStreamData']) or streaming,
+            pacing=pace_snapshot(game, xr['SpidyPaceData']) or paced,
+            speed_blur=blur_snapshot(game, xr['SpidyBlurData']) or blurred,
+            flip_reprojection=reproject_snapshot(game, xr['SpidyReprojectData']) or reprojection,
             hud=hud_snapshot(game, xr['SpidyHudData']),
+            hud_capture=hud_capture_snapshot(game, xr['SpidyHudCapture']) or hud_capture,
+            hud_captures=list(hud_shots), hud_coverage=list(hud_coverage), hud_capture_folder=str(hud_folder) if hud_shots else None,
             prompts=prompt_snapshot(game, xr['SpidyPromptData']),
             eye_jobs=frame_snapshot(game, xr['SpidyStereoFrames']) or eye_jobs,
-            render_memory=final_render_memory or render_memory, render_stop=render_stop,
+            render_memory=final_render_memory or render_memory, scene_pool=scene_pool(), render_stop=render_stop,
             mip_bias=dict(mip_bias_snapshot(game, render_module['SpidyMipBiasData']) or {},
                           start_code=render_module.get('mip_bias_start'))
             if render_module.get('SpidyMipBiasData') else None,
@@ -3030,6 +3425,7 @@ def session(a, startup):
         result['game_entries_restored'] = all(game.read(game.base+rva,16) == code
                                               for rva,code in original_entries.items())
         result['frame_rates'] = frame_rates(list(samples))
+        result['launcher'] = launcher_cost()
         a.output.parent.mkdir(parents=True, exist_ok=True)
         try:
             if a.capture_images:

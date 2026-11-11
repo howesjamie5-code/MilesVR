@@ -87,6 +87,12 @@ uint32_t guardBits(const char* decorated) {
     }
     return bits;
 }
+// The game's webbed-up state (game_targets::cocooned). No kind or trait has
+// the top bit: the traits end at bit 14.
+constexpr uint32_t webbedState = 1u << 31;
+// The game's own stuck-to-a-surface state (game_targets::wallStuck), a down one.
+// MilesVR: bit 28 (30 and 29 are the guard census's combatClass and behaviorClass).
+constexpr uint32_t wallStuckState = 1u << 28, stateBits = webbedState | wallStuckState;
 constexpr Rule rules[] = {
     {".?AVThrowableHelper@@", marker(Kind::throwable)},
     {".?AVBotMoverManager@@", marker(Kind::bot)},
@@ -109,7 +115,8 @@ constexpr Rule rules[] = {
     {".?AVBotHealth@@", botHealthClass},
     {".?AVBotStateDeathAnim@@", downState},
     {".?AVBotStateRagdoll@@", downState},
-    {".?AVBotStateWallStuck@@", downState},
+    {".?AVBotStateWallStuck@@", downState | wallStuckState},
+    {".?AVBotStateWebStruggle@@", webbedState},
     // Held (game_targets::held): attached to an actor (a car's seat), carried,
     // played by a cinematic, in BotStateNull, the guest of another's synced
     // animation, in a slotted interaction, frozen, or waiting for the game's
@@ -291,8 +298,9 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
             healths[head.record] = entry.address;
         else if (bits & healthClass)
             healths.emplace(head.record, entry.address);
-        if ((bits & ~(combatClass | behaviorClass)) >> 8)
-            traits[head.record] |= (bits & ~(combatClass | behaviorClass)) >> 8;
+        const uint32_t notTraits = combatClass | behaviorClass | stateBits;
+        if ((bits & ~notTraits) >> 8)
+            traits[head.record] |= (bits & ~notTraits) >> 8;
         if (bits & combatClass)
             if (const auto name = combatNames.find(head.vtable); name != combatNames.end())
                 combatSeen.emplace_back(head.record, &name->second);
@@ -559,6 +567,14 @@ bool game_targets::stateName(uintptr_t base, const Candidate& c, std::string& ou
 bool game_targets::inRunningState(uintptr_t base, const Candidate& c) {
     std::string name;
     return stateName(base, c, name) && guards::runningState(name);
+}
+bool game_targets::cocooned(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & webbedState);
+}
+bool game_targets::wallStuck(uintptr_t base, const Candidate& c) {
+    return c.kind == Kind::bot && c.machine && inPlay(c) &&
+           (classOf(base, pointer(pointer(c.machine + 0x70))) & wallStuckState);
 }
 bool game_targets::standing(const Candidate& c) {
     float points{};

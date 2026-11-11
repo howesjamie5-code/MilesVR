@@ -164,15 +164,6 @@ bool latestScreen(Screen& out, uint64_t maxAgeMs);
 // How the copy is read: the encoded format of the back buffer's family, or
 // UNKNOWN for a format the screen does not show.
 DXGI_FORMAT screenView(DXGI_FORMAT backBuffer, bool& linear);
-// MilesVR 0.1.80: the game's HUD texture (native_hud.cpp finds it each frame; null: none), and while
-// wanted, a copy of it at each Present on the game's queue (the FNSM app drawn on the phone in VR play).
-// Its state is learned from the game's own submitted barriers: nothing is copied until one is seen.
-void registerHud(ID3D12Resource* resource);
-void wantHud(bool wanted);
-bool latestHud(Screen& out, uint64_t maxAgeMs);
-// Copies made, and presents that wanted one but had no texture or no known state (diagnostic).
-uint32_t hudCopies();
-uint32_t hudSkips();
 // SpidyScreenData, for probes: status 1 once Present is hooked; the copies
 // made, and the rows of the newest one SpidyGpuScreen(2) read back. Also the
 // presents seen while wanted, why the last one was not copied (ScreenSkip),
@@ -196,6 +187,29 @@ struct ScreenData {
     uint32_t skip{}, backBufferFormat{};
 };
 static_assert(sizeof(ScreenData) == 72);
+// The steadier-HUD probe (hud_capture.hpp, SpidyHudCapture), only while
+// STEADY HUD is on (hudLayerOn). native_hud (main thread) registers the
+// panel's texture as it finds it (`path`: how), and says whether it is
+// wanted; while it is, a Present now and then copies the texture back to
+// memory, in the state the game's executed barriers left it. Nothing here
+// can stop the eye views: the probe's own failures only skip.
+void registerHud(ID3D12Resource* resource, uint32_t path);
+void refuseHud();
+void wantHud(bool wanted);
+// STEADY HUD (steady_hud.hpp). While wanted, the copy of each new eye pair
+// also copies the registered panel texture, as the pair's frame left it.
+// latestHud: the newest such copy's size, how many were made and when
+// (GetTickCount64); false before the first. fillHudLayer: that copy into
+// `target` (the layer's image: RENDER_TARGET state, RGBA8, the same size), on
+// the game's queue; false when it was not. hudLayerShown counts a headset
+// frame that showed the layer (SpidyHudCapture).
+void wantHudLayer(bool wanted);
+// STEADY HUD is on: the game's barriers on the panel are followed (and only
+// then), and native_hud looks for its texture.
+bool hudLayerOn();
+bool latestHud(uint32_t& width, uint32_t& height, uint64_t& copies, uint64_t& copiedMs);
+bool fillHudLayer(ID3D12Resource* target);
+void hudLayerShown();
 DWORD start(void* input);
 DWORD stop();
 } // namespace spidy::native_gpu

@@ -336,4 +336,17 @@ class PhoneTouch {
 // it presses).
 void appendPhoneTouch(std::vector<Vertex>& out, const WheelFrame& phone, const PhoneTouch::Out& touch, Vec3 tip,
                       const Pose& head);
+// PC MEDIA's song (UTF-8): ARTIST - TITLE as phoneSongName shows a name, its
+// dots kept ("MR. BRIGHTSIDE"); the title alone without an artist, and
+// SONG with neither drawable.
+std::string phoneMediaSong(const std::string& artist, const std::string& title);
+// The app a song plays in, from the name Windows' media controls give it (its
+// AppUserModelID): "Spotify.exe" and Spotify's Store package as SPOTIFY,
+// "MSEdge" as EDGE, an unreadable one (Firefox names itself by a hash) as PC.
+std::string phoneMediaSource(const std::string& appId);
+// That app's audio session in Windows' mixer: a process (its file, with or
+// without the folder) whose name, without .exe, is in the app's ID
+// ("Spotify.exe" in "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
+// "msedge.exe" in "MSEdge"), ignoring case.
+bool phoneMediaAppMatches(const std::string& appId, const std::string& process);
 } // namespace spidy

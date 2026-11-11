@@ -1,5 +1,6 @@
 #pragma once
 #include "body_calibration.hpp"
+#include "flip_reprojection.hpp"
 #include "gadget_wheel.hpp"
 #include "game_swing.hpp"
 #include "game_tracking.hpp"
@@ -13,6 +14,9 @@ struct NativeEyeFrame {
     uint64_t serial{};
     GameMotionFrame motion;
     std::array<TrackedEye, 2> trackingEyes;
+    // The tracking space's turn in the world the pair was rendered with
+    // (flip_reprojection.hpp).
+    flip_reprojection::Turn rigTurn{};
     std::array<game_swing::WebState, 2> webs;
     std::array<WebTimeline::Hand, 2> webTimes{};
     game_swing::WebFlightData webFlight;
@@ -22,6 +26,25 @@ struct NativeEyeFrame {
     // part running from wrist to wrist; -1 otherwise.
     std::array<int, 2> webSlots{-1, -1};
     int strandUpper = -1;
+    // The web tie's webs (game_grab::TieData): from where each sticks to its
+    // surface to the enemy it holds there.
+    struct TieStrand {
+        Vec3 anchor{}, end{};
+    };
+    std::array<TieStrand, 8> ties{};
+    uint32_t tieCount{};
+    // A bit per tie the game draws in its own rope (native_webs::tiesDrawn).
+    uint32_t tiesByGame{};
+    // Web lines (game_lines::LineData), and a bit for each the game draws.
+    std::array<TieStrand, 8> lines{};
+    uint32_t lineCount{}, linesByGame{};
+    // The strands of thugs hung from them, and each one's line (in `lines`).
+    std::array<TieStrand, 16> strands{};
+    std::array<uint8_t, 16> strandLine{};
+    uint32_t strandCount{};
+    // The zip's marker on a web line (0: none in view).
+    Vec3 lineTarget{};
+    uint32_t lineTargetId{};
     // What each hand's grip press would do (game_swing::AimKind none while
     // the aim markers are off).
     std::array<game_swing::Aim, 2> aims{};

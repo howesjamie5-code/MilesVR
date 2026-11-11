@@ -12,8 +12,9 @@ from unittest.mock import MagicMock, Mock, patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]/'tools'))
 from probe_stereo_gpu import snapshot as gpu_snapshot, save_eye_images
 from run_game_vr import (snapshot as xr_snapshot, accepted as accepted_xr, timing_snapshot, frame_rates,
-                         appearance_snapshot, stream_snapshot, eye_snapshot, save_eye_snapshot, rgb_rows,
-                         crop_origin,
+                         appearance_snapshot, stream_snapshot, pace_snapshot, blur_snapshot, reproject_snapshot,
+                         eye_snapshot, save_eye_snapshot, hud_capture_snapshot, save_hud_capture,
+                         rgb_rows, crop_origin,
                          game_memory, keep_game_log, body_snapshot,
                          punch_snapshot, strike_snapshot, focus_snapshot, sound_snapshot, dodge_snapshot,
                          shooter_snapshot,
@@ -348,33 +349,140 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Invalid wall contact'):
             climb_snapshot(Reader(bad, struct.pack('<Q', 2)), 0)
 
+    def test_flip_reprojection_decodes_its_frames_and_turns_and_rejects_torn_reads(self):
+        raw = bytearray(72)
+        struct.pack_into('<4IQ4Q2fd', raw, 0, 0x53525052, 1, 72, 1, 6, 400, 900, 3, 25, 4.5, 12.25, 1000.0)
+        result = reproject_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)
+        self.assertEqual(result, dict(on=True, turned=400, still=900, passed=3, reused_turned=25, last_deg=4.5,
+                                      most_deg=12.25, mean_deg=2.5))
+        # Off: nothing turned, no mean to divide.
+        struct.pack_into('<I', raw, 12, 0)
+        struct.pack_into('<4Q', raw, 24, 0, 0, 0, 0)
+        struct.pack_into('<d', raw, 64, 0.0)
+        result = reproject_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)
+        self.assertFalse(result['on'])
+        self.assertEqual((result['turned'], result['mean_deg']), (0, 0.0))
+        bad = bytearray(raw)
+        struct.pack_into('<I', bad, 4, 2)
+        with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
+            reproject_snapshot(Reader(bytes(bad)), 0)
+        odd = bytearray(raw)
+        struct.pack_into('<Q', odd, 16, 7)
+        self.assertIsNone(reproject_snapshot(Reader(*([bytes(odd)] * 8)), 0))
+        self.assertIsNone(reproject_snapshot(Reader(bytes(raw[:40])), 0))
+
+    def test_hud_capture_decodes_the_probe_and_saves_its_snapshot_and_drops_replaced_ones(self):
+        raw = bytearray(184)
+        struct.pack_into('<4IQ', raw, 0, 0x53484350, 2, 184, 2, 6)
+        struct.pack_into('<Q6I', raw, 24, 0x1234, 64, 64, 87, 1, 4, 1)
+        struct.pack_into('<5Q2I', raw, 56, 900, 880, 0, 1, 2, 64, 1)
+        struct.pack_into('<2Q2I', raw, 104, 300, 3, 0, 0)
+        struct.pack_into('<2Q2I', raw, 128, 3, 0x40000, 256, 1)
+        # STEADY HUD: copies with the pairs, into the layer, frames that showed it; the last pair's state unknown.
+        struct.pack_into('<3Q2I', raw, 152, 700, 690, 1400, 2, 5)
+        shot = hud_capture_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)
+        self.assertEqual((shot['path'], shot['found'], shot['width'], shot['format']), ('wrapped', True, 64, 87))
+        self.assertEqual((shot['barriers'], shot['executed'], shot['odd'], shot['mismatched']), (900, 880, 1, 2))
+        self.assertEqual((shot['state'], shot['known'], shot['copies'], shot['skip']), (64, True, 3, 'copied'))
+        self.assertEqual((shot['snapshots'], shot['row_pitch'], shot['swap']), (3, 256, True))
+        self.assertEqual((shot['staged'], shot['layer_copies'], shot['layer_frames'], shot['stage_skip']),
+                         (700, 690, 1400, 'unknown_state'))
+        self.assertEqual(shot['registered'], 5)
+        # The game stopped drawing into the followed texture: the copy says so.
+        struct.pack_into('<I', raw, 176, 7)
+        self.assertEqual(hud_capture_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)['stage_skip'], 'stale')
+        # The followed texture is empty: the copy says so.
+        struct.pack_into('<I', raw, 176, 8)
+        self.assertEqual(hud_capture_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)['stage_skip'], 'blank')
+        struct.pack_into('<I', raw, 176, 2)
+        # Torn the whole time: nothing; too short: nothing.
+        self.assertIsNone(hud_capture_snapshot(Reader(*([raw, struct.pack('<Q', 8)] * 8)), 0))
+        self.assertIsNone(hud_capture_snapshot(Reader(raw[:40]), 0))
+        # BGRA pixels: the left half covered in blue, the right half clear.
+        pixels = bytearray(64 * 64 * 4)
+        for y in range(64):
+            for x in range(32):
+                pixels[(y * 64 + x) * 4:(y * 64 + x) * 4 + 4] = bytes((255, 0, 0, 255))
+        with tempfile.TemporaryDirectory() as folder:
+            folder = pathlib.Path(folder)
+            files = save_hud_capture(Reader(bytes(pixels), raw, struct.pack('<Q', 6)), 0, shot, folder, '0003')
+            self.assertEqual((files['color'], files['alpha'], files['scale'], files['covered']),
+                             ('0003-color.png', '0003-alpha.png', 1, .5))
+            self.assertTrue((folder / '0003-color.png').read_bytes().startswith(b'\x89PNG'))
+            newer = bytearray(raw)
+            struct.pack_into('<Q', newer, 128, 4)
+            self.assertIsNone(save_hud_capture(Reader(bytes(pixels), newer, struct.pack('<Q', 6)), 0, shot,
+                                               folder, '0003'))
+            self.assertIsNone(save_hud_capture(Reader(bytes(pixels[:100]), raw, struct.pack('<Q', 6)), 0, shot,
+                                               folder, '0003'))
+
     def test_stream_decodes_the_cone_the_slot_pool_and_the_texture_budget(self):
-        raw = bytearray(88)
-        struct.pack_into('<4IQ2Q3f3iI5I', raw, 0, 0x53545244, 1, 88, 3, 6, 900, 12, 29.5, 80.0, 79.4,
-                         120000, 61000, 70000, 15, 3874, 7748, 31418, 13300, 0)
+        raw = bytearray(128)
+        struct.pack_into('<4IQ2Q3f3iI5I4QiI', raw, 0, 0x53545244, 2, 128, 7, 6, 900, 12, 29.5, 80.0, 79.4,
+                         120000, 61000, 70000, 15, 3874, 15496, 31418, 13300, 0, 5000, 3, 80000, 0, 1200, 0)
         result = stream_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)
-        self.assertTrue(result['cone'] and result['texture_budget_raise'])
+        self.assertTrue(result['cone'] and result['texture_budget_raise'] and result['pool_checks_counted'])
+        self.assertEqual((result['building_checks'], result['building_refusals'], result['zone_checks'],
+                          result['zone_refusals'], result['pool_most_asked']), (5000, 3, 80000, 0, 1200))
         self.assertEqual((result['cone_frames'], result['own_lens_frames']), (900, 12))
         self.assertEqual((result['cone_margin_deg'], result['cone_across_deg'], result['cone_up_down_deg']),
                          (29.5, 80.0, 79.4))
         self.assertEqual((result['pool_capacity'], result['pool_used'], result['pool_most'],
                           result['pool_full_frames']), (120000, 61000, 70000, 15))
         self.assertEqual((result['texture_game_mb'], result['texture_budget_mb'], result['video_budget_mb'],
-                          result['video_usage_mb'], result['texture_drops']), (3874, 7748, 31418, 13300, 0))
+                          result['video_usage_mb'], result['texture_drops']), (3874, 15496, 31418, 13300, 0))
         # Neither in use (the game's code read otherwise), and a pool not set up yet (-1).
         struct.pack_into('<I', raw, 12, 0)
         struct.pack_into('<i', raw, 52, -1)
         result = stream_snapshot(Reader(raw, struct.pack('<Q', 6)), 0)
-        self.assertFalse(result['cone'] or result['texture_budget_raise'])
+        self.assertFalse(result['cone'] or result['texture_budget_raise'] or result['pool_checks_counted'])
         self.assertEqual(result['pool_capacity'], -1)
         bad = bytearray(raw)
-        struct.pack_into('<I', bad, 4, 2)
+        struct.pack_into('<I', bad, 4, 1)
         with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
             stream_snapshot(Reader(bytes(bad)), 0)
         odd = bytearray(raw)
         struct.pack_into('<Q', odd, 16, 7)
         self.assertIsNone(stream_snapshot(Reader(*([bytes(odd)] * 8)), 0))
         self.assertIsNone(stream_snapshot(Reader(bytes(raw[:40])), 0))
+
+    def test_pace_decodes_waits_and_rejects_torn_reads(self):
+        raw = bytearray(64)
+        struct.pack_into('<4Iq4Q2I', raw, 0, 0x50414345, 1, 64, 1, 4, 9000, 6000, 2, 12000000, 9500, 11111)
+        result = pace_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
+        self.assertEqual(result, dict(on=True, frames=9000, waits=6000, timeouts=2, wait_mean_ms=2.0,
+                                      wait_most_ms=9.5, headset_period_ms=11.111))
+        # Off, nothing waited yet.
+        struct.pack_into('<I', raw, 12, 0)
+        struct.pack_into('<3Q', raw, 24, 0, 0, 0)
+        result = pace_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
+        self.assertFalse(result['on'])
+        self.assertIsNone(result['wait_mean_ms'])
+        bad = bytearray(raw)
+        struct.pack_into('<I', bad, 4, 2)
+        with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
+            pace_snapshot(Reader(bytes(bad)), 0)
+        odd = bytearray(raw)
+        struct.pack_into('<Q', odd, 16, 5)
+        self.assertIsNone(pace_snapshot(Reader(*([bytes(odd)] * 8)), 0))
+        self.assertIsNone(pace_snapshot(Reader(bytes(raw[:40])), 0))
+
+    def test_speed_blur_decodes_who_was_asked_it(self):
+        raw = bytearray(48)
+        struct.pack_into('<6I3Q', raw, 0, 0x424c5552, 1, 48, 1, 0, 0, 180, 360, 0)
+        self.assertEqual(blur_snapshot(Reader(raw), 0), dict(on=True, eyes_keep=False, game_views=180,
+                                                             eyes_left_out=360, eyes_kept=0))
+        # Kept for a comparison: the eyes had it.
+        struct.pack_into('<I', raw, 16, 1)
+        struct.pack_into('<3Q', raw, 24, 200, 360, 400)
+        result = blur_snapshot(Reader(raw), 0)
+        self.assertTrue(result['eyes_keep'])
+        self.assertEqual((result['game_views'], result['eyes_kept']), (200, 400))
+        bad = bytearray(raw)
+        struct.pack_into('<I', bad, 8, 40)
+        with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
+            blur_snapshot(Reader(bytes(bad)), 0)
+        self.assertIsNone(blur_snapshot(Reader(bytes(raw[:40])), 0))
 
     def test_appearance_decodes_each_eye_and_rejects_torn_reads(self):
         raw = bytearray(360)
@@ -977,11 +1085,13 @@ class ProtocolTests(unittest.TestCase):
 
     def test_ray_geometry_serial_and_body_generation_boundaries(self):
         raw = bytearray(784)
-        struct.pack_into('<4IQ5Q4I', raw, 0, 0x53525944, 2, 784, 2, 4, 9, 10, 100, 8, 0xabc, 1, 0, 7, 0)
+        struct.pack_into('<4IQ5Q4I', raw, 0, 0x53525944, 2, 784, 2, 4, 9, 10, 100, 8, 0xabc, 1, 0, 7, 5)
         struct.pack_into('<7fI7f7I', raw, 80, 10, 20, 30, 100, 0, -1, 0, 90,
                          10, 14, 30, .06, 0, 1, 0, 3, 0x30008f3, 1087, 1, 1, 0, 0xa0000104)
         result = ray_snapshot(Reader(raw, struct.pack('<Q', 4)), 0)
         self.assertEqual((result['serial'], result['count'], result['thread']), (9, 1, 7))
+        # Rays a visitor asked for that the world did not take as asked (cut or missed).
+        self.assertEqual(result['malformed'], 5)
         hit = result['hits'][0]
         self.assertEqual((hit['position'], hit['tag'], hit['body_id']), ((10, 14, 30), 90, 0x30008f3))
         self.assertTrue(hit['body_matches'])
@@ -1572,7 +1682,8 @@ class ProtocolTests(unittest.TestCase):
                                      (grab_snapshot,0x53475244,368),(body_snapshot,0x53424453,208),
                                      (punch_snapshot,0x53505544,168),(shooter_snapshot,0x53484f44,296),
                                      (strike_snapshot,0x53535452,328),(focus_snapshot,0x53464344,56),
-                                     (sound_snapshot,0x53534e44,72),(dodge_snapshot,0x53444744,128)):
+                                     (sound_snapshot,0x53534e44,72),(dodge_snapshot,0x53444744,128),
+                                     (hud_capture_snapshot,0x53484350,184)):
             raw = bytearray(size)
             struct.pack_into('<4IQ', raw, 0, magic, 99, size, 2, 4)
             with self.assertRaisesRegex(RuntimeError, 'protocol mismatch'):
@@ -2003,6 +2114,78 @@ class ProtocolTests(unittest.TestCase):
         self.assertTrue(reachable_in_play(0x20))
         self.assertIn("The game is asking for Back - in VR: the phone's MENU.", prompts_line(0x20))
 
+    def test_session_diagnostics_reach_the_console_and_their_file(self):
+        """SpidyDiagData (diag_log.hpp): every new line goes to the console and reports/<session>-diag.log,
+        the build first; a reader that fell behind says how many it lost; forearm aim has its own ring.
+        November 2: four sessions' consoles had not one feature line, all of them in the report's timeline."""
+        from run_game_vr import diag_snapshot, DiagLog, diag_path, DIAG_BYTES, DIAG_MAIN_AT, DIAG_AIM_AT, DIAG_CHARS
+        self.assertEqual(DIAG_BYTES, 34696)
+        self.assertEqual(diag_path(pathlib.Path('reports/game-vr-20261103-101500.json')).name,
+                         'game-vr-20261103-101500-diag.log')
+        raw = bytearray(DIAG_BYTES)
+        struct.pack_into('<3I', raw, 0, 0x47414944, 1, DIAG_BYTES)
+        game = Mock()
+        game.read = lambda address, size: bytes(raw[address-0x1000:address-0x1000+size])
+        # Never published (RUN LOGS off): nothing, and only the header read.
+        self.assertIsNone(diag_snapshot(game, 0x1000))
+        struct.pack_into('<Q', raw, 16, 2)
+        raw[24:24+len(b'Spidy 0.7.0 (commit abc1234)')] = b'Spidy 0.7.0 (commit abc1234)'
+
+        def put(at, count, lines):
+            struct.pack_into('<Q', raw, at, len(lines))
+            for index, line in enumerate(lines):
+                slot = at+8+(index % count)*DIAG_CHARS
+                raw[slot:slot+DIAG_CHARS] = bytes(DIAG_CHARS)
+                raw[slot:slot+len(line)] = line.encode()
+        put(DIAG_MAIN_AT, 128, ['[   1.000] run log: touchdown at 12.0 m/s across'])
+        put(DIAG_AIM_AT, 16, [f'[   {i}.000] forearm aim: L none' for i in range(20)])
+        printed = []
+        with tempfile.TemporaryDirectory() as folder:
+            log = DiagLog(pathlib.Path(folder)/'game-vr-x-diag.log', echo=printed.append)
+            log.take(diag_snapshot(game, 0x1000))
+            self.assertIn('build Spidy 0.7.0 (commit abc1234)', printed[0])
+            self.assertIn('diag [   1.000] run log: touchdown at 12.0 m/s across', printed)
+            self.assertTrue(any('4 aim lines lost' in line for line in printed), printed)
+            self.assertEqual(sum('forearm aim' in line for line in printed), 16)
+            log.take(diag_snapshot(game, 0x1000))  # nothing new: nothing again
+            self.assertEqual(len(printed), log.lines)
+            written = (pathlib.Path(folder)/'game-vr-x-diag.log').read_text(encoding='utf-8').splitlines()
+            self.assertEqual(written, printed)
+        # A layout of another version is reported, never raised.
+        struct.pack_into('<I', raw, 4, 2)
+        self.assertIn('protocol_mismatch', diag_snapshot(game, 0x1000))
+
+    def test_a_crashed_game_says_so_with_its_last_stage(self):
+        """November 3: three sessions 'froze' in the headset; the game had crashed (0xC0000005) a second
+        after VR became active, and only the game's own log said so. The console and the diagnostics file now
+        say it, with the last "stage:" line (diag_log::Stages)."""
+        from run_game_vr import crash_advice, DiagLog
+        self.assertIsNone(crash_advice(None))
+        self.assertIsNone(crash_advice(0))
+        self.assertIsNone(crash_advice(1))
+        text = crash_advice(0xC0000005, 'frames reaching the headset - the eye images')
+        self.assertIn('0xC0000005, an access violation', text)
+        self.assertIn('at stage: frames reaching the headset', text)
+        self.assertIn('.mdmp', text)
+        with tempfile.TemporaryDirectory() as folder:
+            log = DiagLog(pathlib.Path(folder)/'x-diag.log', echo=lambda line: None)
+            raw = {'build': 'b', 'main': (2, ['[   1.000] stage: headset active, the eye views not started',
+                                              '[   2.000] stage: frames reaching the headset - the eye images']
+                                          + ['']*126), 'aim': (0, ['']*16)}
+            log.take(raw)
+            self.assertEqual(log.stage, 'frames reaching the headset - the eye images')
+
+    def test_the_forearm_aim_line_is_formatted_from_named_fields(self):
+        """v6 (78a43ed) passed two arguments more than its format to the forearm aim: snprintf; the last %s
+        read palm.x's double as a pointer and the game crashed at the first solved forearm. The line is
+        web_aim::formatForearmAimLine's now; no long printf of it is left in the worker."""
+        root = pathlib.Path(__file__).resolve().parents[1]
+        worker = (root/'src/game_xr.cpp').read_text(encoding='utf-8')
+        self.assertIn('web_aim::formatForearmAimLine(line, sizeof(line), fields);', worker)
+        self.assertNotIn('"forearm aim: %s', worker)
+        self.assertIn('startupStages.beat(', worker)
+        self.assertIn('stageLine(diag_log::Stages::headset)', worker)
+
     def test_every_gesture_the_worker_keeps_reaches_the_games_controller(self):
         """A gesture's held() must be read where the XR worker builds the controller, and every field of
         game_pad::Walk must be filled there.
@@ -2249,11 +2432,16 @@ class ProtocolTests(unittest.TestCase):
                                      body_haptics=100, eye_height_mm=0, arm_length_mm=0, calibration_prompt=True,
                                      venom_left_hand=False, venom_trigger=False))
         # Nothing changed, or no sample: no line.
-        self.assertIsNone(settings_line(start, dict(vr_settings=dict(start))))
+        self.assertIsNone(settings_line(start, dict(frames=1, vr_settings=dict(start))))
         self.assertIsNone(settings_line(start, None))
+        # A session that ended before its first frame (Virtual Desktop refused the eye images, November 1): its
+        # worker's zeros are no settings, and the next session starts with the ones this one started with.
+        zeros = {k: 0 for k in start}
+        self.assertIsNone(settings_line(start, dict(frames=0, vr_settings=zeros)))
+        self.assertIsNone(settings_line(start, dict(vr_settings=zeros)))
         changed = dict(start, air_webs=False, web_shooter=False, punch=True, swing_speed=48.0, weight=150,
                        snap_turn=0, smooth_turn=90)
-        self.assertEqual(settings_line(start, dict(vr_settings=changed)),
+        self.assertEqual(settings_line(start, dict(frames=1, vr_settings=changed)),
                          SETTINGS_LINE + 'aim_markers=1 web_grab=1 air_webs=0 web_shooter=0 punch=1 body=1 '
                                          'swing_speed=48 weight=150 snap_turn=0 smooth_turn=90 haptics=100 '
                                          'screen_size=1 flips=0 flip_speed=180 trigger_webs=0 hud=2 '
@@ -2261,28 +2449,28 @@ class ProtocolTests(unittest.TestCase):
                                          'eye_height_mm=0 arm_length_mm=0 calibration_prompt=1 venom_left_hand=0 '
                                          'venom_trigger=0')
         # BODY HAPTICS turned down in the headset stays for the next session.
-        self.assertIn(' body_haptics=25 ', settings_line(start, dict(vr_settings=dict(start, body_haptics=25))))
+        self.assertIn(' body_haptics=25 ', settings_line(start, dict(frames=1, vr_settings=dict(start, body_haptics=25))))
         # The experimental flips switched on in the headset go to the launcher too; so do their speed, the web
         # button and the HUD.
-        self.assertIn(' flips=1 ', settings_line(start, dict(vr_settings=dict(start, flips=True))))
-        self.assertIn(' flip_speed=240 ', settings_line(start, dict(vr_settings=dict(start, flip_speed=240))))
-        self.assertIn(' trigger_webs=1 ', settings_line(start, dict(vr_settings=dict(start, trigger_webs=True))))
-        self.assertIn(' hud=0 ', settings_line(start, dict(vr_settings=dict(start, hud=0))))
-        self.assertIn(' stand_on_walls=0 ', settings_line(start, dict(vr_settings=dict(start, stand_on_walls=False))))
+        self.assertIn(' flips=1 ', settings_line(start, dict(frames=1, vr_settings=dict(start, flips=True))))
+        self.assertIn(' flip_speed=240 ', settings_line(start, dict(frames=1, vr_settings=dict(start, flip_speed=240))))
+        self.assertIn(' trigger_webs=1 ', settings_line(start, dict(frames=1, vr_settings=dict(start, trigger_webs=True))))
+        self.assertIn(' hud=0 ', settings_line(start, dict(frames=1, vr_settings=dict(start, hud=0))))
+        self.assertIn(' stand_on_walls=0 ', settings_line(start, dict(frames=1, vr_settings=dict(start, stand_on_walls=False))))
         # GAME SCREEN 3D switched off in the headset: the next session's cutscenes are flat again.
-        self.assertIn(' screen_depth=0 ', settings_line(start, dict(vr_settings=dict(start, screen_depth=0))))
+        self.assertIn(' screen_depth=0 ', settings_line(start, dict(frames=1, vr_settings=dict(start, screen_depth=0))))
         # WEB STYLE: ARCADE chosen in the headset stays for the next session.
-        self.assertIn(' arcade_webs=1 ', settings_line(start, dict(vr_settings=dict(start, arcade_webs=True))))
+        self.assertIn(' arcade_webs=1 ', settings_line(start, dict(frames=1, vr_settings=dict(start, arcade_webs=True))))
         # A T-pose calibration in the headset goes to the launcher the same way; so does skipping it.
-        self.assertTrue(settings_line(start, dict(vr_settings=dict(start, eye_height_mm=1630, arm_length_mm=590)))
+        self.assertTrue(settings_line(start, dict(frames=1, vr_settings=dict(start, eye_height_mm=1630, arm_length_mm=590)))
                         .endswith(' eye_height_mm=1630 arm_length_mm=590 calibration_prompt=1 venom_left_hand=0 '
                                   'venom_trigger=0'))
-        self.assertTrue(settings_line(start, dict(vr_settings=dict(start, calibration_prompt=False)))
+        self.assertTrue(settings_line(start, dict(frames=1, vr_settings=dict(start, calibration_prompt=False)))
                         .endswith(' calibration_prompt=0 venom_left_hand=0 venom_trigger=0'))
         # MilesVR: VENOM HAND moved to LEFT in the headset goes to the launcher's Venom punch hand.
-        self.assertIn(' venom_left_hand=1', settings_line(start, dict(vr_settings=dict(start, venom_left_hand=True))))
+        self.assertIn(' venom_left_hand=1', settings_line(start, dict(frames=1, vr_settings=dict(start, venom_left_hand=True))))
         # And VENOM BUTTON moved to TRIGGER goes to its Venom button.
-        self.assertIn(' venom_trigger=1', settings_line(start, dict(vr_settings=dict(start, venom_trigger=True))))
+        self.assertIn(' venom_trigger=1', settings_line(start, dict(frames=1, vr_settings=dict(start, venom_trigger=True))))
 
     def test_a_linux_session_starts_with_the_settings_the_last_one_left(self):
         # tools/spidy-linux.sh has no launcher: vr_settings_persist.py keeps the line and gives the arguments back.
@@ -2297,14 +2485,14 @@ class ProtocolTests(unittest.TestCase):
             with patch.object(persist, 'settings_file', return_value=saved), patch('builtins.print') as out:
                 self.assertEqual(persist.main(['', 'load']), 0)
             out.assert_not_called()
-            line = settings_line(start, dict(vr_settings=dict(start, air_webs=False, flips=True, weight=150,
+            line = settings_line(start, dict(frames=1, vr_settings=dict(start, air_webs=False, flips=True, weight=150,
                                                               snap_turn=0, eye_height_mm=1630, arm_length_mm=590)))
             persist.save(line, saved)
             args = persist.arguments(persist.parse(saved.read_text()))
             self.assertEqual(args, ['--no-air-webs', '--flips', '--eye-height', '1630', '--arm-length', '590',
                                     '--snap-turn', '0', '--weight', '150'])
             # A later session that changed only the HUD keeps the rest; a half-made calibration keeps the old one.
-            persist.save(settings_line(start, dict(vr_settings=dict(start, air_webs=False, flips=True, weight=150,
+            persist.save(settings_line(start, dict(frames=1, vr_settings=dict(start, air_webs=False, flips=True, weight=150,
                                                                     snap_turn=0, hud=0, eye_height_mm=1700,
                                                                     arm_length_mm=0))), saved)
             args = persist.arguments(persist.parse(saved.read_text()))

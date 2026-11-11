@@ -110,6 +110,35 @@ static_assert(std::size(webRangeChoices) == std::size(webRanges));
 constexpr int webSpeeds[] = {0, 1, 2, 3};
 constexpr const char* webSpeedChoices[] = {"OFF", "SLOW", "MEDIUM", "FAST"};
 static_assert(std::size(webSpeedChoices) == std::size(webSpeeds));
+constexpr int singleHandYankStrengths[] = {50, 75, 100, 125, 150, 200, 250, 300};
+constexpr const char* singleHandYankStrengthChoices[] = {"50%",  "75%",  "100%", "125%",
+                                                         "150%", "200%", "250%", "300%"};
+static_assert(std::size(singleHandYankStrengthChoices) == std::size(singleHandYankStrengths));
+constexpr int webAngles[] = {-45, -30, -15, 0, 15, 30, 45};
+constexpr const char* webAngleChoices[] = {"DOWN 45", "DOWN 30", "DOWN 15", "0", "UP 15", "UP 30", "UP 45"};
+static_assert(std::size(webAngleChoices) == std::size(webAngles));
+constexpr int dodgeTumbles[] = {0, 1, 2};
+constexpr const char* dodgeTumbleChoices[] = {"OFF", "LEAN", "ROLL"};
+static_assert(std::size(dodgeTumbleChoices) == std::size(dodgeTumbles));
+constexpr int nativeRunPercents[] = {50, 60, 70, 80, 90};
+constexpr const char* nativeRunPercentChoices[] = {"50%", "60%", "70%", "80%", "90%"};
+static_assert(std::size(nativeRunPercentChoices) == std::size(nativeRunPercents));
+constexpr int earlyJumps[] = {0, 1, 2};
+constexpr const char* earlyJumpChoices[] = {"OFF", "QUICK TAP", "RUNNING"};
+static_assert(std::size(earlyJumpChoices) == std::size(earlyJumps));
+constexpr int webAimSources[] = {0, 1};
+constexpr const char* webAimSourceChoices[] = {"CONTROLLER", "MODEL FOREARM"};
+static_assert(std::size(webAimSourceChoices) == std::size(webAimSources));
+constexpr int forearmAimLimits[] = {35, 60, 90, 180};
+constexpr const char* forearmAimLimitChoices[] = {"35 DEG", "60 DEG", "90 DEG", "NO LIMIT"};
+static_assert(std::size(forearmAimLimitChoices) == std::size(forearmAimLimits));
+constexpr int webLandingImpactSteps[] = {12, 16, 20, 24, 28, 32, 40};
+constexpr const char* webLandingImpactChoices[] = {"12 M/S", "16 M/S", "20 M/S", "24 M/S",
+                                                   "28 M/S", "32 M/S", "40 M/S"};
+static_assert(std::size(webLandingImpactChoices) == std::size(webLandingImpactSteps));
+constexpr int forearmBlends[] = {0, 25, 50, 75, 100};
+constexpr const char* forearmBlendChoices[] = {"0%", "25%", "50%", "75%", "100%"};
+static_assert(std::size(forearmBlendChoices) == std::size(forearmBlends));
 } // namespace
 
 std::span<const int> steps(Item item) {
@@ -144,6 +173,24 @@ std::span<const int> steps(Item item) {
         return webRanges;
     case Item::webSpeed:
         return webSpeeds;
+    case Item::singleHandYankStrength:
+        return singleHandYankStrengths;
+    case Item::webAngle:
+        return webAngles;
+    case Item::dodgeTumble:
+        return dodgeTumbles;
+    case Item::earlyJump:
+        return earlyJumps;
+    case Item::webAimSource:
+        return webAimSources;
+    case Item::forearmBlend:
+        return forearmBlends;
+    case Item::forearmAimLimit:
+        return forearmAimLimits;
+    case Item::webLandingImpact:
+        return webLandingImpactSteps;
+    case Item::nativeRunAt:
+        return nativeRunPercents;
     case Item::nearClip:
         return nearClips;
     case Item::recordingFov:
@@ -209,6 +256,24 @@ float numberOf(Item item, const Values& v) {
         return static_cast<float>(v.webRange);
     case Item::webSpeed:
         return static_cast<float>(v.webSpeed);
+    case Item::singleHandYankStrength:
+        return static_cast<float>(v.singleHandYankPercent);
+    case Item::webAngle:
+        return static_cast<float>(v.webAngle);
+    case Item::dodgeTumble:
+        return static_cast<float>(v.dodgeTumble);
+    case Item::earlyJump:
+        return static_cast<float>(v.earlyJump);
+    case Item::webAimSource:
+        return static_cast<float>(v.webAimSource);
+    case Item::forearmBlend:
+        return static_cast<float>(v.forearmBlend);
+    case Item::forearmAimLimit:
+        return static_cast<float>(v.forearmAimLimit);
+    case Item::webLandingImpact:
+        return static_cast<float>(v.webLandingImpact);
+    case Item::nativeRunAt:
+        return static_cast<float>(v.nativeRunPercent);
     case Item::nearClip:
         return static_cast<float>(v.nearClipMm);
     case Item::recordingFov:
@@ -278,6 +343,14 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.handClimb;
     case Item::wallRunCameraTilt:
         return &v.wallRunCameraTilt;
+    case Item::joystickRunCamera:
+        return &v.joystickRunCamera;
+    case Item::webTie:
+        return &v.webTie;
+    case Item::webLines:
+        return &v.webLines;
+    case Item::airFists:
+        return &v.airFists;
     case Item::view:
         return &v.flatScreen;
     case Item::venomHand:
@@ -300,8 +373,46 @@ template <class V> auto switchOf(Item item, V& v) -> decltype(&v.aimMarkers) {
         return &v.hapticCombat;
     case Item::hapticMovement:
         return &v.hapticMovement;
+    case Item::reelHaptics:
+        return &v.reelHaptics;
+    case Item::swingHaptics:
+        return &v.swingHaptics;
+    case Item::pcMedia:
+        return &v.pcMedia;
+    case Item::nativeRun:
+        return &v.nativeRun;
+    case Item::airSlingshot:
+        return &v.airSlingshot;
+    case Item::wristShooters:
+        return &v.wristShooters;
+    case Item::spidyRun:
+        return &v.spidyRun;
+    case Item::spidyRunFromStanding:
+        return &v.spidyRunFromStanding;
+    case Item::steadyStates:
+        return &v.steadyStates;
+    case Item::combatResponsive:
+        return &v.combatResponsive;
+    case Item::spidyRunJump:
+        return &v.spidyRunJump;
+    case Item::palmShooters:
+        return &v.palmShooters;
+    case Item::webLandingSmooth:
+        return &v.webLandingSmooth;
+    case Item::softLanding:
+        return &v.softLanding;
+    case Item::momentumLeap:
+        return &v.momentumLeap;
+    case Item::runLogs:
+        return &v.runLogs;
+    case Item::runCurve:
+        return &v.runCurve;
     case Item::seated:
         return &v.seated;
+    case Item::flipReprojection:
+        return &v.flipReprojection;
+    case Item::steadyHud:
+        return &v.steadyHud;
     default:
         return nullptr;
     }
@@ -325,6 +436,15 @@ Values sanitized(Values v) {
     v.recordingSmoothing = std::clamp(v.recordingSmoothing, 0, 100);
     v.webRange = std::clamp(v.webRange, 10, 1000);
     v.webSpeed = std::clamp(v.webSpeed, 0, 3);
+    v.singleHandYankPercent = std::clamp(v.singleHandYankPercent, 50, 300);
+    v.webAngle = std::clamp(v.webAngle, -45, 45);
+    v.dodgeTumble = std::clamp(v.dodgeTumble, 0, 2);
+    v.earlyJump = std::clamp(v.earlyJump, 0, 2);
+    v.webAimSource = std::clamp(v.webAimSource, 0, 1);
+    v.forearmBlend = std::clamp(v.forearmBlend, 0, 100);
+    v.forearmAimLimit = std::clamp(v.forearmAimLimit, 35, 180);
+    v.webLandingImpact = std::clamp(v.webLandingImpact, 12, 40);
+    v.nativeRunPercent = std::clamp(v.nativeRunPercent, 50, 90);
     v.nearClipMm = std::clamp(v.nearClipMm, nearClips[0], std::end(nearClips)[-1]);
     v.recordingFov = recording_fov::sanitized(v.recordingFov);
     v.uiStyle = std::clamp(v.uiStyle, uiStyles[0], std::end(uiStyles)[-1]);
@@ -357,9 +477,9 @@ Values sanitized(Values v) {
     v.automaticHandThreshold = std::clamp(v.automaticHandThreshold, 50, 300);
     return v;
 }
-const std::array<Row, 67>& rows() {
+const std::array<Row, 99>& rows() {
     // The help fits the game's description column beside the rows.
-    static const std::array<Row, 67> all{{
+    static const std::array<Row, 99> all{{
         {Item::none, "WEBS", nullptr, {}},
         {Item::webStyle, "WEB STYLE",
          "Arcade: webs pass lamp posts, signs and cars, and swings stay above the street.", webStyleChoices},
@@ -386,8 +506,10 @@ const std::array<Row, 67>& rows() {
          levelChoices},
         {Item::softRelease, "SOFT RELEASE",
          "A web's last pull fades briefly as you let go. Higher lasts longer.", levelChoices},
-        {Item::swingAssist, "SWING ASSIST",
-         "Swinging at a wall, you slow down before it. Your line stays yours.", {}},
+        {Item::swingAssist,
+         "SWING ASSIST",
+         "Swinging at a wall, you slow down before it. Your line stays yours.",
+         {}},
         {Item::webSlingshot,
          "WEB SLINGSHOT",
          "No auto jump. Draw two fixed webs, hold for vibration, release both to launch.",
@@ -398,10 +520,17 @@ const std::array<Row, 67>& rows() {
          "BETTER CLIMBING",
          "Take one web in both hands, then pull hand over hand to keep climbing it.",
          {}},
-        {Item::twoHandZip, "TWO HAND WEB ZIP",
-         "Both webs on one spot: pull both arms back fast to launch at it.", {}},
-        {Item::ropeSteering, "HAND ROPE STEERING",
-         "Hold your web with the free hand too and pull sideways to turn your swing.", {}},
+        {Item::singleHandYankStrength, "SINGLE HAND YANK STRENGTH",
+         "How much speed a fast one-hand yank adds. 100% as before; two-hand zips stay.",
+         singleHandYankStrengthChoices},
+        {Item::twoHandZip,
+         "TWO HAND WEB ZIP",
+         "Both webs on one spot: pull both arms back fast to launch at it.",
+         {}},
+        {Item::ropeSteering,
+         "HAND ROPE STEERING",
+         "Hold your web with the free hand too and pull sideways to turn your swing.",
+         {}},
         {Item::none, "VENOM", nullptr, {}},
         {Item::venomHand, "VENOM HAND",
          "The hand Miles's venom charges in: hold its button, then punch, smash or blast.",
@@ -410,15 +539,26 @@ const std::array<Row, 67>& rows() {
          "Hold it to charge your venom fist, tap it for a web ball. Never the web button.",
          venomButtonChoices},
         {Item::none, "COMFORT", nullptr, {}},
-        {Item::snapTurn, "SNAP TURN", "How far a flick of the right stick turns you. Off: no snap turning.",
+        {Item::snapTurn, "SNAP TURN", "How far the right stick snaps. Used only when SMOOTH TURN is OFF.",
          snapChoices},
         {Item::smoothTurn, "SMOOTH TURN", "Turn steadily while you hold the right stick. Off: it snap turns.",
          smoothChoices},
         {Item::none, "HAPTICS", nullptr, {}},
         {Item::haptics, "CONTROLLER VIBRATION", "How strongly webs, grabs and punches buzz in your hands.",
          hapticChoices},
+        {Item::reelHaptics, "REEL HAPTICS", "Reeling a web in ticks in that hand like a winch.", {}},
+        {Item::swingHaptics,
+         "SWING HAPTICS",
+         "Swinging on a taut web ticks softly in that hand, faster as you speed up.",
+         {}},
         {Item::blowSounds, "BLOW SOUNDS",
          "What your blows sound like: the game's own hits, MilesVR's tones, or none.", blowSoundChoices},
+        // MilesVR: Spidy's PC MEDIA plays on its phone, which the wrist menu replaced: not in the game's tabs.
+        {Item::pcMedia,
+         "PC MEDIA",
+         "The phone plays what the PC plays (Spotify, a browser). Off: the Music folder.",
+         {},
+         Place::launcher},
         {Item::bodyHaptics, "BODY HAPTICS",
          "How strongly bHaptics vest, sleeves and visor play webs, hits and Spider-Sense.", hapticChoices},
         {Item::hapticWebs,
@@ -459,7 +599,7 @@ const std::array<Row, 67>& rows() {
         // Enemy types, not in the game's tab. Where the tab would have it: next to the other combat rows.
         {Item::enemyTypes,
          "ENEMY TYPES",
-         "Enemy types that block in the base game block base attacks until they are webbed or stunned.",
+         "Blocking enemies guard your punches and web strikes until webbed or stunned.",
          {},
          Place::launcher},
         {Item::nearClip, "NEAR CLIP",
@@ -482,11 +622,11 @@ const std::array<Row, 67>& rows() {
         {Item::none, "EXPERIMENTAL", nullptr, {}},
         {Item::flips,
          "FLIPS",
-         "Right stick flips; up zips/aims. Release holds the angle. A returns upright.",
+         "Basic stick flips; with REALISTIC FLIPS, adds left-stick steering instead.",
          {}},
         {Item::controlledFlips,
          "CONTROLLED FLIPS",
-         "Air: A enables left-stick flips. Release holds. A again resets and exits.",
+         "A toggles left-stick flips. Overrides FLIPS; REALISTIC FLIPS takes priority.",
          {}},
         {Item::flipSpeed, "FLIP SPEED", "How fast a flip turns you over at full stick tilt.",
          flipSpeedChoices},
@@ -494,12 +634,109 @@ const std::array<Row, 67>& rows() {
          "HAND WALL CLIMBING",
          "Grip and pull. Reach back near the wall to turn. Left stick: run. A: jump.",
          {}},
+        {Item::joystickRunCamera,
+         "JOYSTICK WALL RUN CAMERA",
+         "On: old wall-floor view. Off: joystick drives the existing momentum wall run.",
+         {}},
         {Item::wallRunCameraTilt,
          "WALL RUN CAMERA TILT",
          "Gently bank the view with the body on horizontal momentum wall runs.",
          {}},
+        {Item::webTie,
+         "WEB TIE",
+         "Web an enemy up, web a wall: hands together, click the right stick. He sticks.",
+         {}},
+        {Item::webLines,
+         "WEB LINES",
+         "Webs on two walls, hands together, click right stick: a line. Hold it to zip.",
+         {}},
         {Item::eyeAim, "EYE AIM",
          "Web balls and zips go where your eyes look. Needs a headset with eye tracking.", eyeAimChoices},
+        {Item::flipReprojection,
+         "FLIP REPROJECTION",
+         "Flips, spins and smooth turns shown as steadily as head turns.",
+         {}},
+        {Item::steadyHud,
+         "STEADY HUD",
+         "The HUD shown by the headset itself: it holds still when the game falls behind.",
+         {}},
+        {Item::nativeRun,
+         "NATIVE RUN",
+         "Ground sprint, vaults and wall runs. The threshold is set by NATIVE RUN AT.",
+         {}},
+        {Item::airSlingshot,
+         "AIR SLINGSHOT",
+         "In the air: two taut webs, draw both arms until the buzz, let go to launch.",
+         {}},
+        {Item::webAngle, "WEB ANGLE", "Tilts the webs up or down from the controller's line. 0 as before.",
+         webAngleChoices},
+        {Item::wristShooters,
+         "WRIST SHOOTERS",
+         "Full forearm aim. WEB AIM: MODEL FOREARM already does this, with blend control.",
+         {}},
+        {Item::dodgeTumble, "DODGE TUMBLE",
+         "The view leans or rolls with the game's dodge, so you see it was one.", dodgeTumbleChoices},
+        {Item::runCurve,
+         "RUN CURVE",
+         "Ground only: full run at 80% of the stick, faster sooner. Off as before.",
+         {}},
+        {Item::nativeRunAt, "NATIVE RUN AT", "The stick's tilt past which NATIVE RUN sprints. 70% as before.",
+         nativeRunPercentChoices},
+        {Item::runLogs,
+         "RUN LOGS",
+         "Run, jump and frame logs, in the console and a -diag.log file, to send back.",
+         {}},
+        {Item::momentumLeap,
+         "RUNNING LEAP",
+         "Charged leaps keep run speed. EARLY JUMP: RUNNING skips charging in a sprint.",
+         {}},
+        {Item::earlyJump, "EARLY JUMP",
+         "A jumps sooner: a quicker tap, or at once while running. OFF as before.", earlyJumpChoices},
+        {Item::softLanding,
+         "SOFT LANDING",
+         "A fall with no web eases to 9 m/s down just before the ground. Off as before.",
+         {}},
+        {Item::spidyRun,
+         "SPIDY RUN",
+         "Land fast and keep running at that speed, steering, until it eases off.",
+         {}},
+        {Item::spidyRunFromStanding,
+         "RUN FROM STANDING",
+         "With SPIDY RUN: hold the stick fully to start it from a stand. Off as before.",
+         {}},
+        {Item::webAimSource, "WEB AIM",
+         "MODEL FOREARM: webs follow the body's forearm. CONTROLLER as before.", webAimSourceChoices},
+        {Item::forearmBlend, "FOREARM BLEND",
+         "With WEB AIM: MODEL FOREARM, blend from the controller (0%) to forearm (100%).", forearmBlendChoices},
+        {Item::webLandingSmooth,
+         "SMOOTH WEB LANDING",
+         "Holding a web, a landing under WEB LANDING IMPACT is soft and keeps its speed.",
+         {}},
+        {Item::webLandingImpact, "WEB LANDING IMPACT",
+         "SMOOTH WEB LANDING: at or over this speed a landing is the game's heavy one.",
+         webLandingImpactChoices},
+        {Item::steadyStates,
+         "STEADY STATES",
+         "NATIVE RUN's RT waits out flickers and stays off in fights. Off as before.",
+         {}},
+        {Item::combatResponsive,
+         "COMBAT RESPONSIVE",
+         "In a fight: no SPIDY RUN or carry, no RT, A jumps at once. Off as before.",
+         {}},
+        {Item::spidyRunJump,
+         "SPIDY RUN JUMP",
+         "A in SPIDY RUN or the landing carry jumps at once, keeping the speed.",
+         {}},
+        {Item::forearmAimLimit, "FOREARM AIM LIMIT",
+         "How far MODEL FOREARM and WRIST SHOOTERS turn off the controller's line.", forearmAimLimitChoices},
+        {Item::palmShooters,
+         "PALM SHOOTERS",
+         "Adds a palm-side quarter turn to your chosen web aim direction.",
+         {}},
+        {Item::airFists,
+         "AIR FISTS",
+         "A fast hand closes into a fist with nobody to punch. Off: only near enemies.",
+         {}},
         {Item::realisticFlips,
          "REALISTIC FLIPS",
          "Momentum rotation from arms and webs. FLIPS also enables left-stick steering.",
@@ -534,6 +771,133 @@ const std::array<Row, 67>& rows() {
          {}},
     }};
     return all;
+}
+const Row* rowFor(Item item) {
+    if (item == Item::none)
+        return nullptr;
+    for (const auto& row : rows())
+        if (row.item == item)
+            return &row;
+    return nullptr;
+}
+const std::array<Screen, categoryCount>& screens() {
+    static constexpr Item setup[] = {
+        Item::smoothTurn, Item::snapTurn, Item::calibrate, Item::height,
+        Item::seated,
+    };
+    static constexpr Item webs[] = {
+        Item::webStyle, Item::webButton, Item::aimMarkers, Item::airWebs,
+        Item::smartAnchor, Item::webRange, Item::webSpeed, Item::eyeAim,
+        Item::webAimSource, Item::forearmBlend, Item::forearmAimLimit, Item::wristShooters,
+        Item::palmShooters, Item::webAngle, Item::webTie, Item::webLines,
+    };
+    static constexpr Item swinging[] = {
+        Item::swingSpeed, Item::weight, Item::elasticWeb, Item::softRelease,
+        Item::swingAssist, Item::webSlingshot, Item::airSlingshot, Item::slingshotSpeed,
+        Item::betterClimbing, Item::singleHandYankStrength, Item::twoHandZip, Item::ropeSteering,
+    };
+    static constexpr Item movement[] = {
+        Item::nativeRun, Item::nativeRunAt, Item::runCurve, Item::steadyStates,
+        Item::spidyRun, Item::spidyRunFromStanding, Item::spidyRunJump, Item::momentumLeap,
+        Item::earlyJump, Item::softLanding, Item::webLandingSmooth, Item::webLandingImpact,
+        Item::handClimb, Item::joystickRunCamera, Item::wallRunCameraTilt, Item::combatResponsive,
+        Item::combatVisuals, Item::airFists, Item::runLogs,
+    };
+    static constexpr Item flips[] = {
+        Item::realisticFlips, Item::flips, Item::controlledFlips, Item::flipSpeed,
+        Item::automaticStrength, Item::automaticSpeed, Item::automaticMinimumSpeed, Item::automaticReleaseFlip,
+        Item::automaticResponse, Item::automaticHandStrength, Item::automaticFalloff, Item::automaticHandThreshold,
+        Item::automaticAirBrake, Item::automaticCombat, Item::dodgeTumble, Item::flipReprojection,
+    };
+    static constexpr Item feedback[] = {
+        Item::haptics, Item::reelHaptics, Item::swingHaptics, Item::bodyHaptics,
+        Item::hapticWebs, Item::hapticWind, Item::hapticCombat, Item::hapticMovement,
+        Item::blowSounds, Item::pcMedia,
+    };
+    static constexpr Item display[] = {
+        Item::screenSize, Item::screenDepth, Item::hud, Item::steadyHud,
+        Item::uiStyle, Item::nearClip, Item::recordingFov, Item::recordingSmoothing,
+    };
+    // MilesVR: Miles's own rows, a category of their own.
+    static constexpr Item miles[] = {
+        Item::venomHand, Item::venomButton, Item::halfPunchDamage, Item::enemyTypes,
+    };
+    static const std::array<Screen, categoryCount> all{{
+        {"Setup", "VR SETUP", setup},
+        {"Webs", "VR WEBS", webs},
+        {"Swinging", "VR SWINGING", swinging},
+        {"Movement", "VR MOVEMENT", movement},
+        {"Flips", "VR FLIPS", flips},
+        {"Haptics", "VR HAPTICS", feedback},
+        {"Display", "VR DISPLAY", display},
+        {"Miles", "MILES VR", miles},
+    }};
+    return all;
+}
+const char* inactiveReason(Item item, const Values& v) {
+    switch (item) {
+    case Item::snapTurn:
+        return v.smoothTurn > 0 ? "Turn Smooth turn off to use Snap turn." : nullptr;
+    case Item::smartAnchor:
+        return v.airWebs ? "Turn Webs hold in open air off to use Smart anchor." : nullptr;
+    case Item::wristShooters:
+        return v.webAimSource == 1 ? "Web aim already follows the model forearm." : nullptr;
+    case Item::forearmBlend:
+        return v.webAimSource != 1 ? "Set Web aim to Model forearm to adjust the blend." : nullptr;
+    case Item::forearmAimLimit:
+        return v.webAimSource != 1 && !v.wristShooters ? "Enable Model forearm or Wrist shooters first." : nullptr;
+    case Item::slingshotSpeed:
+        return !v.webSlingshot && !v.airSlingshot ? "Enable Web slingshot or Air slingshot first." : nullptr;
+    case Item::nativeRunAt:
+    case Item::steadyStates:
+        return !v.nativeRun ? "Enable Native run first." : nullptr;
+    case Item::spidyRunFromStanding:
+        return !v.spidyRun ? "Enable Spidy run first." : nullptr;
+    case Item::spidyRunJump:
+        return !v.spidyRun && !v.webLandingSmooth ? "Enable Spidy run or Smooth web landing first." : nullptr;
+    case Item::webLandingImpact:
+        return !v.webLandingSmooth ? "Enable Smooth web landing first." : nullptr;
+    case Item::controlledFlips:
+        return v.realisticFlips ? "Realistic flips takes priority over Controlled flips." : nullptr;
+    case Item::flips:
+        return v.controlledFlips && !v.realisticFlips ? "Controlled flips takes priority over basic Flips." : nullptr;
+    case Item::flipSpeed:
+        return !v.flips && (!v.controlledFlips || v.realisticFlips) ? "Enable stick flips to use Flip speed." : nullptr;
+    case Item::automaticStrength:
+    case Item::automaticSpeed:
+    case Item::automaticMinimumSpeed:
+    case Item::automaticReleaseFlip:
+    case Item::automaticResponse:
+    case Item::automaticHandStrength:
+    case Item::automaticFalloff:
+    case Item::automaticHandThreshold:
+    case Item::automaticAirBrake:
+    case Item::automaticCombat:
+        return !v.realisticFlips ? "Enable Realistic flips first." : nullptr;
+    case Item::reelHaptics:
+    case Item::swingHaptics:
+        return v.haptics == 0 ? "Raise Controller vibration above zero first." : nullptr;
+    case Item::hapticWebs:
+    case Item::hapticWind:
+    case Item::hapticCombat:
+    case Item::hapticMovement:
+        return v.bodyHaptics == 0 ? "Raise Body haptics above zero first." : nullptr;
+    case Item::steadyHud:
+        return v.hud == 0 ? "Enable the HUD first." : nullptr;
+    case Item::recordingSmoothing:
+        return v.recordingFov == 0 ? "Enable Recording FOV first." : nullptr;
+    default:
+        return nullptr;
+    }
+}
+Values resetCategory(Category category, Values v) {
+    const auto index = static_cast<size_t>(category);
+    if (index >= categoryCount)
+        return v;
+    for (Item item : screens()[index].items)
+        if (const Row* row = rowFor(item); row && row->place == Place::tab)
+            choose(item, defaultChoice(item), v);
+    return v;
 }
 int choice(Item item, const Values& v) {
     if (const bool* on = switchOf(item, v))
@@ -614,6 +978,33 @@ bool choose(Item item, int index, Values& v) {
     case Item::webSpeed:
         v.webSpeed = s[index];
         break;
+    case Item::singleHandYankStrength:
+        v.singleHandYankPercent = s[index];
+        break;
+    case Item::webAngle:
+        v.webAngle = s[index];
+        break;
+    case Item::dodgeTumble:
+        v.dodgeTumble = s[index];
+        break;
+    case Item::earlyJump:
+        v.earlyJump = s[index];
+        break;
+    case Item::webAimSource:
+        v.webAimSource = s[index];
+        break;
+    case Item::forearmBlend:
+        v.forearmBlend = s[index];
+        break;
+    case Item::forearmAimLimit:
+        v.forearmAimLimit = s[index];
+        break;
+    case Item::webLandingImpact:
+        v.webLandingImpact = s[index];
+        break;
+    case Item::nativeRunAt:
+        v.nativeRunPercent = s[index];
+        break;
     case Item::nearClip:
         v.nearClipMm = s[index];
         break;
@@ -672,7 +1063,9 @@ constexpr TabOnly tabOnly[] = {
     {"controlled_flips", &Values::controlledFlips, nullptr},
     {"near_clip_mm", nullptr, &Values::nearClipMm},
     {"hand_climb", &Values::handClimb, nullptr},
+    {"joystick_wall_run_camera", &Values::joystickRunCamera, nullptr},
     {"wall_run_camera_tilt", &Values::wallRunCameraTilt, nullptr},
+    {"half_punch_damage", &Values::halfPunchDamage, nullptr},
     {"realistic_flips", &Values::realisticFlips, nullptr},
     {"rotation_strength", nullptr, &Values::automaticStrength},
     {"rotation_speed", nullptr, &Values::automaticSpeed},
@@ -691,7 +1084,6 @@ constexpr TabOnly tabOnly[] = {
     {"recording_fov", nullptr, &Values::recordingFov},
     {"ui_style", nullptr, &Values::uiStyle},
     {"combat_visuals", &Values::combatVisuals, nullptr},
-    {"half_punch_damage", &Values::halfPunchDamage, nullptr},
     {"enemy_types", &Values::enemyTypes, nullptr},
     {"blow_sounds", nullptr, &Values::blowSounds},
     {"web_slingshot", &Values::webSlingshot, nullptr},
@@ -730,6 +1122,37 @@ constexpr TabOnly tabOnly[] = {
     {"tune_game_CrowdDetail", nullptr, &Values::tuneCrowdDetail},
     {"tune_game_VehicleDetail", nullptr, &Values::tuneVehicleDetail},
     {"tune_game_ParticleLighting", nullptr, &Values::tuneParticleLighting},
+    {"flip_reprojection", &Values::flipReprojection, nullptr},
+    {"steady_hud", &Values::steadyHud, nullptr},
+    {"reel_haptics", &Values::reelHaptics, nullptr},
+    {"swing_haptics", &Values::swingHaptics, nullptr},
+    {"pc_media", &Values::pcMedia, nullptr},
+    {"single_hand_yank_percent", nullptr, &Values::singleHandYankPercent},
+    {"web_tie", &Values::webTie, nullptr},
+    {"native_run", &Values::nativeRun, nullptr},
+    {"air_slingshot", &Values::airSlingshot, nullptr},
+    {"web_angle_degrees", nullptr, &Values::webAngle},
+    {"wrist_shooters", &Values::wristShooters, nullptr},
+    {"dodge_tumble", nullptr, &Values::dodgeTumble},
+    {"run_curve", &Values::runCurve, nullptr},
+    {"native_run_at_percent", nullptr, &Values::nativeRunPercent},
+    {"run_logs", &Values::runLogs, nullptr},
+    {"running_leap", &Values::momentumLeap, nullptr},
+    {"early_jump", nullptr, &Values::earlyJump},
+    {"soft_landing", &Values::softLanding, nullptr},
+    {"spidy_run", &Values::spidyRun, nullptr},
+    {"spidy_run_from_standing", &Values::spidyRunFromStanding, nullptr},
+    {"web_aim_source", nullptr, &Values::webAimSource},
+    {"forearm_blend", nullptr, &Values::forearmBlend},
+    {"web_landing_smooth", &Values::webLandingSmooth, nullptr},
+    {"web_landing_impact_speed", nullptr, &Values::webLandingImpact},
+    {"steady_states", &Values::steadyStates, nullptr},
+    {"combat_responsive", &Values::combatResponsive, nullptr},
+    {"spidy_run_jump", &Values::spidyRunJump, nullptr},
+    {"forearm_aim_limit", nullptr, &Values::forearmAimLimit},
+    {"palm_shooters", &Values::palmShooters, nullptr},
+    {"web_lines", &Values::webLines, nullptr},
+    {"air_fists", &Values::airFists, nullptr},
 };
 } // namespace
 std::string tabOnlyText(const Values& v) {

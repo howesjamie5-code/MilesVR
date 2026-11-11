@@ -4,6 +4,7 @@
 #include "spidy/native_eye_frame.hpp"
 #include "spidy/native_hud.hpp"
 #include "spidy/native_eye_history.hpp"
+#include "spidy/flip_reprojection.hpp"
 #include "spidy/eye_job_table.hpp"
 #include "spidy/eye_pair_state.hpp"
 #include "spidy/native_rays.hpp"
@@ -13,8 +14,11 @@
 #include "spidy/wrist_hud.hpp"
 #include "spidy/auto_tune.hpp"
 #include "spidy/game_pad.hpp"
+#include "spidy/frame_stats.hpp"
 #include "spidy/gadget_wheel.hpp"
 #include "spidy/phone.hpp"
+#include "spidy/reel_haptics.hpp"
+#include "spidy/swing_haptics.hpp"
 #include "spidy/controller_layout.hpp"
 #include "spidy/game_swing.hpp"
 #include "spidy/native_movement.hpp"
@@ -25,10 +29,13 @@
 #include "spidy/vr_settings.hpp"
 #include "spidy/recording_fov.hpp"
 #include "spidy/native_stream.hpp"
+#include "spidy/native_pace.hpp"
 #include "spidy/body_haptics.hpp"
 #include "spidy/web_visual.hpp"
 #include "spidy/web_pull.hpp"
 #include "spidy/web_grab.hpp"
+#include "spidy/web_tie.hpp"
+#include "spidy/web_line.hpp"
 #include "spidy/lab_props.hpp"
 #include "spidy/body_ik.hpp"
 #include "spidy/native_body.hpp"
@@ -44,6 +51,8 @@
 #include "spidy/slow_motion.hpp"
 #include "spidy/spectator_smoothing.hpp"
 #include "spidy/hand_pose.hpp"
+#include "spidy/hud_capture.hpp"
+#include "spidy/steady_hud.hpp"
 #include "spidy/impact_sound.hpp"
 #include "spidy/web_strike.hpp"
 #include "spidy/spider_sense.hpp"
@@ -57,7 +66,12 @@
 #include "spidy/venom_punch.hpp"
 #include "spidy/throw_aim.hpp"
 #include "spidy/vd_eyes.hpp"
+#include "spidy/dodge_tumble.hpp"
+#include "spidy/run_update.hpp"
+#include "spidy/game_dodge.hpp"
+#include "spidy/web_aim.hpp"
 #include <algorithm>
+#include <bitset>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -68,6 +82,8 @@
 #include <vector>
 #ifdef _WIN32
 #include "spidy/game_targets.hpp"
+#include "spidy/diag_log.hpp"
+#include "spidy/ground_state.hpp"
 // Stand-ins for the game's classes, by the names the target scan's rules look
 // for: MSVC lays out their type information as it did the game's.
 class Component {
@@ -1111,6 +1127,29 @@ int main() {
         s.elasticWeb = 4;
         check(!game_swing::validSettings(s), "a fifth elastic level accepted");
     });
+    test("an elastic web that flew (WEB SPEED) ends its catch and holds the body", [] {
+        // November 5: with ELASTIC WEB and WEB SPEED on, the web grew with the
+        // falling body while it caught him, so it never stretched; its damping
+        // alone left him above the catch's 0.5 m/s, and he sank on a web that
+        // paid out for as long as it was held.
+        for (int strength = 1; strength <= 3; ++strength) {
+            TestWorld world;
+            auto config = inert();
+            config.gravity = 9.81f;
+            Swing solver(config);
+            solver.elasticWeb(strength);
+            solver.webTravel(500, 3);
+            auto input = aimed();
+            input.hands[0].trigger = 0;
+            Body body{{0, 0, 0}, {}, false};
+            for (int frame = 0; frame < 400; ++frame) {
+                const auto result = solver.predictNativeStep(.01f, input, world, body);
+                body = {result.target, result.velocity, false};
+            }
+            check(solver.webs()[0].ready() && !solver.webs()[0].catching, "the elastic web never ended its catch");
+            check(body.position.y > -1, "an elastic web that flew let the body sink");
+        }
+    });
     test("soft release carries a bounded fading pull then returns to free flight", [] {
         TestWorld world;
         auto config = inert();
@@ -1786,9 +1825,395 @@ int main() {
         s.webRange = 1001;
         check(!game_swing::validSettings(s), "a web range over 1000 m accepted");
     });
+    test("AIR SLINGSHOT: two taut webs in the air draw and launch along them; off, the air only lets go", [] {
+        {
+            // AIR SLINGSHOT: two taut webs in the air, both arms drawn until the
+            // charge buzzes, both let go: a launch along the webs.
+            auto airborne = [](bool ground, bool air) {
+                auto s = std::make_unique<Sling>(ground);
+                s->solver.allowAirSlingshot(air);
+                s->body.grounded = false;
+                s->tick();
+                return s;
+            };
+            {
+                auto s = airborne(true, false);
+                s->draw();
+                near(s->solver.slingshotCharge(), 0);
+                s->release();
+                check(!s->fired(), "AIR SLINGSHOT off: a release in the air launched");
+                check(!s->solver.webs()[0].attached && !s->solver.webs()[1].attached,
+                      "AIR SLINGSHOT off: no release");
+            }
+            {
+                auto s = airborne(false, true);
+                s->draw();
+                check(s->solver.slingshotCharge() > .9f && s->solver.slingshotDrawn(),
+                      "air draw never charged");
+                check(std::none_of(s->solver.events().begin(), s->solver.events().end(),
+                                   [](const Event& e) { return e.kind == EventKind::Zip; }),
+                      "the air draw yanked");
+                s->release();
+                check(s->fired() && s->last.velocity.z < -10 && s->last.velocity.y > 0,
+                      "no air launch along the webs");
+                check(length(s->last.velocity) <= s->solver.speedLimit() + .01f, "air launch over the limit");
+                check(!s->solver.webs()[0].attached && !s->solver.webs()[1].attached,
+                      "air launch kept its webs");
+            }
+            {
+                // Faster along the launch already: it keeps that speed.
+                auto s = airborne(false, true);
+                s->solver.limitSpeed(60);
+                s->draw();
+                s->body.velocity = normalized(Vec3{0, .6f, -1}) * 50;
+                s->tick();
+                s->release();
+                check(s->fired() && length(s->last.velocity) > 40, "the air launch slowed the swing");
+            }
+            {
+                // A release with no draw only lets go, as before.
+                auto s = airborne(false, true);
+                for (int i = 0; i < 100; ++i)
+                    s->tick();
+                s->release();
+                check(!s->fired(), "an undrawn air release launched");
+            }
+            {
+                // A landing while drawing starts over (the ground's own is off).
+                auto s = airborne(false, true);
+                s->draw();
+                s->body.grounded = true;
+                s->tick();
+                near(s->solver.slingshotCharge(), 0);
+                s->release();
+                check(!s->fired(), "a landing kept the air charge");
+            }
+            {
+                // The ground's slingshot is unchanged by the air's switch.
+                Sling ground;
+                ground.solver.allowAirSlingshot(true);
+                ground.tick();
+                ground.draw();
+                ground.release();
+                check(ground.fired() && ground.last.velocity.y > 0, "the ground slingshot changed");
+            }
+            {
+                // Slack lines never start a draw.
+                auto s = airborne(false, true);
+                s->body.position.z -= 6;
+                s->body.position.y += 3;
+                for (int i = 0; i < 5; ++i)
+                    s->tick();
+                s->draw();
+                check(s->solver.slingshotCharge() == 0, "slack webs charged an air slingshot");
+            }
+        }
+    });
+    test("WEB ANGLE and WRIST SHOOTERS turn only the webs' line; as before by default", [] {
+        using namespace web_aim;
+        const Quat held = Quat::around({0, 1, 0}, .7f) * Quat::around({1, 0, 0}, -.3f);
+        const Pose aim{{1, 2, 3}, held};
+        auto same = [](Vec3 a, Vec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; };
+        for (int hand = 0; hand < 2; ++hand) {
+            const Pose kept = shooterAim(aim, hand, {});
+            check(same(kept.position, aim.position) && kept.orientation.x == held.x &&
+                      kept.orientation.y == held.y && kept.orientation.z == held.z &&
+                      kept.orientation.w == held.w,
+                  "the default changed a hand's aim");
+        }
+        auto line = [](Pose p) { return p.orientation.rotate({0, 0, -1}); };
+        auto close = [](Vec3 a, Vec3 b) { return length(a - b) < 1e-4f; };
+        const Pose level{{0, 1, 0}, {}};
+        // Up is toward the controller's top, down away from it.
+        const float c30 = std::cos(.5235988f), s30 = std::sin(.5235988f);
+        check(close(line(shooterAim(level, 0, {30, false})), {0, s30, -c30}), "UP 30 did not lift the line");
+        check(close(line(shooterAim(level, 1, {-30, false})), {0, -s30, -c30}), "DOWN 30 did not lower it");
+        check(close(line(shooterAim(level, 0, {90, false})), line(shooterAim(level, 0, {45, false}))),
+              "the angle not held to 45 degrees");
+        // Wrist shooters: out of the palm side, the left palm +X, the right -X.
+        check(close(line(shooterAim(level, 0, {0, true})), {1, 0, 0}),
+              "the left shooter not out of its palm");
+        check(close(line(shooterAim(level, 1, {0, true})), {-1, 0, 0}),
+              "the right shooter not out of its palm");
+        check(close(line(shooterAim(level, 1, {30, true})), {-c30, s30, 0}),
+              "the wrist's line not tilted up");
+        // The place stays, and the turn goes with the controller.
+        const Pose turned = shooterAim(aim, 0, {15, true});
+        check(same(turned.position, aim.position), "the shooter moved its web's start");
+        check(close(line(turned), held.rotate(line(shooterAim(level, 0, {15, true})))),
+              "the shooter did not turn with the hand");
+        check(std::abs(length(line(turned)) - 1) < 1e-4f, "the line not a unit");
+    });
+    test("WEB ANGLE and WRIST SHOOTERS' settings: version 25, the rows, spidy_vr.ini", [] {
+        using namespace vr_settings;
+        game_swing::Settings s;
+        check(s.webAngle == 0 && !s.wristShooters &&
+                  offsetof(game_swing::Settings, webAngle) == game_swing::settingsBytesV24,
+              "web angle not appended, or not as before by default");
+        s.webAngle = -45;
+        s.wristShooters = 1;
+        check(game_swing::validSettings(s), "a valid web angle refused");
+        s.webAngle = 46;
+        check(!game_swing::validSettings(s), "a web angle over 45 accepted");
+        s.webAngle = 0;
+        s.wristShooters = 2; // PALM SHOOTERS (v6)
+        check(game_swing::validSettings(s), "PALM SHOOTERS' 2 refused");
+        s.wristShooters = 3;
+        check(!game_swing::validSettings(s), "an invalid wrist shooters switch accepted");
+        Values v;
+        check(v.webAngle == 0 && !v.wristShooters && defaultChoice(Item::webAngle) == 3 &&
+                  defaultChoice(Item::wristShooters) == 0,
+              "web angle or wrist shooters changed by default");
+        check(choose(Item::webAngle, 6, v) && v.webAngle == 45 && choose(Item::webAngle, 0, v) &&
+                  v.webAngle == -45,
+              "web angle's choices");
+        check(choose(Item::wristShooters, 1, v) && v.wristShooters, "the wrist shooters switch");
+        const Values kept = withTabOnly({}, tabOnlyText(v));
+        check(kept.webAngle == -45 && kept.wristShooters, "web angle or wrist shooters not kept");
+        check(withTabOnly({}, "web_angle_degrees=-90\n").webAngle == -45 &&
+                  withTabOnly({}, "web_angle_degrees=30\n").webAngle == 30 &&
+                  !withTabOnly({}, "").wristShooters,
+              "spidy_vr.ini's web_angle_degrees not clamped, or wrist_shooters on when absent");
+    });
+    test("WEB AIM: the forearm aim: line formats every field in its place (v6 crashed on palm.x)", [] {
+        using namespace web_aim;
+        ForearmAimLine l;
+        l.right = true;
+        l.reason = "none";
+        l.active = l.modelForearm = l.wristShooters = true;
+        l.turnDegrees = 12.5f;
+        l.targetDegrees = 13.5f;
+        l.limitDegrees = 180;
+        l.weight = .75f;
+        l.blend = 100;
+        l.handError = .02f;
+        l.stale = 3;
+        l.offDegrees = 40.f;
+        l.lagDegrees = 1.5f;
+        l.palmX = -1.f; // v6 read this double as the last %s's pointer: an access violation
+        l.jitterDegrees = .5f;
+        l.tilted = true;
+        char out[480];
+        formatForearmAimLine(out, sizeof(out), l);
+        const std::string text = out;
+        check(text.rfind("forearm aim: R none (active: the forearm's line), MODEL FOREARM + WRIST SHOOTERS, ", 0) ==
+                  0,
+              "the line's head");
+        for (const char* part :
+             {"turn 12.5 deg (target 13.5), limit 180 deg, not clamped, weight 0.75, blend 100%",
+              "wrist miss 0.020, stale 3, forearm vs controller 40.0 deg, grip lag 1.5 deg, palm.x -1.00",
+              "jitter 0.50 deg, flip tilt"})
+            check(text.find(part) != std::string::npos, part);
+        l.palmX = 1.f;
+        l.tilted = l.active = false;
+        formatForearmAimLine(out, sizeof(out), l);
+        check(std::string(out).find("palm.x +1.00, jitter 0.50 deg") != std::string::npos &&
+                  std::string(out).find("(null)") == std::string::npos,
+              "a fallback line");
+        check(formatForearmAimLine(nullptr, 0, l) == 0, "no buffer");
+    });
+    test("STARTUP STAGES: stage lines once each, the watchdog for no first frame or a stuck worker", [] {
+        diag_log::Stages s;
+        char out[diag_log::lineChars];
+        check(!s.check(1000, out, sizeof(out)), "a watchdog before the worker began");
+        s.beat(1000);
+        check(s.mark(diag_log::Stages::headset, 1000) && !s.mark(diag_log::Stages::headset, 1100),
+              "headset active marked twice");
+        check(s.mark(diag_log::Stages::views, 2000) && !s.mark(diag_log::Stages::headset, 2100) &&
+                  s.stage() == diag_log::Stages::views,
+              "a stage went back");
+        s.beat(10900);
+        check(!s.check(10900, out, sizeof(out)), "the watchdog before 10 s");
+        s.beat(11000);
+        check(s.check(11000, out, sizeof(out)) &&
+                  std::string(out).find("no frame reached the headset 10.0 s after it went active") !=
+                      std::string::npos &&
+                  std::string(out).find("waiting for the first eye images") != std::string::npos,
+              out);
+        check(!s.check(12000, out, sizeof(out)), "the watchdog repeated within 10 s");
+        check(s.submitted(12500) == diag_log::Stages::firstFrame && s.submitted(12510) == diag_log::Stages::none,
+              "the first frame");
+        for (int i = 2; i < 300; ++i)
+            s.submitted(12510 + i);
+        check(s.frames() == 300 && s.stage() == diag_log::Stages::running, "300 frames");
+        s.beat(13000);
+        check(!s.check(17000, out, sizeof(out)), "a running worker 4 s quiet");
+        check(s.check(21000, out, sizeof(out)) && std::string(out).find("running (300 frames") != std::string::npos,
+              "a worker stuck after 300 frames");
+        diag_log::Stages t;
+        t.beat(1000);
+        t.mark(diag_log::Stages::headset, 1000);
+        t.submitted(1100);
+        t.beat(2000);
+        check(!t.check(6900, out, sizeof(out)), "silent under 5 s");
+        check(t.check(7000, out, sizeof(out)) &&
+                  std::string(out).find("has not come round for 5.0 s") != std::string::npos &&
+                  std::string(out).find("1 frames submitted") != std::string::npos,
+              out);
+        // A new session in the same game starts over: its stages are marked again.
+        t.reset();
+        check(t.stage() == diag_log::Stages::none && t.frames() == 0 && !t.check(20000, out, sizeof(out)),
+              "a reset kept the last session's stages");
+        t.beat(20000);
+        check(t.mark(diag_log::Stages::headset, 20000) && t.submitted(20100) == diag_log::Stages::firstFrame,
+              "the stages after a reset");
+    });
+    test("WEB AIM: MODEL FOREARM turns the webs onto the forearm, clamped, smoothed, falling back", [] {
+        using namespace web_aim;
+        auto line = [](Quat q) { return q.rotate({0, 0, -1}); };
+        auto close = [](Vec3 a, Vec3 b, float e = 1e-3f) { return length(a - b) < e; };
+        const float deg = 3.14159265f / 180;
+        // The forearm along the controller's line: no turn.
+        const Quat grip = Quat::around({0, 1, 0}, .4f) * Quat::around({1, 0, 0}, .2f);
+        const Vec3 along = grip.rotate({0, 0, -1});
+        const Vec3 inGrip = forearmInGrip({1, 1, 1}, Vec3{1, 1, 1} + along * .3f, grip);
+        check(turnAngle(forearmTurn(inGrip, grip, grip)) < 1e-3f, "a forearm along the controller turned it");
+        check(turnAngle(forearmTurn({}, grip, grip)) == 0 && forearmInGrip({NAN, 0, 0}, {}, grip).x == 0,
+              "no forearm turned the line");
+        // Fifteen degrees down from the controller: the line follows it.
+        const Vec3 down15{0, -std::sin(15 * deg), -std::cos(15 * deg)};
+        const Quat t15 = forearmTurn(down15, {}, {});
+        check(close(line(t15), down15), "the line did not follow the forearm");
+        // Carried on the grip now: the same forearm in the grip's frame, the grip turned since.
+        const Quat now = Quat::around({0, 1, 0}, 1.1f);
+        check(close(line(now * forearmTurn(down15, now, now)), now.rotate(down15)),
+              "the turn not carried on the current grip");
+        // The aim pose's frame may differ from the grip's.
+        const Quat aimOff = Quat::around({1, 0, 0}, -.3f);
+        check(close(line(aimOff * forearmTurn(down15, {}, aimOff)), down15),
+              "the aim frame's offset not undone");
+        // FOREARM AIM LIMIT 35 (v3-v5's clamp) holds at 35 degrees; v6's default has no limit.
+        const Vec3 side60{std::sin(60 * deg), 0, -std::cos(60 * deg)};
+        check(std::abs(turnAngle(forearmTurn(side60, {}, {}, forearmClampDegrees)) - forearmClampDegrees * deg) <
+                  1e-3f,
+              "the turn not held to 35 degrees");
+        check(close(line(forearmTurn(side60, {}, {})), side60) &&
+                  std::abs(turnAngle(forearmTurn(side60, {}, {})) - 60 * deg) < 1e-3f,
+              "v6's default limit clamped a 60 degree forearm");
+        const Vec3 side120{std::sin(120 * deg), 0, -std::cos(120 * deg)};
+        check(close(line(forearmTurn(side120, {}, {})), side120), "a forearm 120 degrees off not followed");
+        check(std::abs(turnAngle(forearmTurn(side120, {}, {}, 90)) - 90 * deg) < 1e-3f, "the 90 degree limit");
+        {
+            ForearmAim wide;
+            wide.update(true, forearmTurn(side60, {}, {}), 1.f / 90);
+            check(close(line(wide.smoothed), side60), "ForearmAim clamped by default");
+            ForearmAim narrow;
+            narrow.update(true, forearmTurn(side60, {}, {}), 1.f / 90, 35);
+            check(std::abs(turnAngle(narrow.smoothed) - 35 * deg) < 1e-3f, "ForearmAim's limit not taken");
+        }
+        // The web goes parallel to the forearm, elbow to wrist, out past the wrist: not
+        // out of the palm. A forearm along -Z with the controller pitched 40 degrees
+        // down gives the forearm's line, not the controller's.
+        {
+            const Vec3 elbow{0, 1, .3f}, wrist{0, 1, 0};
+            const Quat grip = Quat::around({1, 0, 0}, -40 * deg);
+            const Vec3 inGrip = forearmInGrip(elbow, wrist, grip);
+            const Quat turnOn = forearmTurn(inGrip, grip, grip);
+            check(close(line(grip * turnOn), {0, 0, -1}), "the web not parallel to the forearm (elbow->wrist)");
+        }
+        // Mirrored hands, mirrored turns (x -> -x: the turn's y and z change sign).
+        const Vec3 left{std::sin(12 * deg), -std::sin(10 * deg), -1}, right{-left.x, left.y, left.z};
+        const Quat tl = forearmTurn(normalized(left), {}, {}), tr = forearmTurn(normalized(right), {}, {});
+        check(std::abs(tl.x - tr.x) < 1e-5f && std::abs(tl.y + tr.y) < 1e-5f &&
+                  std::abs(tl.z + tr.z) < 1e-5f && std::abs(tl.w - tr.w) < 1e-5f,
+              "the hands' turns not mirrored");
+        // Smoothing: the first sample at once, then about 80 ms to follow a change.
+        ForearmAim a;
+        a.update(true, t15, 1.f / 90);
+        check(a.primed && close(line(a.smoothed), down15) && a.weight > 0 && a.weight < .1f,
+              "the first sample not taken at once, or blended in at once");
+        const Vec3 up10{0, std::sin(10 * deg), -std::cos(10 * deg)};
+        const Quat tUp = forearmTurn(up10, {}, {});
+        a.update(true, tUp, .08f);
+        const float left80 = turnAngle(a.smoothed.conjugate() * tUp) / turnAngle(t15.conjugate() * tUp);
+        check(left80 > .3f && left80 < .45f, "80 ms did not take about 63% of the change");
+        for (int i = 0; i < 60; ++i)
+            a.update(true, tUp, 1.f / 90);
+        check(a.weight == 1 && turnAngle(a.smoothed.conjugate() * tUp) < 1e-3f, "the turn not reached");
+        // Blend: 0% the controller, 50% half, 100% all.
+        check(turnAngle(a.turn(0)) == 0 && std::abs(turnAngle(a.turn(50)) - 5 * deg) < 1e-3f &&
+                  std::abs(turnAngle(a.turn(100)) - 10 * deg) < 1e-3f,
+              "FOREARM BLEND's share");
+        // Invalid: back to the controller within 0.15 s, not at once.
+        a.update(false, {}, .05f);
+        check(a.weight > .6f && a.weight < .7f && turnAngle(a.turn(100)) > 0, "the fallback not gradual");
+        for (int i = 0; i < 9; ++i)
+            a.update(false, {}, 1.f / 90);
+        check(a.weight == 0 && !a.primed && turnAngle(a.turn(100)) == 0,
+              "the fallback did not reach the controller's line in 0.15 s");
+        a.update(true, tUp, NAN);
+        check(std::isfinite(a.weight) && a.weight == 0, "a NaN step moved the blend");
+        // WEB ANGLE on top of the forearm, about its own side; WRIST SHOOTERS a quarter turn about it.
+        const Pose level{{0, 1, 0}, {}};
+        const Pose tilted = shooterAim(level, 0, {15, false}, t15);
+        check(close(tilted.position, level.position) && close(line(tilted.orientation), {0, 0, -1}),
+              "WEB ANGLE UP 15 did not undo a forearm 15 down");
+        const Pose wrist = shooterAim(level, 0, {0, true}, t15);
+        check(std::abs(dot(line(wrist.orientation), down15)) < 1e-4f &&
+                  close(line(wrist.orientation), {1, 0, 0}),
+              "PALM SHOOTERS (the old WRIST SHOOTERS) not square to the forearm");
+        // The identity turn is the old shooterAim exactly.
+        const Quat held = Quat::around({0, 1, 0}, .7f) * Quat::around({1, 0, 0}, -.3f);
+        for (int hand = 0; hand < 2; ++hand) {
+            const Pose o = shooterAim({{1, 2, 3}, held}, hand, {30, true});
+            const Pose n = shooterAim({{1, 2, 3}, held}, hand, {30, true}, Quat{});
+            check(o.orientation.x == n.orientation.x && o.orientation.y == n.orientation.y &&
+                      o.orientation.z == n.orientation.z && o.orientation.w == n.orientation.w,
+                  "an identity forearm turn changed the line");
+        }
+        check(std::string(fallbackName(Fallback::wristMiss)) == "wrist miss", "the fallback's log name");
+    });
+    test("WEB AIM and FOREARM BLEND's settings: CONTROLLER and 100% by default, kept, WebTurns", [] {
+        using namespace vr_settings;
+        Values v;
+        check(v.webAimSource == 0 && v.forearmBlend == 100 && defaultChoice(Item::webAimSource) == 0 &&
+                  defaultChoice(Item::forearmBlend) == 4,
+              "web aim not CONTROLLER, or forearm blend not 100%, by default");
+        check(choose(Item::webAimSource, 1, v) && v.webAimSource == 1 && choose(Item::forearmBlend, 2, v) &&
+                  v.forearmBlend == 50,
+              "web aim's or forearm blend's choices");
+        const Values kept = withTabOnly({}, tabOnlyText(v));
+        check(kept.webAimSource == 1 && kept.forearmBlend == 50, "web aim or forearm blend not kept");
+        check(withTabOnly({}, "web_aim_source=5\nforearm_blend=150\n").webAimSource == 1 &&
+                  withTabOnly({}, "forearm_blend=-3\n").forearmBlend == 0 &&
+                  withTabOnly({}, "").webAimSource == 0 && withTabOnly({}, "").forearmBlend == 100,
+              "spidy_vr.ini's web_aim_source or forearm_blend not clamped, or not defaulted");
+        game_swing::WebTurns t;
+        check(game_swing::validWebTurns(t) && !t.active, "the default WebTurns refused or active");
+        t.active = 1;
+        t.turns[1] = web_aim::forearmTurn({0, -.2588f, -.9659f}, {}, {});
+        check(game_swing::validWebTurns(t), "a valid WebTurns refused");
+        t.turns[0] = {0, 0, 0, 2};
+        check(!game_swing::validWebTurns(t), "a turn that is not a unit accepted");
+        t.turns[0] = {};
+        t.active = 2;
+        check(!game_swing::validWebTurns(t), "an invalid active accepted");
+        native_body::Forearms f;
+        check(f.magic == 0x53424641 && f.bytes == 160 && !f.arms[0].valid && f.arms[1].handError < 0,
+              "the forearms' packet");
+    });
+    test("AIR SLINGSHOT's settings: version 24, off by default, kept as air_slingshot", [] {
+        game_swing::Settings s;
+        check(!s.airSlingshot && offsetof(game_swing::Settings, airSlingshot) == game_swing::settingsBytesV23,
+              "air slingshot not appended, or on by default");
+        s.airSlingshot = 1;
+        check(game_swing::validSettings(s), "air slingshot ON refused");
+        s.airSlingshot = 2;
+        check(!game_swing::validSettings(s), "an invalid air slingshot switch accepted");
+        vr_settings::Values v;
+        check(!v.airSlingshot && vr_settings::defaultChoice(vr_settings::Item::airSlingshot) == 0,
+              "air slingshot on by default");
+        check(vr_settings::choose(vr_settings::Item::airSlingshot, 1, v) && v.airSlingshot &&
+                  vr_settings::tabOnlyText(v).find("air_slingshot=1\n") != std::string::npos &&
+                  vr_settings::withTabOnly({}, "air_slingshot=1\n").airSlingshot &&
+                  !vr_settings::withTabOnly({}, "").airSlingshot,
+              "spidy_vr.ini keeps AIR SLINGSHOT as air_slingshot, off when absent");
+        Swing solver;
+        check(!solver.airSlingshotEnabled() && !solver.slingshotDrawn(), "the solver's air slingshot on");
+    });
     test("slingshot settings append to the old wire format and default off", [] {
         game_swing::Settings s;
-        check(s.version == 22 && s.bytes == 104 && !s.webSlingshot, "wrong slingshot defaults");
+        check(s.version == 32 && s.bytes == 152 && !s.webSlingshot, "wrong slingshot defaults");
         check(offsetof(game_swing::Settings, webSlingshot) == 48, "old settings moved");
         s.webSlingshot = 1; check(game_swing::validSettings(s), "ON refused");
         s.webSlingshot = 2; check(!game_swing::validSettings(s), "invalid switch accepted");
@@ -1935,11 +2360,46 @@ int main() {
         near(native_stream::poolMargin(10001, 10000, 30), 0);
         near(native_stream::poolMargin(100, 10000, 0), 0);
     });
-    test("the texture budget doubles where the card has room and leaves an eighth of it free", [] {
+    test("the scene's slot pool grows by a percent of the game's, 100 to 400", [] {
+        check(native_render_memory::scenePool(409600, 200) == 819200, "doubled");
+        check(native_render_memory::scenePool(409600, 400) == 1638400, "four times");
+        // The game's own for 100, a percent out of range, or a setting that reads as no pool.
+        check(native_render_memory::scenePool(409600, 100) == 409600 &&
+                  native_render_memory::scenePool(409600, 401) == 409600 &&
+                  native_render_memory::scenePool(409600, 0) == 409600,
+              "raised by a percent out of range");
+        check(native_render_memory::scenePool(0, 200) == 0 && native_render_memory::scenePool(-1, 200) == -1 &&
+                  native_render_memory::scenePool(1 << 23, 200) == 1 << 23,
+              "raised a pool that does not read as one");
+    });
+    test("frame pacing measures the headset's period and waits at most a period and a half", [] {
+        // 10 MHz ticks: a 90 Hz headset's 111,111-tick frames.
+        constexpr int64_t frequency = 10000000;
+        double average = native_pace::period(0, 111111, frequency);
+        near(static_cast<float>(average), 111111);
+        // A late command moves the average a sixteenth of the way; a menu's gap does not count.
+        average = native_pace::period(average, 111111 + 16000, frequency);
+        near(static_cast<float>(average), 112111);
+        near(static_cast<float>(native_pace::period(average, 600000, frequency)), 112111);
+        near(static_cast<float>(native_pace::period(average, 0, frequency)), 112111);
+        // A period and a half, to the nearest ms: 17 at 90 Hz, 12 at 120 (12.49995); never under 4 or over
+        // 20, 20 with no period yet.
+        check(native_pace::waitMs(111111, frequency) == 17, "90 Hz wait");
+        check(native_pace::waitMs(83333, frequency) == 12, "120 Hz wait");
+        check(native_pace::waitMs(10000, frequency) == 4 && native_pace::waitMs(400000, frequency) == 20,
+              "wait outside 4-20 ms");
+        check(native_pace::waitMs(0, frequency) == 20 && native_pace::waitMs(111111, 0) == 20, "no period");
+    });
+    test("the texture budget grows up to four times where the card has room and leaves an eighth free", [] {
         constexpr uint64_t mb = 1ull << 20;
         const uint64_t veryHigh = 3874 * mb;
         // The October 26 session: a 32 GB card, 31,418 MB for the game, 9,448 used.
-        check(native_stream::textureBudget(veryHigh, 31418 * mb, 9448 * mb) == 2 * veryHigh, "not doubled");
+        check(native_stream::textureBudget(veryHigh, 31418 * mb, 9448 * mb) == 4 * veryHigh, "not four times");
+        check(native_stream::textureBudget(veryHigh, 31418 * mb, 9448 * mb, 2) == 2 * veryHigh, "not doubled");
+        // The same card with less room: what is left over an eighth of it (3,927.25 MB), in whole MB.
+        check(native_stream::textureBudget(veryHigh, 31418 * mb, 20000 * mb) == veryHigh + 7490 * mb,
+              "not raised by the room left over an eighth");
+        check(native_stream::textureBudget(veryHigh, 31418 * mb, 9448 * mb, 0) == veryHigh, "raised by no times");
         // A 16 GB card in VR: what is left over 2 GB (more than an eighth of 15,000 MB).
         check(native_stream::textureBudget(veryHigh, 15000 * mb, 10000 * mb) == veryHigh + (5000 - 2048) * mb,
               "not raised by the room left over 2 GB");
@@ -1967,6 +2427,121 @@ int main() {
         f.predictedDisplayTime=2;out=rig.update(f,{10,20,30},{0,0,-1},true);
         check(out.swing.hands[0].tracked&&out.swing.hands[1].tracked,"hands not independent");
         near(out.swing.hands[0].gripRelativeToHead.y,-.5f);
+    });
+    test("DODGE TUMBLE: a lean that comes back, a roll that ends upright, never a snap", [] {
+        using namespace dodge_tumble;
+        Tumble t;
+        check(!t.active() && t.angle() == 0, "a tumble before a dodge");
+        t.start(Style::off, {0, 0, -1}, 1);
+        check(!t.active(), "OFF tumbled");
+        t.start(Style::lean, {0, 0, -1}, 1);
+        float most = 0;
+        int frames = 0;
+        while (t.active() && frames < 1000) {
+            t.update(1.f / 90, true);
+            most = std::max(most, std::abs(t.angle()));
+            ++frames;
+        }
+        check(most > .4f && most <= leanAngle + 1e-4f, "a lean not 24 degrees at most");
+        check(frames <= static_cast<int>(leanSeconds * 90) + 2, "a lean too long");
+        check(t.angle() == 0 && t.turn().w == 1, "a lean not back level");
+        t.start(Style::roll, {0, 0, -1}, -1);
+        float previous = 0;
+        bool monotonic = true;
+        frames = 0;
+        while (t.active() && frames < 1000) {
+            t.update(1.f / 90, true);
+            if (t.active()) {
+                monotonic &= t.angle() <= previous + 1e-5f;
+                previous = t.angle();
+            }
+            ++frames;
+        }
+        check(monotonic && previous < -6.f, "a left roll not one whole turn the left way");
+        check(frames <= static_cast<int>(rollSeconds * 90) + 2 && !t.active(), "a roll too long");
+        // Cut short: a lean fades within fadeSeconds, a roll hurries round.
+        t.start(Style::lean, {0, 0, -1}, 1);
+        for (int i = 0; i < 18; ++i)
+            t.update(1.f / 90, true);
+        const float at = std::abs(t.angle());
+        t.update(1.f / 90, false);
+        check(std::abs(t.angle()) < at && std::abs(t.angle()) > at * .8f, "a cut lean snapped or held");
+        for (int i = 0; i < 12; ++i)
+            t.update(1.f / 90, false);
+        check(!t.active(), "a cut lean did not end in its fade");
+        t.start(Style::roll, {0, 0, -1}, 1);
+        for (int i = 0; i < 10; ++i)
+            t.update(1.f / 90, true);
+        frames = 0;
+        while (t.active() && frames < 1000) {
+            t.update(1.f / 90, false);
+            ++frames;
+        }
+        check(frames > 3 && frames <= 20, "a cut roll did not hurry round");
+        // Bad input: nothing.
+        t.start(Style::roll, {0, 0, 0}, 1);
+        check(!t.active(), "a roll about no axis");
+        t.start(Style::roll, {0, 0, -1}, NAN);
+        check(!t.active(), "a roll to no side");
+    });
+    test("DODGE TUMBLE's way and kinds: a roll to the stick's side, a flip ahead or back, the game's own dodges", [] {
+        using namespace dodge_tumble;
+        const Vec3 ahead{0, 0, -1}, right{1, 0, 0};
+        auto w = way(1, 0, ahead, right);
+        check(!w.pitch && w.side > 0 && w.axis.z == -1, "a dodge right not a roll right");
+        w = way(-.8f, .3f, ahead, right);
+        check(!w.pitch && w.side < 0, "a dodge left not a roll left");
+        w = way(0, 1, ahead, right);
+        check(w.pitch && w.side < 0 && w.axis.x == 1, "a dodge ahead not a front flip's way");
+        w = way(0, 0, ahead, right);
+        check(w.pitch && w.side > 0, "no stick not a back flip's way");
+        w = way(NAN, 1, ahead, right);
+        check(w.pitch && w.side > 0, "a stick that is not a number");
+        // The right side goes down in a roll to the right.
+        Tumble t;
+        t.start(Style::lean, ahead, 1);
+        for (int i = 0; i < 20; ++i)
+            t.update(1.f / 90, true);
+        check(t.turn().rotate(right).y < -.2f, "a roll right lifted the right side");
+        check(tumbles(4) && tumbles(5) && !tumbles(0) && !tumbles(8) && !tumbles(14), "the wrong kinds tumble");
+        const Pose eye{{.032f, 1.7f, 0}, {}};
+        const Pose turned = turnedAbout(eye, {0, 1.7f, 0}, Quat::around(ahead, 3.14159265f));
+        check(length(turned.position - Vec3{-.032f, 1.7f, 0}) < 1e-4f, "an eye not turned about the head");
+        check(vr_settings::Values{}.dodgeTumble == 0 && vr_settings::defaultChoice(vr_settings::Item::dodgeTumble) == 0,
+              "DODGE TUMBLE on by default");
+        vr_settings::Values v;
+        check(vr_settings::choose(vr_settings::Item::dodgeTumble, 2, v) && v.dodgeTumble == 2 &&
+                  vr_settings::withTabOnly({}, vr_settings::tabOnlyText(v)).dodgeTumble == 2 &&
+                  vr_settings::withTabOnly({}, "dodge_tumble=9\n").dodgeTumble == 2 &&
+                  vr_settings::withTabOnly({}, "").dodgeTumble == 0,
+              "spidy_vr.ini keeps DODGE TUMBLE as dodge_tumble, 0 to 2, OFF when absent");
+        game_dodge::Live live;
+        check(live.magic == 0x5344474c && live.version == 1 && live.bytes == 40 && !live.starts, "the live dodge's header");
+    });
+    test("DODGE TUMBLE turns the eyes alone about the head; the identity changes nothing", [] {
+        auto f = trackedFrame();
+        GameTrackingRig plain, turned;
+        plain.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        turned.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        f.predictedDisplayTime = 2;
+        turned.viewTurn(Quat{});
+        const auto a = plain.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        auto b = turned.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        check(a.eyes == b.eyes && a.head == b.head, "the identity turn changed the view");
+        f.predictedDisplayTime = 3;
+        turned.viewTurn(Quat::around({0, 0, -1}, 3.14159265f));
+        const auto c = plain.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        b = turned.update(f, {10, 20, 30}, {0, 0, -1}, true);
+        check(c.head == b.head && length(c.hands[0].position - b.hands[0].position) == 0 &&
+                  length(c.swing.hands[1].aim.position - b.swing.hands[1].aim.position) == 0,
+              "the tumble moved the head or the hands");
+        // Upside down: the eyes swap sides about the head, and the up points down.
+        near(b.eyes[0][12] - b.eyes[1][12], c.eyes[1][12] - c.eyes[0][12]);
+        near(b.eyes[0][5], -c.eyes[0][5]);
+        turned.viewTurn(Quat{NAN, 0, 0, 1});
+        f.predictedDisplayTime = 4;
+        check(plain.update(f, {10, 20, 30}, {0, 0, -1}, true).eyes == turned.update(f, {10, 20, 30}, {0, 0, -1}, true).eyes,
+              "a turn that is not a number turned the view");
     });
     test("each hand aims from its web shooter, on the wrist the body draws, where the hand points", [] {
         // Meta's runtimes, and Virtual Desktop's, turn the aim pose 30 degrees
@@ -2148,6 +2723,9 @@ int main() {
         check(!airborne(sample(1,0,0,0x2060001,0),now,hz),"a perch (contact 2) is airborne");
         check(!airborne(sample(1,0,1,0x2060005,0),now,hz),"a wall crawl is airborne");
         check(!airborne(sample(1,0,0,0x2060000,0),now,hz),"a wall run is airborne");
+        // November 11: the swing running the body on the ground (SPIDY RUN, the landing carry) is not.
+        check(!airborne(sample(2,1,1,0x2060000,0),now,hz),"SPIDY RUN on the ground is airborne");
+        check(!airborne(sample(2,1,1,0x2060010,0),now,hz),"the landing carry is airborne");
         check(!airborne(sample(2,1,0,0x2060010,hz/5),now,hz),"a step 200 ms old is airborne");
         check(airborne(sample(2,1,0,0x2060010,-hz/100),now,hz),"a step newer than the frame is not airborne");
         check(!airborne(sample(0,1,0,0x2060010,0),now,hz),"a stopped swing is airborne");
@@ -2301,7 +2879,7 @@ int main() {
         check(vr_settings::choose(vr_settings::Item::betterClimbing, 1, v), "ON failed");
         check(vr_settings::withTabOnly({}, vr_settings::tabOnlyText(v)).betterClimbing, "switch not saved");
         game_swing::Settings s;
-        check(s.version == 22 && s.bytes == 104 && offsetof(game_swing::Settings, betterClimbing) == 52,
+        check(s.version == 32 && s.bytes == 152 && offsetof(game_swing::Settings, betterClimbing) == 52,
               "settings moved old fields");
         s.betterClimbing = 1; check(game_swing::validSettings(s), "ON refused");
         s.betterClimbing = 2; check(!game_swing::validSettings(s), "invalid switch accepted");
@@ -3637,10 +4215,10 @@ int main() {
     });
     test("grip climbing settings keep old packets and reject invalid versions, sizes and switches", [] {
         using namespace game_swing;
-        for (uint32_t version = 3; version <= 21; ++version) {
+        for (uint32_t version = 3; version <= 24; ++version) {
             Settings s;
             s.version = version;
-            s.bytes = 16 + 4 * version; // official v3=28 through custom v21=100
+            s.bytes = 16 + 4 * version; // official v3=28 through custom v24=112
             check(validSettings(s), "compatible settings packet was refused");
             ++s.bytes;
             check(!validSettings(s), "wrong settings length was accepted");
@@ -3657,7 +4235,7 @@ int main() {
     test("merged settings keep phone suppression, arcade webs and hand climbing independent", [] {
         using namespace game_swing;
         Settings s;
-        check(s.version == 22 && s.bytes == 104, "updated settings did not append the climbing field");
+        check(s.version == 32 && s.bytes == 152, "updated settings did not append the climbing field");
         check(offsetof(Settings, noBlows) == 36 && offsetof(Settings, arcade) == 40 &&
               offsetof(Settings, handClimb) == 44, "upstream phone or arcade fields moved");
         s.noBlows = 3;
@@ -5092,6 +5670,74 @@ int main() {
         for (const Vec3 way : {Vec3{1, 0, 0}, normalized(Vec3{1, 1, 0}), normalized(Vec3{.3f, 1, 0})})
             squeeze(way, false);
     });
+    test("hand climbing: while a hand holds the wall neither hand starts a web, with either web button", [] {
+        // Adrian's pull request 24: a hand on the wall keeps the other hand's
+        // press from webbing until it lets go. From October 22 to November 5
+        // a squeeze that missed the wall (pointed up it) shot a web there.
+        constexpr float dt = 1.f / 60;
+        for (const bool triggerWebs : {false, true})
+            for (int holding = 0; holding < 2; ++holding) {
+                const int free = 1 - holding;
+                Building w;
+                Swing s(walled());
+                s.allowHandClimb(true);
+                Input in;
+                Body body{{4.1f, 10, 0}, {1, 0, 0}, false};
+                const auto advance = [&] {
+                    const auto motion = s.predictNativeStep(dt, in, w, body);
+                    body = {motion.target, motion.velocity, false};
+                };
+                // As trackedSwingInput and game_xr give them: the physical grip is
+                // wallGrip, and the web button `grip` is that grip, or with WEB
+                // BUTTON TRIGGER the trigger (the grip then the reel, `trigger`).
+                const auto squeeze = [&](HandInput& h, float v) {
+                    h.wallGrip = v;
+                    (triggerWebs ? h.trigger : h.grip) = v;
+                };
+                const auto web = [&](HandInput& h, float v) {
+                    h.grip = v;
+                    if (!triggerWebs)
+                        h.wallGrip = v;
+                };
+                advance();
+                check(s.wall().on, "the test body did not reach the wall");
+                auto &hold = in.hands[holding], &f = in.hands[free];
+                for (auto* h : {&hold, &f}) {
+                    h->tracked = true;
+                    h->wallPosition = {4.9f, 10, 0};
+                }
+                // The holding hand reaches into the wall; the free one points up it.
+                hold.aim = {hold.wallPosition, arc({0, 0, -1}, {1, 0, 0})};
+                f.aim = {f.wallPosition, arc({0, 0, -1}, normalized(Vec3{.1f, 1, 0}))};
+                advance();
+                // No hand on the wall: the free hand webs up it (October 22),
+                // and keeps that web while the other hand takes the wall.
+                web(f, 1);
+                advance();
+                check(s.webs()[free].attached, "with no hand on the wall a press shot no web");
+                squeeze(hold, 1);
+                advance();
+                check(s.climbingHands() == (1u << holding), "the other hand did not take the wall");
+                check(s.webs()[free].attached, "taking the wall let go of the free hand's web");
+                web(f, 0);
+                advance();
+                check(!s.webs()[free].attached, "letting go of the web button kept the web");
+                // A hand on the wall: the free hand's press starts no web.
+                web(f, 1);
+                advance();
+                check(!s.webs()[free].attached, "a press beside a hand on the wall shot a web");
+                // Let go of the wall with that press still held: nothing either.
+                squeeze(hold, 0);
+                advance();
+                check(!s.webs()[free].attached, "letting go of the wall fired a held press");
+                // A fresh press with no hand on the wall webs again.
+                web(f, 0);
+                advance();
+                web(f, 1);
+                advance();
+                check(s.webs()[free].attached, "with no hand on the wall again a fresh press shot no web");
+            }
+    });
     test("a web shot from a wall at rest takes the body off it to swing; one up the wall keeps it there", [] {
         constexpr float dt = 1.f / 60;
         for (const bool out : {true, false}) {
@@ -5295,11 +5941,12 @@ int main() {
         bad = c;
         bad.wallGrips[1] = 2;
         check(!game_swing::valid(bad), "invalid physical grip accepted");
-        // SM2VR 0.0.57: the air dodge's ask (bit 1) is a command's too; 0.0.56 refused it and VR stopped (2001).
+        // SM2VR 0.0.57: the air dodge's ask (bit 6 since Spidy 0.8 took bits 1-5) is a command's too; 0.0.56
+        // refused it and VR stopped (2001).
         bad = c;
-        bad.asks = 3;
+        bad.asks = 65;
         check(game_swing::valid(bad), "the air dodge's ask refused");
-        bad.asks = 4;
+        bad.asks = 128;
         check(!game_swing::valid(bad), "an unknown ask accepted");
         c.version = 4;
         c.bytes = game_swing::commandBytesV4;
@@ -6840,6 +7487,92 @@ int main() {
         }
         near(s.config().gravity,14.715f);
     });
+    test("reel haptics: a winch's ticks for the rope taken in, none while it takes none", [] {
+        using reel_haptics::Ticks;
+        Ticks t;
+        check(!t.update(false,20),"not reeling, a pulse");
+        // The reel begins: a firmer pulse.
+        const auto start=t.update(true,20);
+        check(start&&start.strength==Ticks::startStrength,"the reel's start not felt");
+        // 16 m/s at 90 frames a second: a tick every 0.75 m, about 21 a second.
+        int ticks=0;
+        float length=20;
+        for(int f=0;f<90&&length>2;++f){
+            length-=16.f/90;
+            const auto p=t.update(true,length);
+            if(p){
+                ++ticks;
+                check(p.strength==Ticks::tickStrength&&p.seconds==Ticks::tickSeconds,"a tick's strength");
+            }
+        }
+        check(std::abs(ticks-static_cast<int>((20-length)/Ticks::tickMetres))<=1&&ticks>=20,"ticks not one for every 0.75 m");
+        // At its shortest the reel takes no rope: still.
+        bool still=true;
+        for(int f=0;f<90;++f)still&=!t.update(true,length);
+        check(still,"a reel taking no rope ticked");
+        // Paid out (a swing's slack), then wound back: only the rope taken in counts.
+        Ticks out;
+        out.update(true,10);
+        check(!out.update(true,12)&&!out.update(true,11.5f),"rope paid out ticked");
+        check(out.update(true,11.f),"0.75 m wound back did not tick");
+        // A jump of metres (a new web) is no rope taken in; let go, the next reel starts afresh.
+        Ticks jump;
+        jump.update(true,30);
+        check(!jump.update(true,10),"a jump shorter ticked");
+        check(!jump.update(false,10)&&!jump.reeling(),"let go, still reeling");
+        check(jump.update(true,10).strength==Ticks::startStrength,"a new reel did not start afresh");
+        check(!jump.update(true,std::numeric_limits<float>::quiet_NaN())&&!jump.reeling(),"a broken length reeled");
+    });
+    test("swing haptics: a faint tick for every 2 m of a taut swing, slow at its turning point", [] {
+        using swing_haptics::Ticks;
+        Ticks t;
+        check(!t.update(false,20,.1f),"not swinging, a pulse");
+        // 20 m/s at 90 frames a second for a second: a tick every 2 m, 10 of them.
+        int ticks=0;
+        float strongest=0,faintest=1;
+        for(int f=0;f<90;++f)
+            if(const auto p=t.update(true,20,1.f/90)){
+                ++ticks;
+                strongest=std::max(strongest,p.strength);
+                check(p.seconds==Ticks::tickSeconds,"a tick's length");
+            }
+        check(ticks>=9&&ticks<=10,"not a tick every 2 m");
+        check(strongest<reel_haptics::Ticks::tickStrength,"a swing's tick as strong as the reel's");
+        // Slow, near the turning point: the ticks space out, fainter.
+        Ticks slow;
+        int slowTicks=0;
+        for(int f=0;f<90;++f)
+            if(const auto p=slow.update(true,3,1.f/90)){
+                ++slowTicks;
+                faintest=std::min(faintest,p.strength);
+            }
+        check(slowTicks==1&&faintest<strongest&&faintest>=Ticks::tickStrength,"a slow swing not one faint tick a second");
+        check(t.update(true,1000,1).strength==Ticks::fastStrength,"the fastest not at its strongest");
+        // Hanging still: none, however long.
+        Ticks still;
+        bool quiet=true;
+        for(int f=0;f<900;++f)quiet&=!still.update(true,.5f,1.f/90);
+        check(quiet,"a body hanging still ticked");
+        // Slack or let go: the travel starts afresh.
+        Ticks gap;
+        gap.update(true,10,.15f);
+        check(!gap.update(false,10,.1f)&&!gap.update(true,10,.1f),"the travel kept across a slack rope");
+        check(!gap.update(true,std::numeric_limits<float>::quiet_NaN(),.1f),"a broken speed ticked");
+    });
+    test("SWING HAPTICS: off by default, a switch after REEL HAPTICS kept as swing_haptics", [] {
+        using namespace vr_settings;
+        Values v;
+        const auto& all = rows();
+        check(all[28].item == Item::reelHaptics && all[29].item == Item::swingHaptics && all[29].choices.empty() &&
+                  std::strcmp(all[29].title, "SWING HAPTICS") == 0,
+              "SWING HAPTICS: a switch after REEL HAPTICS");
+        check(!v.swingHaptics && defaultChoice(Item::swingHaptics) == 0, "swing haptics on by default");
+        check(choose(Item::swingHaptics, 1, v) && v.swingHaptics && choice(Item::swingHaptics, v) == 1,
+              "not switched on");
+        check(tabOnlyText(v).find("swing_haptics=1\n") != std::string::npos &&
+                  withTabOnly({}, "swing_haptics=1\n").swingHaptics && !withTabOnly({}, "swing_haptics=0\n").swingHaptics,
+              "spidy_vr.ini does not keep SWING HAPTICS as swing_haptics");
+    });
     test("phone hold: a control changes hands only once let go of, so nothing sees a press nobody made", [] {
         PhoneHold hold;
         XrFrame f, mine;
@@ -7195,6 +7928,26 @@ int main() {
         }
         check(zips == 1, "zip must fire once per attachment");
         check(s.body().velocity.y > 0 && s.body().velocity.y <= 12, "zip strength");
+    });
+    test("single-hand yank strength scales the speed boost", [] {
+        const auto impulse = [](float strength) {
+            TestWorld world;
+            Swing swing(inert());
+            swing.singleHandYankStrength(strength);
+            auto input = aimed();
+            swing.update(.01f, input, world);
+            for (int i = 0; i < 20; ++i) {
+                input.hands[0].gripRelativeToHead.y -= .03f;
+                swing.update(.01f, input, world);
+                for (const auto& event : swing.events())
+                    if (event.kind == EventKind::Zip)
+                        return length(swing.body().velocity);
+            }
+            return 0.f;
+        };
+        const float normal = impulse(1.f), boosted = impulse(2.f);
+        check(normal > 0 && boosted > normal * 1.8f,
+              "doubling one-hand yank strength did not substantially increase player speed");
     });
     test("slow hand movement does not zip", [] {
         TestWorld w;
@@ -8468,6 +9221,23 @@ int main() {
         HandPoser fight;thrown.fighting=true;
         for(int i=0;i<5;++i)pose=fight.update(dt,thrown);
         near(pose.shoot,0,.001f);near(pose.fist,1,.001f);
+        // November 5: an open hand moved fast with nobody to punch stays open ("if I don't do anything
+        // they just spam a grab motion"); with somebody to punch it is a fist.
+        // November 11: AIR FISTS (on by default) closes it all the same, as before November 5 ("I liked
+        // when even if there wasn't a enemy I could punch and it would go into a fist"); the shooting pose
+        // stays over it while the hand shoots, as before.
+        HandPoser waving;HandPoseInput waved;waved.tracked=true;waved.speed=3;
+        for(int i=0;i<5;++i)pose=waving.update(dt,waved);
+        near(pose.fist,0,.001f);near(pose.shoot,0,.001f);
+        HandPoser punching;waved.fighting=true;
+        for(int i=0;i<5;++i)pose=punching.update(dt,waved);
+        near(pose.fist,1,.001f);
+        HandPoser air;waved.fighting=false;waved.airFists=true;
+        for(int i=0;i<5;++i)pose=air.update(dt,waved);
+        near(pose.fist,1,.001f);near(pose.shoot,0,.001f);
+        HandPoser airShot;HandPoseInput shooting=waved;shooting.web=1;
+        for(int i=0;i<5;++i)pose=airShot.update(dt,shooting);
+        near(pose.fist,1,.001f);near(pose.shoot,1,.001f);
         // An untracked hand is neither.
         thrown.tracked=false;pose=fight.update(dt,thrown);
         near(pose.fist,0);near(pose.shoot,0);
@@ -8654,6 +9424,42 @@ int main() {
         bad=c; bad.rays[0].distance=1001; check(!native_rays::valid(bad),"excessive range accepted");
         c.count=0; c.leaseMs=0; check(native_rays::valid(c),"cancel command rejected");
     });
+    test("a visitor's ray the world does not take is cut to 1000 m or missed, never the end of VR", [] {
+        static_assert(maxRayDistance==native_rays::maxDistance);
+        const auto cut=native_rays::usable({1,2,3},{0,0,-1},1000.3f);
+        check(cut && cut->distance==native_rays::maxDistance,"a ray past 1000 m was not cut to it");
+        native_rays::Command c; c.serial=1; c.count=1; c.rays[0]=*cut;
+        check(native_rays::valid(c),"a cut ray is still one the world does not take");
+        const auto unit=native_rays::usable({1,2,3},{0,-2,0},50);
+        check(unit && std::abs(length(unit->direction)-1)<1e-6f && unit->distance==50,"a long direction kept");
+        check(!native_rays::usable({1,2,3},{},50),"a ray without a direction was cast");
+        check(!native_rays::usable({1,2,3},{0,-1,0},-1),"a negative length was cast");
+        check(!native_rays::usable({1,2,3},{0,-1,0},std::nanf("")),"a length that is no number was cast");
+        check(!native_rays::usable({std::numeric_limits<float>::infinity(),0,0},{0,-1,0},5),
+              "an infinite origin was cast");
+    });
+    test("WEB RANGE 1000 m: a web into open sky asks the world only for rays it takes", [] {
+        // November 4: the body's clear line to an open-air anchor 1000 m from
+        // the hand came out 1000.9 m long, and the ray module ended VR (2105).
+        struct Strict : TestWorld {
+            mutable unsigned asked=0, refused=0;
+            std::optional<RayHit> raycast(Vec3 o,Vec3 d,float distance) const override {
+                ++asked;
+                native_rays::Command c; c.serial=1; c.count=1; c.rays[0]={o,distance,d,0};
+                refused+=!native_rays::valid(c);
+                return {};
+            }
+        } world;
+        Swing s(inert());
+        s.webTravel(1000,0);
+        auto in=aimed();
+        in.hands[0].aim.position={0,2,0};
+        const Body body{{0,1,0},{},false};
+        s.predictNativeStep(.01f,in,world,body);
+        check(s.webs()[0].attached && s.webs()[0].airAnchor,"the sky shot did not hold");
+        near(length(s.webs()[0].anchor-in.hands[0].aim.position),1000,.01f);
+        check(world.asked && !world.refused,"a ray the world does not take was asked for");
+    });
     test("controller rays retain hand identity and disappear on tracking loss", [] {
         Input in;
         in.hands[0].tracked=true; in.hands[0].aim={{1,2,3},{}};
@@ -8830,6 +9636,30 @@ int main() {
         AirYield g;
         check(!g.update(now,false,true,false,false,++steps,air,true),"a dodge on the ground let go");
         check(!g.update(now+=5,false,true,true,true,++steps,air,true),"a dodge in the wall grasp let go");
+    });
+    test("a load hitch is one long frame of the game's running time: the held input outlives it", [] {
+        game_swing::RunClock clock;
+        check(clock.update(1000) == 0 && clock.update(1016) == 16 && clock.update(1032) == 32,
+              "the frames' time not counted");
+        // A two second hitch counts as one frame of maxGapMs.
+        const uint64_t after = clock.update(3032);
+        check(after == 32 + game_swing::RunClock::maxGapMs, "a hitch counted at its length");
+        check(clock.update(3048) == after + 16 && clock.update(3000) == after + 16,
+              "the frames after it, or a clock going back, miscounted");
+        // The swing's input over that hitch: the gate closed for it, the
+        // sample held through it, the live input back after it.
+        game_swing::RunClock run;
+        game_swing::InputHold hold;
+        game_swing::Command c;c.serial=7;c.focused=1;c.hands[0].grip=1;
+        check(hold.update(c,true,run.update(1000)),"live input refused");
+        game_swing::Command lost;lost.serial=8;lost.focused=0;
+        auto x=lost;
+        check(hold.update(x,false,run.update(2500))&&x.serial==7&&x.hands[0].grip==1,
+              "a 1.5 s load hitch let go of the held grip");
+        uint64_t t=2500;
+        for(int i=0;i<30;++i){t+=16;x=lost;hold.update(x,false,run.update(t));}
+        x=lost;
+        check(!hold.update(x,false,run.update(t+16)),"input lost through running frames held on");
     });
     test("a stutter keeps the last focused input; a longer loss of it does not", [] {
         game_swing::InputHold hold;
@@ -9053,6 +9883,762 @@ int main() {
         game_swing::Command old;old.serial=1;old.version=3;old.bytes=game_swing::commandBytesV3;
         check(game_swing::valid(old)&&game_swing::input(old).leap==0,"a version 3 command refused");
     });
+    test("RUNNING LEAP: Leap{} is the leap as before; on, a run's speed kept along the leap, a long jump", [] {
+        using namespace run_update;
+        const SwingConfig c;
+        // The leap as it was, for any charge, stick and run: the run plays no part.
+        for (float charge : {.15f, .5f, 1.f})
+            for (Vec3 stick : {Vec3{}, Vec3{0, 0, -1}, Vec3{.3f, 0, .4f}, Vec3{.05f, 0, 0}})
+                for (Vec3 run : {Vec3{}, Vec3{0, 0, -9}, Vec3{6, 0, 0}}) {
+                    const float tilt = std::min(length(stick), 1.f);
+                    const Vec3 along = tilt > .1f ? stick * (c.leapForward * (.5f + .5f * charge) / length(stick) * tilt)
+                                                  : Vec3{};
+                    const Vec3 was =
+                        limited(along + Vec3{0, c.leapUp + (c.leapUpFull - c.leapUp) * charge, 0}, c.maxSpeed);
+                    const Vec3 now =
+                        leapVelocity(Leap{}, run, stick, charge, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+                    check(length(now - was) < 1e-4f, "Leap{} is not the leap as before");
+                }
+        // A 9 m/s run ahead, half a charge, the stick ahead: the run kept, the charge's push on top.
+        const Vec3 run{0, 0, -9};
+        Vec3 v = leapVelocity(momentumLeap, run, {0, 0, -1}, .5f, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(-v.z, 9 + 12 * .75f * .6f, .01f);
+        near(v.x, 0);
+        near(v.y, c.leapUp + (c.leapUpFull - c.leapUp) * .5f, .01f);
+        check(-v.z > 12, "a running leap no further than a standing one");
+        // No stick: along the run. Backwards: nothing of the run kept, the push alone.
+        v = leapVelocity(momentumLeap, run, {}, .5f, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(-v.z, 9, .01f);
+        v = leapVelocity(momentumLeap, run, {0, 0, 1}, .5f, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(v.z, 12 * .75f * .6f, .01f);
+        // Across the run: half of it kept sideways.
+        v = leapVelocity(momentumLeap, {8, 0, 0}, {0, 0, -1}, .5f, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(v.x, 4, .01f);
+        // A long jump: charged past .6 from a run past 6 m/s, further and flatter, at most 30 across.
+        const Vec3 full =
+            leapVelocity(momentumLeap, run, {0, 0, -1}, 1, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(-full.z, (9 + 12 * .6f) * 1.3f, .01f);
+        near(full.y, c.leapUpFull * .8f, .01f);
+        const Vec3 slow =
+            leapVelocity(momentumLeap, {0, 0, -4}, {0, 0, -1}, 1, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(slow.y, c.leapUpFull, .01f);
+        const Vec3 fast =
+            leapVelocity(momentumLeap, {0, 0, -40}, {0, 0, -1}, 1, c.leapUp, c.leapUpFull, c.leapForward, c.maxSpeed);
+        near(-fast.z, 30, .01f);
+        check(length(leapVelocity(momentumLeap, {0, 0, -200}, {0, 0, -1}, 1, c.leapUp, c.leapUpFull, c.leapForward,
+                                  20)) <= 20.001f,
+              "a leap past the speed limit");
+        check(finite(leapVelocity(momentumLeap, {NAN, 0, 0}, {NAN, 0, 0}, NAN, c.leapUp, c.leapUpFull,
+                                  c.leapForward, c.maxSpeed)),
+              "a leap that is no number");
+        // The swing: off, the leap as before whatever the run; on, it keeps the run.
+        TestWorld w;
+        w.enabled = false;
+        const Body running{{0, 0, 0}, {0, 0, -9}, true};
+        const auto leap = [&](bool on) {
+            Swing sw(inert());
+            sw.allowMomentumLeap(on);
+            Input in;
+            in.leap = 1;
+            in.move = {0, 0, -1};
+            return sw.predictNativeStep(1.f / 60, in, w, running).velocity;
+        };
+        near(leap(false).z, -12, .01f);
+        near(leap(false).y, 15, .01f);
+        near(leap(true).z, -(9 + 12 * .6f) * 1.3f, .01f);
+        Swing sw(inert());
+        check(!sw.momentumLeapEnabled(), "momentum leap on by default");
+    });
+    test("EARLY JUMP: OFF waits 0.18 s as before; QUICK TAP 0.1 s; RUNNING, A at once while NATIVE RUN runs", [] {
+        using game_pad::ChargeJump;
+        const float dt = 1.f / 90;
+        const auto waited = [&](int mode, bool running) {
+            ChargeJump j;
+            j.earlyJump(mode);
+            int frames = 0;
+            while (!j.charging() && frames < 100) {
+                const auto k = j.update(dt, true, true, running);
+                if (k.jump)
+                    return -frames - 1;
+                ++frames;
+            }
+            return frames;
+        };
+        const int plain = waited(0, false);
+        check(plain >= 15 && plain <= 18, "OFF did not wait as before");
+        check(waited(0, true) == plain, "OFF changed while running");
+        const int quick = waited(1, false);
+        check(quick >= 8 && quick <= 10, "QUICK TAP did not charge after a tenth of a second");
+        check(waited(1, true) == quick, "QUICK TAP jumped at once while running");
+        check(waited(2, false) == quick, "RUNNING not a quick tap standing");
+        check(waited(2, true) == -1, "RUNNING did not jump on the press while running");
+        // A quick tap: the jump let go of after 0.09 s, under the old window and over nothing.
+        ChargeJump q;
+        q.earlyJump(1);
+        for (int i = 0; i < 8; ++i)
+            q.update(dt, true, true);
+        int pulse = 0;
+        for (int i = 0; i < 30; ++i)
+            pulse += q.update(dt, false, true).jump;
+        check(pulse >= 6 && pulse <= 10 && !q.leaps(), "a quick tap was not the game's jump");
+        // The charge still fills in fullSeconds from the tap's end.
+        ChargeJump c;
+        c.earlyJump(1);
+        for (int i = 0; i < 9 + 72; ++i)
+            c.update(dt, true, true);
+        near(c.charge(), 1, .03f);
+        check(c.update(dt, false, true).leap > .9f, "no leap from a quick charge");
+        // While running, A is held to the game as long as it is down, and never leaps.
+        ChargeJump r;
+        r.earlyJump(2);
+        for (int i = 0; i < 40; ++i) {
+            const auto k = r.update(dt, true, true, true);
+            check(k.jump && k.leap == 0, "a running press not the game's A as it is held");
+        }
+        check(!r.update(dt, false, true, true).jump && !r.charges(), "a running press charged");
+        ChargeJump odd;
+        odd.earlyJump(9);
+        check(waited(9, true) == -1, "an EARLY JUMP past RUNNING not taken as RUNNING");
+    });
+    test("JUMP ALWAYS: A waits for the swing's hand-back of a ground run, then a fresh press; a tap's pulse lasts 3 frames", [] {
+        using game_pad::JumpRelay;
+        const float dt = 1.f / 45;
+        // Not on the swing's ground: A as it is held, at once.
+        JumpRelay plain;
+        check(plain.update(dt, true, false) && plain.update(dt, true, false) && !plain.update(dt, false, false) &&
+                  !plain.deferred(),
+              "a plain press changed");
+        // Held while the swing runs: nothing until it lets go, then A held on.
+        JumpRelay held;
+        check(!held.update(dt, true, true) && !held.update(dt, true, true) && held.waiting(), "A went out at once");
+        check(held.update(dt, true, false) && held.relayed() == 1 && held.update(dt, true, false),
+              "A not sent once the game had the body");
+        check(!held.update(dt, false, false), "A stayed down");
+        // A tap let go before the hand-back: a pulse of 3 frames at least.
+        JumpRelay tap;
+        tap.update(dt, true, true);
+        tap.update(dt, false, true);
+        int pulse = 0;
+        for (int i = 0; i < 20; ++i)
+            pulse += tap.update(dt, false, false);
+        check(pulse >= 3 && pulse <= 6, "a tap's A was not one short press");
+        // Never more than 0.2 s held back.
+        JumpRelay stuck;
+        int waited = 0;
+        while (!stuck.update(dt, true, true) && waited < 100)
+            ++waited;
+        check(waited >= 8 && waited <= 10, "A held back past 0.2 s");
+        // ChargeJump's tap at 20 fps: three frames of A, not two.
+        game_pad::ChargeJump slow;
+        slow.update(.05f, true, true);
+        int frames = 0;
+        for (int i = 0; i < 10; ++i)
+            frames += slow.update(.05f, false, true).jump;
+        check(frames == 3, "a tap at 20 fps not three frames of A");
+        // The swing: a press during SPIDY RUN ends it, and is no jump of the swing's own.
+        TestWorld w;
+        w.enabled = false;
+        Input in;
+        in.focused = true;
+        in.move = {0, 0, -1};
+        Swing sw(inert());
+        sw.allowGroundRun(true);
+        sw.predictNativeStep(1.f / 90, in, w, {{0, 1.5f, 0}, {0, -8, -20}, false});
+        sw.predictNativeStep(1.f / 90, in, w, {{0, 1, -.3f}, {0, -8, -20}, true});
+        check(sw.groundRunning(), "no run");
+        Input jump = in;
+        jump.jump = true;
+        const Vec3 at = sw.groundRunVelocity();
+        const auto out = sw.predictNativeStep(1.f / 90, jump, w, {{0, 1, -.5f}, at, true});
+        check(!sw.groundRunning() && sw.jumpCancels() == 1, "the jump did not end SPIDY RUN");
+        check(out.velocity.y <= 0, "the swing jumped itself on the game's ground");
+        sw.predictNativeStep(1.f / 90, jump, w, {{0, 1, -.6f}, at, true});
+        check(!sw.groundRunning() && sw.jumpCancels() == 1, "a held jump counted again or ran again");
+    });
+    test("COMBAT RESPONSIVE: in a fight no SPIDY RUN or carry, A at once, the fight in asks bit 2; off as before", [] {
+        TestWorld w;
+        w.enabled = false;
+        Input in;
+        in.focused = true;
+        in.move = {0, 0, -1};
+        const Body air{{0, 1.5f, 0}, {0, -8, -20}, false};
+        const Body landed{{0, 1, -.3f}, {0, -8, -20}, true};
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            Input fight = in;
+            fight.fighting = true;
+            sw.predictNativeStep(1.f / 90, fight, w, air);
+            sw.predictNativeStep(1.f / 90, fight, w, landed);
+            check(!sw.groundRunning(), "SPIDY RUN began in a fight");
+        }
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.predictNativeStep(1.f / 90, in, w, air);
+            sw.predictNativeStep(1.f / 90, in, w, landed);
+            check(sw.groundRunning(), "no run out of a fight");
+            Input fight = in;
+            fight.fighting = true;
+            sw.predictNativeStep(1.f / 90, fight, w, {{0, 1, -.5f}, sw.groundRunVelocity(), true});
+            check(!sw.groundRunning(), "SPIDY RUN went on into a fight");
+        }
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.allowGroundRunFromStanding(true);
+            Input fight = in;
+            fight.fighting = true;
+            for (int i = 0; i < 200; ++i)
+                sw.predictNativeStep(1.f / 90, fight, w, {{0, 1, 0}, {}, true});
+            check(!sw.groundRunning(), "RUN FROM STANDING began in a fight");
+        }
+        game_swing::Command c;
+        c.serial = 1;
+        c.asks = 4;
+        check(game_swing::valid(c) && game_swing::input(c).fighting, "asks bit 2 refused or lost");
+        c.asks = 2;
+        check(game_swing::valid(c) && !game_swing::input(c).fighting, "the web tie's click (bit 1) taken for a fight");
+        c.asks = 7;
+        check(game_swing::valid(c), "asks 7 refused");
+        c.asks = 128;
+        check(!game_swing::valid(c), "an unknown asks bit accepted");
+        c.asks = 1;
+        check(!game_swing::input(c).fighting, "bit 0 read as a fight");
+        // A at once in a fight, the charge kept out of one.
+        game_pad::ChargeJump j;
+        check(j.update(1.f / 45, true, true, false, true).jump, "A waited in a fight");
+        game_pad::ChargeJump k;
+        check(!k.update(1.f / 45, true, true, false, false).jump, "A at once out of a fight");
+        vr_settings::Values values;
+        check(!values.combatResponsive && vr_settings::defaultChoice(vr_settings::Item::combatResponsive) == 0,
+              "COMBAT RESPONSIVE on by default");
+        check(vr_settings::withTabOnly({}, "combat_responsive=1\n").combatResponsive &&
+                  !vr_settings::withTabOnly({}, "").combatResponsive,
+              "spidy_vr.ini keeps combat_responsive");
+        const auto& all = vr_settings::rows();
+        check(all[83].item == vr_settings::Item::combatResponsive &&
+                  std::strcmp(all[83].title, "COMBAT RESPONSIVE") == 0 && all[83].choices.empty() &&
+                  all[83].place == vr_settings::Place::tab,
+              "COMBAT RESPONSIVE: a switch in the tab, after STEADY STATES");
+        // perf: a line every 5 s, and at a fight's start and end.
+        frame_stats::FrameStats f;
+        const char* line = nullptr;
+        int lines = 0;
+        for (int i = 0; i < 45 * 6; ++i)
+            if ((line = f.update(1.f / 45, .0005f, false)))
+                ++lines;
+        check(lines == 1, "not one perf line in 6 s");
+        line = f.update(1.f / 45, .0005f, true);
+        check(line && std::strstr(line, "before the fight") && std::strstr(line, "fps"), "no line as the fight began");
+        check(!f.update(0, 0, true) && !f.update(NAN, 0, true), "a line from a bad frame time");
+    });
+    test("SPIDY RUN JUMP: A in the swing's run jumps at once with its speed; the game's A swallowed; off as v5", [] {
+        TestWorld w;
+        w.enabled = false;
+        Input in;
+        in.focused = true;
+        in.move = {0, 0, -1};
+        in.runJump = true;
+        const Body air{{0, 1.5f, 0}, {0, -8, -20}, false};
+        const Body landed{{0, 1, -.3f}, {0, -8, -20}, true};
+        Swing sw(inert());
+        sw.allowGroundRun(true);
+        sw.predictNativeStep(1.f / 90, in, w, air);
+        sw.predictNativeStep(1.f / 90, in, w, landed);
+        check(sw.groundRunning(), "no SPIDY RUN to jump out of");
+        const Vec3 run = sw.groundRunVelocity();
+        Input jump = in;
+        jump.jump = true;
+        const auto out = sw.predictNativeStep(1.f / 90, jump, w, {{0, 1, -.5f}, run, true});
+        check(!sw.groundRunning() && sw.runJumping() && out.valid && out.velocity.y > 5,
+              "A did not jump at once on the press's own step");
+        check(std::hypot(out.velocity.x, out.velocity.z) > .9f * std::hypot(run.x, run.z),
+              "the run's speed not kept");
+        // The body still seen on the ground (the command lands a step later): the jump holds, no new run.
+        const auto again = sw.predictNativeStep(1.f / 90, jump, w, {{0, 1, -.6f}, run, true});
+        check(sw.runJumping() && !sw.groundRunning() && again.velocity.y > 5, "the jump lost while still grounded");
+        sw.predictNativeStep(1.f / 90, jump, w, {{0, 1.1f, -.8f}, out.velocity, false});
+        check(!sw.runJumping() && sw.runJumps() == 1, "the jump not counted off the ground");
+        // Off (Input::runJump false): v5, the run ends and the game jumps.
+        {
+            Swing v5(inert());
+            v5.allowGroundRun(true);
+            Input off = in;
+            off.runJump = false;
+            v5.predictNativeStep(1.f / 90, off, w, air);
+            v5.predictNativeStep(1.f / 90, off, w, landed);
+            Input j = off;
+            j.jump = true;
+            v5.predictNativeStep(1.f / 90, j, w, {{0, 1, -.5f}, v5.groundRunVelocity(), true});
+            check(!v5.groundRunning() && !v5.runJumping() && v5.jumpCancels() == 1, "off: not v5's jump");
+        }
+        // The game's A: swallowed for that press, as before for any other.
+        game_pad::JumpRelay r;
+        const float dt = 1.f / 45;
+        check(!r.update(dt, true, true, true) && r.swallowed() == 1 && !r.waiting(), "the game got A");
+        check(!r.update(dt, true, false, true) && !r.update(dt, false, false, true), "A went out after the jump");
+        check(r.update(dt, true, false, true), "the next press off the run not the game's");
+        // Asks bit 2.
+        game_swing::Command c;
+        c.serial = 1;
+        c.asks = 8;
+        check(game_swing::valid(c) && game_swing::input(c).runJump && !game_swing::input(c).fighting,
+              "asks bit 3 refused or lost");
+        c.asks = 128;
+        check(!game_swing::valid(c), "an unknown asks bit accepted");
+        vr_settings::Values values;
+        check(values.spidyRunJump && vr_settings::defaultChoice(vr_settings::Item::spidyRunJump) == 1 &&
+                  values.forearmAimLimit == 180 && !values.palmShooters,
+              "v6 defaults");
+        check(!vr_settings::withTabOnly({}, "spidy_run_jump=0\n").spidyRunJump &&
+                  vr_settings::withTabOnly({}, "").spidyRunJump &&
+                  vr_settings::withTabOnly({}, "forearm_aim_limit=10\n").forearmAimLimit == 35 &&
+                  vr_settings::withTabOnly({}, "palm_shooters=1\n").palmShooters,
+              "spidy_vr.ini's v6 keys");
+        const auto& all = vr_settings::rows();
+        check(all[84].item == vr_settings::Item::spidyRunJump && all[85].item == vr_settings::Item::forearmAimLimit &&
+                  all[85].choices.size() == 4 && all[86].item == vr_settings::Item::palmShooters,
+              "the v6 rows after COMBAT RESPONSIVE");
+    });
+    test("SOFT LANDING: a fall with no web eases to 9 m/s over its last metres; off, webs or walls, as before", [] {
+        using namespace run_update;
+        // Far above, or slow: untouched. Near the ground: toward softFall, never past it.
+        check(softLandVertical(-20, 20, 1.f / 120) == -20, "a fall eased far above the ground");
+        check(softLandVertical(-5, 1, 1.f / 120) == -5, "a slow fall touched");
+        check(softLandVertical(-20, -1, 1.f / 120) == -20, "a fall eased with no ground found");
+        const float eased = softLandVertical(-20, 2, 1.f / 120);
+        check(eased > -20 && eased < -softFall, "a fall near the ground not eased, or past softFall");
+        check(softLandVertical(-30, 9, 1.f / 120) > -30, "a fast fall 0.3 s from the ground not eased");
+        float vy = -25;
+        for (int i = 0; i < 120; ++i)
+            vy = softLandVertical(vy, 1, 1.f / 120);
+        near(vy, -softFall, .05f);
+        check(softLandVertical(NAN, 1, .01f) != softLandVertical(NAN, 1, .01f) &&
+                  softLandVertical(-20, NAN, .01f) == -20,
+              "not a number eased");
+        // The swing: a floor at y 0, the body 2 m over it falling at 20 m/s and 6 m/s across.
+        struct Floor : World {
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float distance) const override {
+                if (d.y >= -.5f || o.y <= 0)
+                    return {};
+                const float t = o.y / -d.y;
+                if (t > distance)
+                    return {};
+                return RayHit{o + d * t, {0, 1, 0}, 2, true};
+            }
+            MoveResult sweep(Vec3, Vec3 to, float) const override {
+                return {to, {}, false};
+            }
+            bool exists(std::uint64_t) const override {
+                return true;
+            }
+        } floor;
+        const Body falling{{0, 3, 0}, {6, -20, 0}, false};
+        const auto fall = [&](bool on, Body from) {
+            SwingConfig c = inert();
+            c.gravity = 9.81f;
+            Swing sw(c);
+            sw.allowSoftLanding(on);
+            Input in;
+            in.focused = true;
+            return sw.predictNativeStep(1.f / 60, in, floor, from).velocity;
+        };
+        const Vec3 off = fall(false, falling), on = fall(true, falling);
+        check(on.y > off.y + 1, "SOFT LANDING did not ease the fall");
+        near(on.x, off.x, 1e-4f);
+        near(on.z, off.z, 1e-4f);
+        check(on.y < -softFall, "eased past softFall in one step");
+        // High up: as before.
+        const Body high{{0, 40, 0}, {6, -20, 0}, false};
+        check(length(fall(true, high) - fall(false, high)) < 1e-5f, "a fall eased 40 m up");
+        Swing sw(inert());
+        check(!sw.softLandingEnabled(), "soft landing on by default");
+        game_swing::Settings packet;
+        check(packet.version >= 27 && !packet.softLanding &&
+                  offsetof(game_swing::Settings, softLanding) == game_swing::settingsBytesV26,
+              "soft landing not appended, or on by default");
+        packet.softLanding = 2;
+        check(!game_swing::validSettings(packet), "an invalid soft landing switch accepted");
+        packet = {};
+        packet.version = 26;
+        packet.bytes = game_swing::settingsBytesV26;
+        check(game_swing::validSettings(packet), "version 26 settings packet refused");
+    });
+    test("SMOOTH WEB LANDING: eased fall, carried speed and steady contact below the impact speed; off as before", [] {
+        using namespace web_landing;
+        const Tuning& k = tuning;
+        // The fall: untouched far above, slow or with no ground; eased toward fallTarget near it.
+        check(easeFall(-15, 20, 1.f / 60) == -15 && easeFall(-3, 1, 1.f / 60) == -3 &&
+                  easeFall(-15, -1, 1.f / 60) == -15,
+              "a web landing's fall eased where it should not be");
+        float vy = -15;
+        for (int i = 0; i < 120; ++i)
+            vy = easeFall(vy, 1, 1.f / 120);
+        near(vy, -k.fallTarget, .05f);
+        // The carry: over the floor it decays toward it, its way kept; at the floor nothing.
+        Vec3 along{0, 0, -14};
+        for (int i = 0; i < 30; ++i)
+            along = carryStep(along, 1.f / 60);
+        check(along.z < -k.floor && along.z > -14 && along.x == 0 && along.y == 0, "the carry did not decay");
+        near(length(carryStep({3, 0, 0}, .1f)), 3);
+        check(length(carryStep({NAN, 0, 0}, .1f)) == 0, "a carry from no number");
+        // The impact speed: under it gentle, at it not.
+        check(gentle({10, -10, 0}, 24) && !gentle({20, -20, 0}, 24) && !gentle({NAN, 0, 0}, 24),
+              "the impact speed misjudged");
+        // The contact: a flicker of a step is no change while active; a lasting one is; inactive as it is.
+        Contact c;
+        check(!c.update(.025f, false, true), "airborne at first");
+        check(!c.update(.025f, true, true) && !c.update(.025f, false, true), "a step's ground taken");
+        check(c.flickers() == 1, "the flicker not counted");
+        check(!c.update(.025f, true, true) && c.update(.025f, true, true), "lasting ground not taken");
+        check(c.update(.025f, false, true) && c.update(.025f, false, true) && !c.update(.04f, false, true),
+              "lasting air not taken after contactAir");
+        Contact off;
+        check(off.update(.025f, true, false) && !off.update(.025f, false, false), "inactive, the contact changed");
+        // The swing: a web held from the anchor 20 m up, then a fall near the street.
+        const auto landing = [&](bool on, Vec3 fall, Vec3 measured, bool& carrying) {
+            Street world;
+            SwingConfig cfg = inert();
+            cfg.gravity = 9.81f;
+            Swing sw(cfg);
+            sw.allowWebLandingSmooth(on, 24);
+            Input in = aimed();
+            in.focused = true;
+            Body body{{0, 0, 0}, {}, false};
+            for (int i = 0; i < 120 && !sw.webs()[0].attached; ++i)
+                sw.predictNativeStep(1.f / 90, in, world, body);
+            check(sw.webs()[0].attached, "no web held for the landing");
+            const Vec3 eased = sw.predictNativeStep(1.f / 60, in, world, {{0, 3, 0}, fall, false}).velocity;
+            const Vec3 landed = sw.predictNativeStep(1.f / 60, in, world, {{0, 1, 0}, measured, true}).velocity;
+            carrying = sw.landCarrying();
+            return std::pair{eased, landed};
+        };
+        bool carryOn{}, carryOff{};
+        const auto [onAir, onGround] = landing(true, {8, -12, 0}, {1, 0, 0}, carryOn);
+        const auto [offAir, offGround] = landing(false, {8, -12, 0}, {1, 0, 0}, carryOff);
+        check(onAir.y > offAir.y + 1, "SMOOTH WEB LANDING did not ease a web-held fall");
+        near(onAir.x, offAir.x, .05f);
+        check(carryOn && !carryOff, "the landing's speed not carried, or carried with the setting off");
+        check(onGround.x > 6 && offGround.x < 1.5f, "the carry did not keep the landing's speed across");
+        // At the impact speed or over it: the landing as before.
+        bool fastOn{}, fastOff{};
+        const auto [fastAirOn, fastGroundOn] = landing(true, {20, -20, 0}, {1, 0, 0}, fastOn);
+        const auto [fastAirOff, fastGroundOff] = landing(false, {20, -20, 0}, {1, 0, 0}, fastOff);
+        check(length(fastAirOn - fastAirOff) < 1e-4f && length(fastGroundOn - fastGroundOff) < 1e-4f && !fastOn,
+              "a landing over the impact speed changed");
+        Swing fresh(inert());
+        check(!fresh.webLandingSmoothEnabled() && !fresh.landCarrying(), "SMOOTH WEB LANDING on by default");
+        game_swing::Settings packet;
+        check(packet.version == 32 && packet.bytes == 152 && !packet.webLandingSmooth &&
+                  packet.webLandingImpact == 24 &&
+                  offsetof(game_swing::Settings, webLandingSmooth) == game_swing::settingsBytesV29,
+              "SMOOTH WEB LANDING not appended, or on by default");
+        packet.webLandingSmooth = 2;
+        check(!game_swing::validSettings(packet), "an invalid SMOOTH WEB LANDING switch accepted");
+        packet = {};
+        packet.webLandingImpact = 2;
+        check(!game_swing::validSettings(packet), "an impact speed under 5 m/s accepted");
+        packet = {};
+        packet.version = 29;
+        packet.bytes = game_swing::settingsBytesV29;
+        check(game_swing::validSettings(packet), "version 29 settings packet refused");
+        vr_settings::Values values;
+        check(!values.webLandingSmooth && values.webLandingImpact == 24 &&
+                  vr_settings::defaultChoice(vr_settings::Item::webLandingSmooth) == 0 &&
+                  vr_settings::defaultChoice(vr_settings::Item::webLandingImpact) == 3,
+              "SMOOTH WEB LANDING on, or its impact not 24 m/s, by default");
+        check(vr_settings::withTabOnly({}, "web_landing_smooth=1\nweb_landing_impact_speed=16\nsteady_states=0\n").webLandingSmooth &&
+                  vr_settings::withTabOnly({}, "web_landing_impact_speed=16\nsteady_states=0\n").webLandingImpact == 16 &&
+                  vr_settings::withTabOnly({}, "web_landing_impact_speed=99\nsteady_states=0\n").webLandingImpact == 40 &&
+                  !vr_settings::withTabOnly({}, "").webLandingSmooth,
+              "spidy_vr.ini keeps web_landing_smooth and web_landing_impact_speed, within range");
+        const auto& all = vr_settings::rows();
+        check(all[80].item == vr_settings::Item::webLandingSmooth &&
+                  std::strcmp(all[80].title, "SMOOTH WEB LANDING") == 0 && all[80].choices.empty() &&
+                  all[81].item == vr_settings::Item::webLandingImpact &&
+                  std::strcmp(all[81].title, "WEB LANDING IMPACT") == 0 && all[81].choices.size() == 7 &&
+                  std::strcmp(all[81].choices[3], "24 M/S") == 0,
+              "SMOOTH WEB LANDING and WEB LANDING IMPACT: in the tab, after FOREARM BLEND");
+    });
+    test("SPIDY RUN: the wall run's momentum on the ground - entry, steering, decay to the sprint", [] {
+        using namespace run_update;
+        const GroundRun& k = groundRun;
+        // Entry: grazing keeps the speed across; a fall into the ground adds carry of it at most.
+        Vec3 e = groundRunEntry({0, 0, -20});
+        near(e.z, -20);
+        e = groundRunEntry({0, -10, -20});
+        const float speed = std::hypot(10.f, 20.f);
+        near(length(e), std::min(speed, 20 * (1 + k.carry * 10 / speed)), .01f);
+        check(length(e) > 20 && length(e) < 20 * 1.15f && e.y == 0, "entry carry not the wall's rule");
+        near(length(groundRunEntry({0, -5, -60})), k.entryMax, .01f);
+        check(length(groundRunEntry({NAN, 0, 0})) == 0, "an entry from no number");
+        // Straight on with the stick: the speed decays by `decay` a second down to the sprint.
+        Vec3 v{0, 0, -20};
+        for (int i = 0; i < 120; ++i)
+            v = groundRunStep(v, {0, 0, -1}, 1.f / 120);
+        near(length(v), 20 - k.decay, .05f);
+        for (int i = 0; i < 2000; ++i)
+            v = groundRunStep(v, {0, 0, -1}, 1.f / 120);
+        near(length(v), k.sprint, .01f);
+        // A turn keeps the speed and is no faster than the turn rate.
+        v = {0, 0, -20};
+        const Vec3 turned = groundRunStep(v, {1, 0, 0}, 1.f / 120);
+        const float rate = k.turnSlow + (k.turnFast - k.turnSlow) * (20 / k.entryMax);
+        near(std::atan2(turned.x, -turned.z), rate / 120, 1e-3f);
+        near(length(turned), 20 - k.decay / 120, 1e-3f);
+        for (int i = 0; i < 240; ++i)
+            v = groundRunStep(v, {1, 0, 0}, 1.f / 120);
+        check(v.x > 0 && std::abs(v.z) < 1e-3f && length(v) > 20 - 2 * k.decay - .1f,
+              "a 90 degree turn lost the run's speed, or did not turn");
+        // No stick: it brakes too. Pulled back: harder.
+        Vec3 coast{0, 0, -20}, back{0, 0, -20};
+        for (int i = 0; i < 60; ++i) {
+            coast = groundRunStep(coast, {}, 1.f / 120);
+            back = groundRunStep(back, {0, 0, 1}, 1.f / 120);
+        }
+        near(length(coast), 20 - (k.brake + k.decay) * .5f, .05f);
+        check(length(back) < length(coast), "pulling back did not brake harder");
+        // Slow and pushed: up to the sprint at the stick's tilt.
+        v = {0, 0, -1};
+        for (int i = 0; i < 240; ++i)
+            v = groundRunStep(v, {0, 0, -.5f}, 1.f / 120);
+        near(length(v), k.sprint * .5f, .01f);
+        check(finite(groundRunStep({NAN, 0, 0}, {0, 0, -1}, .01f)) && finite(groundRunStep(v, {NAN, 0, 0}, .01f)),
+              "a step that is no number");
+        // The swing: a landing at 20 m/s across starts it, only with the setting on.
+        TestWorld w;
+        w.enabled = false;
+        Input in;
+        in.focused = true;
+        in.move = {0, 0, -1};
+        const Body air{{0, 1.5f, 0}, {0, -8, -20}, false};
+        const Body landed{{0, 1, -.3f}, {0, -8, -20}, true};
+        const auto landing = [&](bool on) {
+            Swing sw(inert());
+            sw.allowGroundRun(on);
+            sw.predictNativeStep(1.f / 90, in, w, air);
+            const auto out = sw.predictNativeStep(1.f / 90, in, w, landed);
+            return std::pair{sw.groundRunning(), out.velocity};
+        };
+        check(!landing(false).first, "SPIDY RUN off, and a landing ran on");
+        const auto [running, velocity] = landing(true);
+        check(running, "a fast landing did not start the run");
+        check(std::hypot(velocity.x, velocity.z) > 20 && velocity.y < 0 && velocity.y > -3,
+              "the run did not keep the landing's speed, pressed onto the ground");
+        // A slow landing is the game's; so is one with a web, or one that leaves the ground.
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.predictNativeStep(1.f / 90, in, w, {{0, 1.5f, 0}, {0, -8, -6}, false});
+            sw.predictNativeStep(1.f / 90, in, w, {{0, 1, 0}, {0, -8, -6}, true});
+            check(!sw.groundRunning(), "a landing under the sprint ran on");
+        }
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.predictNativeStep(1.f / 90, in, w, air);
+            sw.predictNativeStep(1.f / 90, in, w, landed);
+            check(sw.groundRunning(), "no run");
+            const Vec3 at = sw.groundRunVelocity();
+            sw.predictNativeStep(1.f / 90, in, w, {{0, 1, -.5f}, at, true});
+            check(sw.groundRunning(), "the run ended on the ground");
+            sw.predictNativeStep(1.f / 90, in, w, {{0, 1.6f, -.8f}, at + Vec3{0, 2, 0}, false});
+            check(!sw.groundRunning(), "the run went on in the air");
+        }
+        {
+            // It eases to the sprint and hands the body back; a second with no stick ends it too.
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.predictNativeStep(1.f / 90, in, w, air);
+            sw.predictNativeStep(1.f / 90, in, w, landed);
+            Vec3 at = sw.groundRunVelocity();
+            int steps = 0;
+            while (sw.groundRunning() && steps < 2000) {
+                sw.predictNativeStep(1.f / 90, in, w, {{0, 1, 0}, at, true});
+                at = sw.groundRunVelocity() + Vec3{0, -k.press, 0};
+                ++steps;
+            }
+            check(!sw.groundRunning() && steps > 90 * 2 && steps < 90 * 5, "the run did not ease to the sprint");
+            Swing idle(inert());
+            idle.allowGroundRun(true);
+            idle.predictNativeStep(1.f / 90, in, w, air);
+            idle.predictNativeStep(1.f / 90, in, w, landed);
+            Input none = in;
+            none.move = {};
+            steps = 0;
+            at = idle.groundRunVelocity();
+            while (idle.groundRunning() && steps < 1000) {
+                idle.predictNativeStep(1.f / 90, none, w, {{0, 1, 0}, at, true});
+                at = idle.groundRunVelocity();
+                ++steps;
+            }
+            check(steps <= 92, "the run went on without the stick past a second");
+            Swing off(inert());
+            off.allowGroundRun(true);
+            off.predictNativeStep(1.f / 90, in, w, air);
+            off.predictNativeStep(1.f / 90, in, w, landed);
+            off.allowGroundRun(false);
+            check(!off.groundRunning() && !off.groundRunEnabled(), "switching SPIDY RUN off kept the run");
+        }
+        Swing fresh(inert());
+        check(!fresh.groundRunEnabled() && !fresh.groundRunning(), "SPIDY RUN on by default");
+        game_swing::Settings packet;
+        check(packet.version == 32 && packet.bytes == 152 && !packet.spidyRun &&
+                  offsetof(game_swing::Settings, spidyRun) == game_swing::settingsBytesV27,
+              "SPIDY RUN not appended, or on by default");
+        packet.spidyRun = 2;
+        check(!game_swing::validSettings(packet), "an invalid SPIDY RUN switch accepted");
+        packet = {};
+        packet.version = 27;
+        packet.bytes = game_swing::settingsBytesV27;
+        check(game_swing::validSettings(packet), "version 27 settings packet refused");
+        // RUN LOGS tell a mod-driven run on the ground, and how far the body went against what was asked.
+        RunLog log;
+        RunSample r;
+        r.seconds = 1.f / 90;
+        r.fresh = true;
+        r.velocity = {0, -8, -20};
+        log.update(r);
+        r.grounded = r.owned = true;
+        r.velocity = {0, -2, -20};
+        r.requested = {0, -2, -20};
+        log.update(r);
+        const char* began = log.update(r);
+        (void)began;
+        std::string all;
+        for (int i = 0; i < 90; ++i) {
+            r.position.z -= 10.f / 90;
+            if (const char* line = log.update(r))
+                all += line;
+        }
+        r.owned = false;
+        if (const char* line = log.update(r))
+            all += line;
+        check(all.find("ended after") != std::string::npos && all.find("asked 20.0 m/s") != std::string::npos &&
+                  all.find("went 9.9 m/s") != std::string::npos,
+              "no line of how far a mod-driven run went against what it asked");
+    });
+    test("SPIDY RUN FROM STANDING: the stick held fully starts the run from a stand; off as before", [] {
+        using namespace run_update;
+        const GroundRun& k = groundRun;
+        // standRunStep: held past standTilt it builds to the sprint, then past it to standTop, no decay.
+        Vec3 v{};
+        for (int i = 0; i < 45; ++i) // 24 m/s a second: the sprint in 0.375 s
+            v = standRunStep(v, {0, 0, -1}, 1.f / 120);
+        near(length(v), k.sprint, .01f);
+        check(v.z < 0 && std::abs(v.x) < 1e-4f, "the run from standing not along the stick");
+        for (int i = 0; i < 120; ++i)
+            v = standRunStep(v, {0, 0, -1}, 1.f / 120);
+        near(length(v), k.sprint + k.standAcceleration, .05f);
+        for (int i = 0; i < 120 * 10; ++i)
+            v = standRunStep(v, {0, 0, -1}, 1.f / 120);
+        near(length(v), k.standTop, .01f);
+        // Under standTilt, or against the run: exactly groundRunStep.
+        for (const Vec3 move : {Vec3{0, 0, -.8f}, Vec3{}, Vec3{0, 0, 1}, Vec3{NAN, 0, 0}}) {
+            const Vec3 a = standRunStep({0, 0, -12}, move, 1.f / 120),
+                       b = groundRunStep({0, 0, -12}, move, 1.f / 120);
+            check(finite(a) && a.x == b.x && a.y == b.y && a.z == b.z,
+                  "standRunStep not the run's step unheld");
+        }
+        // A turn held fully keeps the turn rate.
+        const Vec3 turned = standRunStep({0, 0, -12}, {1, 0, 0}, 1.f / 120);
+        const Vec3 rule = groundRunStep({0, 0, -12}, {1, 0, 0}, 1.f / 120);
+        near(std::atan2(turned.x, -turned.z), std::atan2(rule.x, -rule.z), 1e-4f);
+        check(standHeld({0, 0, -.95f}) && !standHeld({0, 0, -.85f}) && !standHeld({NAN, 0, 0}), "standHeld");
+        // The swing: standing, the stick held fully for standHold seconds.
+        TestWorld w;
+        w.enabled = false;
+        Input in;
+        in.focused = true;
+        in.move = {0, 0, -1};
+        const Body stand{{0, 1, 0}, {0, 0, 0}, true};
+        const auto hold = [&](Swing& sw, const Input& with, int steps) {
+            for (int i = 0; i < steps; ++i)
+                sw.predictNativeStep(1.f / 90, with, w, stand);
+        };
+        {
+            // Off (either switch): a stand stays the game's, as before.
+            Swing a(inert());
+            a.allowGroundRun(true);
+            hold(a, in, 90);
+            check(!a.groundRunning(), "SPIDY RUN alone started a run from a stand");
+            Swing b(inert());
+            b.allowGroundRunFromStanding(true);
+            hold(b, in, 90);
+            check(!b.groundRunning(), "RUN FROM STANDING without SPIDY RUN started a run");
+            Swing fresh(inert());
+            check(!fresh.groundRunFromStandingEnabled(), "RUN FROM STANDING on by default");
+        }
+        {
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.allowGroundRunFromStanding(true);
+            hold(sw, in, 20);
+            check(!sw.groundRunning(), "the run began before the stick was held standHold");
+            hold(sw, in, 10);
+            check(sw.groundRunning() && sw.groundRunFromStanding(),
+                  "the stick held fully did not start the run");
+            // It builds while held: well past the sprint after a few seconds of the swing's own steps.
+            Vec3 at{};
+            for (int i = 0; i < 90 * 3 && sw.groundRunning(); ++i) {
+                sw.predictNativeStep(1.f / 90, in, w, {{0, 1, 0}, at, true});
+                at = sw.groundRunVelocity() + Vec3{0, -k.press, 0};
+            }
+            check(sw.groundRunning() && length(sw.groundRunVelocity()) > k.sprint + 1,
+                  "the run from standing did not build past the sprint");
+            // Eased off: it slows to the sprint and the game has the body.
+            Input half = in;
+            half.move = {0, 0, -.7f};
+            int steps = 0;
+            while (sw.groundRunning() && steps < 2000) {
+                sw.predictNativeStep(1.f / 90, half, w, {{0, 1, 0}, at, true});
+                at = sw.groundRunVelocity() + Vec3{0, -k.press, 0};
+                ++steps;
+            }
+            check(!sw.groundRunning() && steps < 90 * 4, "eased off, the run from standing did not end");
+            // Not again until the stick comes back under standRearm.
+            hold(sw, in, 90);
+            check(!sw.groundRunning(), "a second run from standing without the stick let go");
+            Input rest = in;
+            rest.move = {};
+            hold(sw, rest, 2);
+            hold(sw, in, 30);
+            check(sw.groundRunning(), "the stick let go and held again did not start a run");
+            sw.allowGroundRunFromStanding(false);
+            check(!sw.groundRunning(), "switching RUN FROM STANDING off kept its run");
+        }
+        {
+            // In the air, on a slow walk under standTilt: none.
+            Swing sw(inert());
+            sw.allowGroundRun(true);
+            sw.allowGroundRunFromStanding(true);
+            Input walk = in;
+            walk.move = {0, 0, -.6f};
+            hold(sw, walk, 90);
+            check(!sw.groundRunning(), "a walk started a run from standing");
+            for (int i = 0; i < 90; ++i)
+                sw.predictNativeStep(1.f / 90, in, w, {{0, 3, 0}, {0, 0, 0}, false});
+            check(!sw.groundRunning(), "the air started a run from standing");
+        }
+        game_swing::Settings packet;
+        check(packet.version == 32 && packet.bytes == 152 && !packet.spidyRunStanding &&
+                  offsetof(game_swing::Settings, spidyRunStanding) == game_swing::settingsBytesV28,
+              "SPIDY RUN FROM STANDING not appended, or on by default");
+        packet.spidyRunStanding = 2;
+        check(!game_swing::validSettings(packet), "an invalid RUN FROM STANDING switch accepted");
+        packet = {};
+        packet.version = 28;
+        packet.bytes = game_swing::settingsBytesV28;
+        check(game_swing::validSettings(packet), "version 28 settings packet refused");
+        vr_settings::Values values;
+        check(!values.spidyRunFromStanding &&
+                  vr_settings::defaultChoice(vr_settings::Item::spidyRunFromStanding) == 0,
+              "RUN FROM STANDING on by default");
+        check(vr_settings::withTabOnly({}, "spidy_run_from_standing=1\n").spidyRunFromStanding &&
+                  !vr_settings::withTabOnly({}, "").spidyRunFromStanding,
+              "spidy_vr.ini keeps spidy_run_from_standing");
+    });
     test("the game's camera follows the head's pitch as it follows its turn", [] {
         game_pad::CameraPitch pitch;
         const auto at=[](float degrees){const float r=degrees*.0174533f;return Vec3{0,std::sin(r),-std::cos(r)};};
@@ -9184,13 +10770,43 @@ int main() {
         check(!power.hands(),"released triggers are still the gesture's");
         triggers[0]=triggers[1]=1;
         check(power.update(dt,true,head,grips,both,triggers)&&power.powers()==2,"a second gesture asked for nothing");
-        // Half a second apart: none, though each trigger at the chest stays the gesture's.
+        // Half a second apart: none, and the first trigger is the web's again after `together`, still held.
         SuitPowerPress slow;
         float late[2]{1,0};
-        for(int i=0;i<46;++i)slow.update(dt,true,head,grips,both,late);
+        check(!slow.update(dt,true,head,grips,both,late)&&slow.hands()==1,"a trigger at the chest did not wait");
+        for(int i=0;i<45;++i)slow.update(dt,true,head,grips,both,late);
+        check(!slow.hands(),"a lone trigger at the chest stayed the gesture's");
         late[1]=1;
-        check(!slow.update(dt,true,head,grips,both,late)&&!slow.powers()&&slow.hands()==3,
+        check(!slow.update(dt,true,head,grips,both,late)&&!slow.powers()&&slow.hands()==2,
               "triggers half a second apart were the suit power");
+        // November 5: one hand at the chest, the other away, is a web at once (the
+        // other hand on the web's trigger, a player at rest, never waits).
+        SuitPowerPress alone;
+        Pose spread[2]{{{-.06f,1.33f,-.15f},{}},{{.3f,1.1f,-.3f},{}}};
+        float single[2]{1,0};
+        check(!alone.update(dt,true,head,spread,both,single)&&!alone.hands(),"one hand at the chest held its trigger");
+        // Both at the chest but 30 cm apart: no gesture.
+        SuitPowerPress wide;
+        Pose wideGrips[2]{{{-.15f,1.33f,-.15f},{}},{{.15f,1.33f,-.15f},{}}};
+        float bothPulled[2]{1,1};
+        check(!wide.update(dt,true,head,wideGrips,both,bothPulled)&&!wide.hands()&&!wide.powers(),
+              "hands 30 cm apart were the suit power");
+        // November 11: wrists together held out before the chest, 31 cm ahead of the eyes and 33 cm
+        // under them (a player's 30 tries, of which the 12 cm round a point took 6) are the power too;
+        // the hands at arm's length, 55 cm ahead, are not.
+        SuitPowerPress out;
+        Pose held[2]{{{-.07f,1.37f,-.31f},{}},{{.07f,1.37f,-.31f},{}}};
+        check(out.update(dt,true,head,held,both,bothPulled)&&out.powers()==1,
+              "hands held out before the chest were no suit power");
+        SuitPowerPress reaching;
+        Pose arms[2]{{{-.07f,1.37f,-.55f},{}},{{.07f,1.37f,-.55f},{}}};
+        check(!reaching.update(dt,true,head,arms,both,bothPulled)&&!reaching.hands(),
+              "hands at arm's length were the suit power");
+        // A hand whose web is out reels with its trigger: never the gesture's.
+        SuitPowerPress reel;
+        const bool webOut[2]{true,false};
+        check(!reel.update(dt,true,head,grips,both,bothPulled,webOut)&&reel.hands()==2&&!reel.powers(),
+              "the trigger of a hand on a web was the gesture's");
         // Hands at the belt are not at the chest; a turned head's chest is where it looks, level.
         SuitPowerPress low;
         Pose belt[2]{{{-.06f,1.f,-.15f},{}},{{.06f,1.f,-.15f},{}}};
@@ -9347,7 +10963,7 @@ int main() {
         check(vr_settings::choose(vr_settings::Item::halfPunchDamage,1,v)&&v.halfPunchDamage,"ON failed");
         check(vr_settings::withTabOnly({},vr_settings::tabOnlyText(v)).halfPunchDamage,"switch not saved");
     });
-    test("enemy types is the launcher's switch for the guards: on by default, kept, and settings version 22 carries it", [] {
+    test("enemy types is the launcher's switch for the guards: on by default, kept, and settings version 32 carries it", [] {
         using vr_settings::Item;
         // On by default, so that a spidy_vr.ini from before it (no enemy_types line) and a reset keep the guards.
         vr_settings::Values v;
@@ -9373,23 +10989,24 @@ int main() {
                       "the row is not the launcher's switch");
             }
         check(found==1,"the row is not there once");
-        check(static_cast<unsigned>(vr_settings::lastItem)<64&&vr_settings::lastItem==Item::enemyTypes,"the menu's bits or the last item");
-        // Settings version 22 appends it, on, and version 21 (100 bytes) is still taken, with the guards on.
+        // MilesVR: after Spidy 0.8's settings it is no longer the last item, and the swing settings carry it last,
+        // in version 32 (PR #1 had it as version 22, never released).
+        check(static_cast<unsigned>(Item::enemyTypes)<static_cast<unsigned>(Item::joystickRunCamera),"enemy types moved");
         game_swing::Settings s;
-        check(s.version==22&&s.bytes==104&&s.enemyTypes==1&&game_swing::settingsBytesV21==100&&
-                  offsetof(game_swing::Settings,enemyTypes)==game_swing::settingsBytesV21&&
+        check(s.version==32&&s.bytes==152&&s.enemyTypes==1&&game_swing::settingsBytesV31==148&&
+                  offsetof(game_swing::Settings,enemyTypes)==game_swing::settingsBytesV31&&
                   offsetof(game_swing::Settings,halfPunchDamage)==game_swing::settingsBytesV20,"settings moved old fields");
         check(game_swing::validSettings(s),"the defaults are refused");
         s.enemyTypes=0;check(game_swing::validSettings(s),"OFF refused");
         s.enemyTypes=2;check(!game_swing::validSettings(s),"invalid switch accepted");
         game_swing::Settings old;
-        old.version=21;old.bytes=game_swing::settingsBytesV21;
-        check(game_swing::validSettings(old)&&old.enemyTypes==1,"version 21 refused, or it turns the guards off");
+        old.version=31;old.bytes=game_swing::settingsBytesV31;
+        check(game_swing::validSettings(old)&&old.enemyTypes==1,"version 31 refused, or it turns the guards off");
         game_swing::Settings wrong;
-        wrong.version=22;wrong.bytes=game_swing::settingsBytesV21;
-        check(!game_swing::validSettings(wrong),"version 22 at version 21's size accepted");
-        wrong.version=21;wrong.bytes=sizeof(game_swing::Settings);
-        check(!game_swing::validSettings(wrong),"version 21 at version 22's size accepted");
+        wrong.version=32;wrong.bytes=game_swing::settingsBytesV31;
+        check(!game_swing::validSettings(wrong),"version 32 at version 31's size accepted");
+        wrong.version=31;wrong.bytes=sizeof(game_swing::Settings);
+        check(!game_swing::validSettings(wrong),"version 31 at version 32's size accepted");
     });
     test("called blows hit harder and throw him the way they went", [] {
         const Flow flow;
@@ -10278,6 +11895,179 @@ int main() {
         check(t.rightTrigger==0&&t.leftTrigger==0,"a plain jump carried a trigger");
         // Nowhere but play: the menus get nothing of it.
         check(fromControllers(f,Mapping::menus,jump).rightTrigger==0,"the menus got the parkour trigger");
+    });
+    test("NATIVE RUN holds RT past 70% of the stick on the ground, lets go under 50%, and never elsewhere", [] {
+        using namespace game_pad;
+        NativeRun run;
+        check(!run.update(true, 0, .6f), "a walk held RT");
+        check(!run.update(true, 0, .7f), "RT at exactly the threshold");
+        check(run.update(true, .6f, .6f), "a full diagonal run did not hold RT");
+        check(run.update(true, 0, .55f), "RT let go above the release");
+        check(run.update(true, 0, .5f), "RT let go at the release");
+        check(!run.update(true, 0, .49f), "RT held under the release");
+        check(!run.update(true, 0, .6f), "RT came back between the two thresholds");
+        check(run.update(true, 0, 1), "RT did not come back at full stick");
+        // Anything but the ground: dropped at once, and it starts over.
+        check(!run.update(false, 0, 1), "RT held where it was not allowed");
+        check(!run.update(true, 0, .6f), "RT resumed below the threshold after a drop");
+        check(!run.update(true, NAN, 1), "a stick that is not a number held RT");
+        NativeRun odd(5, 9);
+        check(odd.onAbove() == 1 && odd.offBelow() == 1, "thresholds not clamped");
+        NativeRun custom(.9f, .8f);
+        check(!custom.update(true, 0, .85f) && custom.update(true, 0, .95f) && custom.update(true, 0, .85f) &&
+                  !custom.update(true, 0, .7f),
+              "configured thresholds not used");
+        // RT reaches the game as RT alone, only in play.
+        XrFrame f;f.hands[0].valid=f.hands[1].valid=true;
+        Walk w{};w.forward=1;w.parkour=true;
+        const auto s=fromControllers(f,Mapping::gameplay,w);
+        check(s.rightTrigger==255&&s.leftTrigger==0&&(s.buttons&a)==0,"native run was not RT alone");
+        check(fromControllers(f,Mapping::menus,w).rightTrigger==0,"the menus got native run's RT");
+    });
+    test("RUN CURVE: off the stick is as it was; on, the full run at 80%, its way kept", [] {
+        using namespace run_update;
+        for (float x = -1; x <= 1; x += .05f)
+            for (float y = -1; y <= 1; y += .05f) {
+                float r = x, f = y;
+                curveStick(r, f, false);
+                check(r == x && f == y, "the curve changed the stick while off");
+            }
+        float r = 0, f = .05f;
+        curveStick(r, f, true);
+        check(r == 0 && f == .05f, "the curve changed a stick inside the dead zone");
+        r = 0, f = .8f;
+        curveStick(r, f, true);
+        near(f, 1);
+        r = .6f, f = .6f; // past the snap on a diagonal: a full run that way
+        curveStick(r, f, true);
+        near(std::hypot(r, f), 1);
+        near(r, f);
+        float last = 0;
+        bool rising = true, faster = true;
+        for (float y = .11f; y <= 1; y += .01f) {
+            float a = 0, b = y;
+            curveStick(a, b, true);
+            rising &= b >= last - 1e-6f;
+            faster &= b >= y - 1e-6f;
+            last = b;
+        }
+        check(rising && faster, "the curve is not rising, or runs slower than the stick");
+        r = .3f, f = -.4f;
+        curveStick(r, f, true);
+        near(r / f, .3f / -.4f);
+        r = NAN, f = 1;
+        curveStick(r, f, true);
+        check(std::isnan(r) && f == 1, "the curve made a number of a stick that was none");
+        // NATIVE RUN AT: 70 is the thresholds as before; the release 20 points under.
+        const auto t = nativeRunThresholds(70);
+        near(t.onAbove, game_pad::NativeRun::defaultOnAbove);
+        near(t.offBelow, game_pad::NativeRun::defaultOffBelow);
+        near(nativeRunThresholds(50).onAbove, .5f);
+        near(nativeRunThresholds(50).offBelow, .3f);
+        near(nativeRunThresholds(200).onAbove, .9f);
+    });
+    test("RUN LOGS: measured ground speed, touchdowns and takeoffs, and nothing while off the record", [] {
+        using namespace run_update;
+        RunLog log;
+        RunSample s;
+        s.seconds = 1.f / 90;
+        s.fresh = true;
+        s.grounded = true;
+        s.stick = 1;
+        s.sent = 1;
+        s.nativeRun = true;
+        int lines = 0;
+        std::string last;
+        for (int i = 0; i < 90; ++i) {
+            s.position = {0, 0, -9.f * i / 90};
+            s.velocity = {0, 0, -9};
+            if (const char* line = log.update(s))
+                ++lines, last = line;
+        }
+        check(lines >= 1 && last.find("run log: ground") == 0, "no ground line");
+        check(std::abs(log.measured() - 9) < .3f, "the measured run speed is not the body's");
+        s.grounded = false;
+        s.velocity = {0, 3, -9};
+        const char* off = log.update(s);
+        check(off && std::string(off).find("off the ground") != std::string::npos, "no takeoff line");
+        s.velocity = {0, -12, -20};
+        log.update(s);
+        s.grounded = true;
+        const char* down = log.update(s);
+        check(down &&
+                  std::string(down).find("touchdown at 20.0 m/s across, 12.0 m/s down") != std::string::npos,
+              "no touchdown line, or not its speeds");
+        bool after = false;
+        for (int i = 0; i < 40; ++i) {
+            s.position.z -= .05f;
+            if (const char* line = log.update(s))
+                after |= std::string(line).find("after touchdown") != std::string::npos;
+        }
+        check(after, "no line of the speed after the touchdown");
+        s.fresh = false;
+        check(!log.update(s), "a line from a stale sample");
+        s.fresh = true;
+        s.velocity = {NAN, 0, 0};
+        check(!log.update(s), "a line from a velocity that is no number");
+    });
+    test("NATIVE RUN's gate: every condition of the ground run, in one place", [] {
+        using namespace game_pad;
+        NativeRunGate open;
+        open.setting = open.playing = open.gameOwnsGround = true;
+        const Walk idle{};
+        check(nativeRunAllowed(open, idle), "an open gate refused");
+        auto with = [&](auto change) {
+            NativeRunGate g = open;
+            Walk w{};
+            change(g, w);
+            return nativeRunAllowed(g, w);
+        };
+        check(!with([](NativeRunGate& g, Walk&) { g.setting = false; }), "the setting off ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.playing = false; }), "out of play ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.calibrating = true; }), "the calibration ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.padLayer = true; }), "the pad layer ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.mounting = true; }), "a mount ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.ventCrawl = true; }), "a vent ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.onSurface = true; }), "a surface ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.onCrawl = true; }), "the game's crawl ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.gameOwnsGround = false; }), "the swing's body ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.grabbing = true; }), "a grab ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.grips[0] = .3f; }), "a left grip ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.triggers[1] = .5f; }), "a right trigger ran");
+        check(!with([](NativeRunGate& g, Walk&) { g.grips[1] = NAN; }), "a grip that is not a number ran");
+        check(with([](NativeRunGate& g, Walk&) { g.grips[0] = g.triggers[1] = .29f; }),
+              "a resting hand stopped it");
+        check(!with([](NativeRunGate&, Walk& w) { w.jump = true; }), "A ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.interact = true; }), "Y ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.zip = true; }), "a zip ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.aim = true; }), "aim ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.pull = true; }), "a pull ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.heal = true; }), "a heal ran");
+        check(!with([](NativeRunGate&, Walk& w) { w.demand.rightTrigger = true; }), "a prompt's demand ran");
+        check(with([](NativeRunGate&, Walk& w) { w.dodge = true; }), "a dodge stopped the run");
+    });
+    test("NATIVE RUN's ground: only where the game, not the swing, has the player on his feet", [] {
+        using game_swing::Data;
+        using game_swing::Surface;
+        using game_swing::gameOwnsGround;
+        Data ground;
+        ground.status = 1;
+        ground.grounded = 1;
+        check(gameOwnsGround(true, ground), "the ground itself was not the game's");
+        check(!gameOwnsGround(false, ground), "a stale sample counted");
+        auto with = [&](auto change) { Data d = ground; change(d); return gameOwnsGround(true, d); };
+        check(!with([](Data& d) { d.status = 0; }), "no swing data counted");
+        check(!with([](Data& d) { d.owned = 1; }), "the swing's body counted (swinging, flying, released)");
+        check(!with([](Data& d) { d.grounded = 0; }), "the air counted");
+        check(!with([](Data& d) { d.webs[0].attached = 1; }), "a left web counted");
+        check(!with([](Data& d) { d.webs[1].attached = 9; }), "a right web counted");
+        check(!with([](Data& d) { d.wall = static_cast<uint32_t>(Surface::wall); }), "the swing's wall counted");
+        check(!with([](Data& d) { d.wall = static_cast<uint32_t>(Surface::game); }), "the game's crawl counted");
+        check(!with([](Data& d) { d.wall = static_cast<uint32_t>(Surface::floor); }), "a vent counted");
+        check(!with([](Data& d) { d.mount = 1; }), "a mount counted");
+        check(!with([](Data& d) { d.takeoff = 1; }), "a takeoff counted");
+        check(!with([](Data& d) { d.takeoffPhase = 2; }), "a takeoff's phase counted");
+        check(!with([](Data& d) { d.collisionFlags = 0x10; }), "the game's air state counted");
     });
     test("every control of the pad can be sent in VR play, by gameplay or the pad layer", [] {
         using namespace game_pad;
@@ -12934,6 +14724,65 @@ int main() {
         check(caughtAt>=0&&caughtAt<=grab.config().catchSpeed+.5f,"the can was not caught, or caught fast");
         check(fastest>8,"the reel did not drag the can in");
         check(behind<.6f,"the can slid past the hand toward the player");
+    });
+    test("with WEB TIE a webbed enemy far off comes only on the pull gesture: no reel, no pull as the hand moves away", [] {
+        check(!GrabConfig{}.yankOnlyCharacters,"an enemy comes only on the yank by default");
+        TestWorld world;world.enabled=false;
+        GrabTargets targets;targets.add(7,{0,1,-20},80,.45f,TargetKind::Character);
+        WebGrab grab;Body player{{0,1,0},{},true};
+        grab.yankOnlyCharacters(true);
+        check(grab.config().yankOnlyCharacters,"WEB TIE's yank-only not taken");
+        auto in=forward();in.hands[0].trigger=0;
+        grab.claim(1.f/90,in,world,targets,player);
+        check(grab.grabs()[0].phase==GrabPhase::Tethered,"the enemy was not webbed");
+        // The trigger held, the hand drawn slowly back 0.6 m and the player
+        // walking away 3 m: nothing brings him.
+        in.hands[0].trigger=0;grab.claim(1.f/90,in,world,targets,player);
+        in.hands[0].trigger=1;
+        std::vector<TargetCommand> out;
+        bool pulled{};
+        for(int frame=1;frame<=270;++frame) {
+            in.hands[0].gripRelativeToHead={0,0,std::min(.6f,frame*.003f)};
+            player.position.z=std::min(3.f,frame*.02f);
+            grab.claim(1.f/90,in,world,targets,player);
+            if(frame%3)continue;
+            out.clear();grab.step(1.f/30,world,targets,out);targets.apply(1.f/30,out);
+            for(const auto& c:out)pulled|=c.id==7&&(c.mode!=TargetCommand::Mode::Rope||c.ropes[0].length<length(targets.find(7)->position-c.ropes[0].anchor));
+        }
+        check(grab.grabs()[0].phase==GrabPhase::Tethered,"the enemy's web was lost or he was caught");
+        check(!pulled&&targets.find(7)->position.z<-19.9f,"the enemy was pulled without the pull gesture");
+        // The pull gesture yanks him.
+        in.hands[0].trigger=0;
+        for(int i=1;i<=9;++i){in.hands[0].gripRelativeToHead={0,0,.6f-.033f*i};grab.claim(1.f/90,in,world,targets,player);}
+        for(int i=1;i<=9;++i){in.hands[0].gripRelativeToHead={0,0,.3f+.033f*i};grab.claim(1.f/90,in,world,targets,player);if(events(grab,GrabEventKind::Yank))break;}
+        check(grab.grabs()[0].phase==GrabPhase::Yanked,"the pull gesture did not yank the enemy");
+    });
+    test("without WEB TIE a webbed enemy winds in on the trigger, as before", [] {
+        TestWorld world;world.enabled=false;
+        GrabTargets targets;targets.add(7,{0,1,-20},80,.45f,TargetKind::Character);
+        WebGrab grab;Body player{{0,1,0},{},true};
+        auto in=forward();in.hands[0].trigger=0;
+        grab.claim(1.f/90,in,world,targets,player);
+        check(grab.grabs()[0].phase==GrabPhase::Tethered,"the enemy was not webbed");
+        in.hands[0].trigger=1;
+        std::vector<TargetCommand> out;
+        for(int frame=1;frame<=180;++frame) {
+            grab.claim(1.f/90,in,world,targets,player);
+            if(frame%3)continue;
+            out.clear();grab.step(1.f/30,world,targets,out);targets.apply(1.f/30,out);
+        }
+        check(targets.find(7)->position.z>-19,"the trigger no longer winds a webbed enemy in");
+    });
+    test("a webbed prop still winds in on the trigger", [] {
+        TestWorld world;world.enabled=false;
+        GrabTargets targets;targets.add(7,{0,1,-12},30,.45f);
+        WebGrab grab;Body player{{0,1,0},{},true};
+        auto in=forward();in.hands[0].trigger=0;
+        grab.claim(1.f/90,in,world,targets,player);
+        in.hands[0].trigger=1;
+        std::vector<TargetCommand> out;
+        for(int frame=1;frame<=90;++frame){grab.claim(1.f/90,in,world,targets,player);if(frame%3)continue;out.clear();grab.step(1.f/30,world,targets,out);targets.apply(1.f/30,out);}
+        check(targets.find(7)->position.z>-10,"the prop did not wind in");
     });
     test("the zip gesture yanks a target to the hand without overshooting it", [] {
         TestWorld world;world.enabled=false;
@@ -19828,7 +21677,8 @@ int main() {
         check(withTabOnly(Values{}, tabOnlyText(values)) == values, "controlled mode did not persist");
         for (const auto& row : rows())
             check(std::string(row.title).find("MOMENTUM ") == std::string::npos &&
-                  std::string(row.title).find("JOYSTICK ") == std::string::npos,
+                  (row.item == Item::joystickRunCamera ||
+                  std::string(row.title).find("JOYSTICK ") == std::string::npos),
                   "retired tuning still has a menu row");
     });
     test("body protocol separates official dive kicks from new and legacy wall runs", [] {
@@ -19988,6 +21838,106 @@ int main() {
             const auto normalGround = holdFor(originalAngle, control, feet, {}, 2);
             near(length(ground.headPose.position - normalGround.headPose.position), 0, .005f);
         }
+    });
+    test("joystick momentum mode uses the unchanged momentum camera and gait from actual velocity", [] {
+        for (Vec3 travel : {Vec3{6,0,0},Vec3{0,6,0},normalized(Vec3{1,1,0})*6.f}) {
+            GameTrackingRig joystick,momentum;
+            joystick.handClimb(true); momentum.handClimb(true);
+            joystick.joystickWallRunCamera(false);
+            joystick.wallRunCameraTilt(true); momentum.wallRunCameraTilt(true);
+            joystick.wallRunBody(true,0,travel); momentum.wallRunBody(true,0,travel);
+            auto f=trackedFrame(), neutral=f; f.seconds=neutral.seconds=1.f/90;
+            for (auto& h:f.hands) h.squeeze=0;
+            for (auto& h:neutral.hands) h.squeeze=0;
+            f.hands[0].stickY=1;
+            const Vec3 feet{0,10,-.1f};
+            const SurfaceHold wall{{0,0,1},{0,10,-1},6,false};
+            const auto driven=holdFor(joystick,f,feet,wall,2);
+            const auto coast=holdFor(momentum,neutral,feet,wall,2);
+            check(driven.joystickWallRun && !driven.standing,"stick selected the old wall-floor view");
+            near(length(driven.headPose.position-coast.headPose.position),0,.003f);
+            for (Vec3 axis : {Vec3{0,1,0},Vec3{0,0,-1}})
+                near(length(driven.headPose.orientation.rotate(axis)-coast.headPose.orientation.rotate(axis)),0,.003f);
+            near(dot(driven.headPose.position-wall.anchor,wall.normal),
+                 .95f-.20f*std::abs(normalized(travel).y),.015f);
+            check(length(driven.swing.move)>.9f,"neutral-view routing discarded the movement input");
+            WallRunBody a,b;
+            for(int i=0;i<90;++i) {
+                check(a.update(driven,wall,travel,true,false,0,1.f/90) &&
+                      b.update(coast,wall,travel,true,false,0,1.f/90),"actual momentum did not start the existing gait");
+                near(a.phase(),b.phase()); near(length(a.ahead()-b.ahead()),0);
+            }
+            joystick.reset(); joystick.wallRunBody(true,0,travel);
+            const auto recentered=holdFor(joystick,f,feet,wall,2);
+            check(!recentered.standing,"recenter lost momentum mode");
+            joystick.joystickWallRunCamera(true);
+            const auto legacy=holdFor(joystick,f,feet,wall,2);
+            check(legacy.standing && legacy.viewTilt>1.5f,"legacy camera option stopped working");
+            joystick.joystickWallRunCamera(false);
+            const auto restored=holdFor(joystick,f,feet,wall,2);
+            check(!restored.standing && restored.viewTilt<.005f,"legacy floor turn remained in momentum mode");
+        }
+    });
+    test("joystick camera choice leaves ground vents and momentum view unchanged", [] {
+        for (const SurfaceHold hold : {SurfaceHold{},SurfaceHold{{0,1,0},{0,0,0},0,true,true},
+                                      SurfaceHold{{0,0,1},{0,10,-1},8,false}}) {
+            GameTrackingRig on,off;
+            on.handClimb(true); off.handClimb(true); off.joystickWallRunCamera(false);
+            on.wallRunBody(true,0,{8,0,0}); off.wallRunBody(true,0,{8,0,0});
+            auto f=trackedFrame(); f.seconds=1.f/90;
+            if (length(hold.normal)<.5f || hold.vent) f.hands[0].stickY=1;
+            const Vec3 feet=hold.vent ? Vec3{} : Vec3{0,10,-.1f};
+            const auto a=holdFor(on,f,feet,hold,2), b=holdFor(off,f,feet,hold,2);
+            check(!b.joystickWallRun,"non-wall movement became a joystick wall run");
+            near(length(a.headPose.position-b.headPose.position),0,.003f);
+            near(length(a.headPose.orientation.rotate({0,1,0})-b.headPose.orientation.rotate({0,1,0})),0,.003f);
+        }
+    });
+    test("joystick and momentum running use the same body gait regardless of camera tilt", [] {
+        const auto b=splitPelvisBody();
+        for (Vec3 direction : {Vec3{1,0,0},Vec3{0,1,0},normalized(Vec3{1,1,0})}) {
+            for (int phase=0;phase<12;++phase) {
+                auto t=lookingAhead({0,0,.95f-.20f*std::abs(direction.y)}); t.wallRun=true;
+                t.runNormal={0,0,1}; t.runAhead=direction; t.runSpeed=6;
+                t.runPhase=phase*6.2831853f/12;
+                t.facing=body::between({0,0,-1},{0,1,0},direction,t.runNormal);
+                body::State baselineState; body::Result baseResult;
+                body::Config config; config.hideHead=false;
+                const auto expected=solved(b,t,baselineState,config,1,&baseResult);
+                for (float angle : {0.f,.7f,1.5707963f}) {
+                    GameMotionFrame frame; frame.standing=angle>0;
+                    frame.swing.tilt=Quat::around({1,0,0},angle);
+                    frame.flipTilt=Quat::around({0,0,1},.2f);
+                    t.tilt=frame.bodyTilt(true);
+                    body::State state; body::Result result;
+                    const auto actual=solved(b,t,state,config,1,&result);
+                    check(actual==expected,"camera transition selected a different running body pose");
+                    check(result.headError<.005f,"shared run pose lost the tracked head");
+                    body::Pose pose(const_cast<float*>(actual.data()),static_cast<int>(b.rig.parent.size()));
+                    for (int joint : {b.rig.pelvis,b.rig.hipRoot,2,3,4,21,22,23,25,26,27})
+                        check(pose.position(joint).z>-.015f,"original momentum camera put the body through the wall");
+                }
+            }
+        }
+        GameMotionFrame run; run.active=true; run.joystickWallRun=true;
+        const SurfaceHold slow{{0,0,1},{0,0,0},.5f,false};
+        WallRunBody gait;
+        check(!gait.update(run,slow,{0,.5f,0},true,false,0,.01f),
+              "joystick flag fabricated momentum before the player moved fast enough");
+        const SurfaceHold moving{{0,0,1},{0,0,0},6,false};
+        check(gait.update(run,moving,{0,6,0},true,false,0,.01f),"real joystick-generated velocity did not trigger momentum");
+    });
+    test("joystick wall-run camera switch persists and defaults to the wall-floor view, as before", [] {
+        using namespace vr_settings;
+        Values v;
+        check(v.joystickRunCamera && defaultChoice(Item::joystickRunCamera)==1,"default camera changed");
+        check(choose(Item::joystickRunCamera,0,v) && !v.joystickRunCamera,"momentum choice failed");
+        check(!withTabOnly(Values{},tabOnlyText(v)).joystickRunCamera,"camera choice was not saved");
+        check(withTabOnly(Values{},"hand_climb=1\n").joystickRunCamera,"old settings lost the transition");
+        check(choose(Item::joystickRunCamera,1,v) && v.joystickRunCamera,"ON choice failed");
+        choose(Item::joystickRunCamera,0,v);
+        check(choose(Item::joystickRunCamera,defaultChoice(Item::joystickRunCamera),v) && v.joystickRunCamera,
+              "reset did not restore the camera transition");
     });
     test("joystick camera distance changes live across directions and survives recentering", [] {
         for (Vec3 travel : {Vec3{6, 0, 0}, Vec3{0, 6, 0}, normalized(Vec3{1, 1, 0}) * 6.f}) {
@@ -21536,7 +23486,7 @@ int main() {
     test("free combat: settings default to called combat and preserve older packet layouts", [] {
         using namespace game_swing;
         Settings s;
-        check(s.version == 22 && s.bytes == 104 && s.combatVisuals == 1 &&
+        check(s.version == 32 && s.bytes == 152 && s.combatVisuals == 1 &&
                   offsetof(Settings, combatVisuals) == 56,
               "free combat broke the settings defaults or layout");
         s.combatVisuals = 0;
@@ -21547,6 +23497,94 @@ int main() {
         old.version = 10;
         old.bytes = settingsBytesV10;
         check(validSettings(old) && old.combatVisuals == 1, "old settings changed combat semantics");
+    });
+    test("half punch damage scales every move after combo bonuses without changing its reaction", [] {
+        const Punches fists;
+        const Flow flow;
+        const DeliveryConfig half{.halfDamage=true};
+        for (bool free : {false,true}) for (bool air : {false,true})
+            for (int count=1;count<=10;++count) for (auto cue : {CueWay::None,CueWay::Up,CueWay::Down,CueWay::Left})
+                for (Vec3 way : {Vec3{0,0,-1},Vec3{0,.9f,-.44f},Vec3{0,-.9f,-.44f}})
+                    for (float speed : {3.f,5.f,8.f}) {
+                        const auto blow=fists.blow(way,speed);
+                        const auto full=deliver(blow,air,count,flow,{},cue,1.5f,free);
+                        const auto reduced=deliver(blow,air,count,flow,half,cue,1.5f,free);
+                        near(reduced.damage,full.damage*.5f,.0001f);
+                        check(reduced.kind==full.kind && reduced.kinetic==full.kinetic && reduced.fly==full.fly &&
+                              reduced.knockback==full.knockback,"reduced damage changed the move or hit reaction");
+                        near(length(reduced.velocity-full.velocity),0);
+                        // The counter multiplier applied after delivery still halves exactly once.
+                        near(reduced.damage*1.25f,full.damage*1.25f*.5f,.0001f);
+                    }
+    });
+    test("half punch damage persists and older settings keep full damage", [] {
+        using namespace vr_settings;
+        Values v;
+        check(!v.halfPunchDamage && defaultChoice(Item::halfPunchDamage)==0,"damage changed by default");
+        check(choose(Item::halfPunchDamage,1,v) && v.halfPunchDamage,"damage switch did not enable");
+        check(withTabOnly(Values{},tabOnlyText(v)).halfPunchDamage,"damage switch did not persist");
+        check(!withTabOnly(Values{},"combat_visuals=0\n").halfPunchDamage,"old settings reduced damage");
+        check(choose(Item::halfPunchDamage,0,v) && !v.halfPunchDamage,"full damage did not restore");
+        check(v.singleHandYankPercent == 100 && defaultChoice(Item::singleHandYankStrength) == 2,
+              "single-hand yank strength changed by default");
+        check(choose(Item::singleHandYankStrength, 5, v) && v.singleHandYankPercent == 200 &&
+                  withTabOnly(Values{}, tabOnlyText(v)).singleHandYankPercent == 200,
+              "single-hand yank strength did not select and persist 200 percent");
+        check(withTabOnly(Values{}, "single_hand_yank_percent=999\n").singleHandYankPercent == 300,
+              "saved single-hand yank strength was not clamped");
+        game_swing::Settings packet;
+        check(packet.version == 32 && packet.bytes == 152 && !packet.halfPunchDamage &&
+                  packet.singleHandYankPercent == 100 &&
+                  offsetof(game_swing::Settings, halfPunchDamage) == 96 &&
+                  offsetof(game_swing::Settings, singleHandYankPercent) == 100,
+              "yank protocol shifted older fields");
+        packet.halfPunchDamage=1;
+        check(game_swing::validSettings(packet),"half-damage packet refused");
+        packet.halfPunchDamage=2;
+        check(!game_swing::validSettings(packet),"invalid damage switch accepted");
+        packet={}; packet.singleHandYankPercent=300;
+        check(game_swing::validSettings(packet),"maximum yank strength refused");
+        packet.singleHandYankPercent=301;
+        check(!game_swing::validSettings(packet),"out-of-range yank strength accepted");
+        packet = {};
+        packet.version = 24;
+        packet.bytes = game_swing::settingsBytesV24;
+        check(game_swing::validSettings(packet), "version 24 settings packet refused");
+        packet = {};
+        packet.momentumLeap = 1;
+        check(game_swing::validSettings(packet), "a momentum leap packet refused");
+        packet.momentumLeap = 2;
+        check(!game_swing::validSettings(packet), "an invalid momentum leap switch accepted");
+        packet = {};
+        packet.version = 25;
+        packet.bytes = game_swing::settingsBytesV25;
+        check(game_swing::validSettings(packet), "version 25 settings packet refused");
+        packet = {};
+        packet.version = 22;
+        packet.bytes = game_swing::settingsBytesV22;
+        check(game_swing::validSettings(packet), "version 22 settings packet refused");
+        packet = {};
+        packet.version = 23;
+        packet.bytes = game_swing::settingsBytesV23;
+        check(game_swing::validSettings(packet), "version 23 settings packet refused");
+        packet={}; packet.version=21; packet.bytes=game_swing::settingsBytesV21;
+        check(game_swing::validSettings(packet),"version 21 settings packet refused");
+        packet={}; packet.version=20; packet.bytes=game_swing::settingsBytesV20;
+        check(game_swing::validSettings(packet) && !packet.halfPunchDamage,"old packet lost full damage");
+    });
+    test("joystick momentum only suppresses the stock stick while custom outdoor wall motion owns the player", [] {
+        using namespace game_swing;
+        Data d; d.status=1; d.owned=1; d.wall=static_cast<uint32_t>(Surface::wall);
+        check(momentumWallDrive(true,true,d),"custom momentum wall motion still forwards the stock stick");
+        check(!momentumWallDrive(false,true,d) && !momentumWallDrive(true,false,d),"legacy or stale motion lost input");
+        d.owned=0; check(!momentumWallDrive(true,true,d),"native crawl lost its stick");
+        d.owned=1;
+        for (Surface surface : {Surface::none,Surface::floor,Surface::game}) {
+            d.wall=static_cast<uint32_t>(surface);
+            check(!momentumWallDrive(true,true,d),"ground, vent or ceiling controls were suppressed");
+        }
+        d.wall=static_cast<uint32_t>(Surface::wall); d.status=0;
+        check(!momentumWallDrive(true,true,d),"an inactive module consumed movement");
     });
     test("hit stop: the game's time stops for a blow and eases back, longer for a finisher", [] {
         HitStop stop;
@@ -22197,6 +24235,515 @@ int main() {
               "NaN assist accepted");
         check(!bad([](ShooterConfig&) {}), "defaults rejected");
     });
+    test("VR categories: every control once, bounded screens, stable row numbers", [] {
+        using namespace vr_settings;
+        std::bitset<256> seen;
+        for (const auto& screen : screens()) {
+            check(screen.title && screen.tabTitle && !screen.items.empty(), "empty category");
+            size_t inGame = 0;
+            for (Item item : screen.items) {
+                check(!seen.test(static_cast<size_t>(item)), "duplicate category control");
+                seen.set(static_cast<size_t>(item));
+                const Row* row = rowFor(item);
+                check(row && row->item != Item::none && row->place != Place::page, "invalid category row");
+                inGame += row->place == Place::tab;
+            }
+            check(inGame > 0 && inGame <= 20, "category grew beyond a short screen");
+        }
+        for (const Row& row : rows())
+            check(seen.test(static_cast<size_t>(row.item)) ==
+                      (row.item != Item::none && row.place != Place::page), "missing setting destination");
+        check(rowFor(Item::none) == nullptr, "headings are not settings");
+    });
+    test("VR category reset preserves other screens, hidden tuning and off-grid values", [] {
+        using namespace vr_settings;
+        Values v;
+        v.swingSpeed = 33;
+        v.snapTurn = 45;
+        v.smoothTurn = 60;
+        v.automaticResponse = 750;
+        v.realisticFlips = true;
+        v.flatScreen = true;
+        v.webShooter = false;
+        auto setup = resetCategory(Category::setup, v);
+        auto expected = v;
+        expected.snapTurn = Values{}.snapTurn;
+        expected.smoothTurn = Values{}.smoothTurn;
+        check(setup == expected, "setup reset leaked into another category");
+        auto flips = resetCategory(Category::flips, v);
+        expected = v;
+        expected.realisticFlips = false;
+        check(flips == expected, "flip reset touched hidden tuning or another category");
+        check(resetCategory(Category::count, v) == v, "invalid category changed values");
+    });
+    test("VR dependency hints follow effective modes without changing saved preferences", [] {
+        using namespace vr_settings;
+        Values v;
+        check(inactiveReason(Item::smartAnchor, v), "open-air webs override smart anchor");
+        v.airWebs = false;
+        check(!inactiveReason(Item::smartAnchor, v), "real anchors enable smart anchor");
+        v.smoothTurn = 60;
+        check(inactiveReason(Item::snapTurn, v) && v.snapTurn == 30, "snap preference was lost");
+        v.smoothTurn = 0;
+        check(!inactiveReason(Item::snapTurn, v), "snap did not become available");
+        check(inactiveReason(Item::slingshotSpeed, v), "inactive slingshot speed");
+        v.airSlingshot = true;
+        check(!inactiveReason(Item::slingshotSpeed, v), "air slingshot works independently");
+        v.controlledFlips = true;
+        check(inactiveReason(Item::flips, v), "controlled flips overrides basic flips");
+        v.realisticFlips = true;
+        check(!inactiveReason(Item::flips, v) && inactiveReason(Item::controlledFlips, v),
+              "realistic flips still needs the basic switch for stick steering");
+        v.webAimSource = 1;
+        check(inactiveReason(Item::wristShooters, v) && !inactiveReason(Item::forearmBlend, v),
+              "forearm aim makes wrist shortcut redundant");
+        check(!inactiveReason(Item::palmShooters, v), "palm rotation can compose with forearm aim");
+        check(inactiveReason(Item::nativeRunAt, v) && inactiveReason(Item::steadyStates, v), "native run tuning");
+        v.nativeRun = true;
+        check(!inactiveReason(Item::nativeRunAt, v) && !inactiveReason(Item::steadyStates, v), "native run on");
+        check(inactiveReason(Item::spidyRunFromStanding, v), "standing run requires Spidy run");
+        check(inactiveReason(Item::webLandingImpact, v), "landing threshold requires smooth web landing");
+        v.webLandingSmooth = true;
+        check(!inactiveReason(Item::spidyRunJump, v), "landing carry also uses the run jump");
+        v.haptics = v.bodyHaptics = v.hud = 0;
+        check(inactiveReason(Item::reelHaptics, v) && inactiveReason(Item::hapticWebs, v) &&
+                  inactiveReason(Item::steadyHud, v), "feedback and HUD parent settings");
+        check(inactiveReason(Item::recordingSmoothing, v), "smoothing requires recording view");
+        v.recordingFov = 140;
+        check(!inactiveReason(Item::recordingSmoothing, v), "recording view enables smoothing");
+    });
+    test("VR settings catalog: stable legacy sections, every setting once, a list's choices one per step", [] {
+        using namespace vr_settings;
+        const auto& all = rows();
+        check(all[5].item == Item::smartAnchor && all[4].item == Item::airWebs,
+              "smart anchor missing under webs holding in open air");
+        check(all[6].item == Item::webRange && all[7].item == Item::webSpeed && all[6].choices.size() == 9,
+              "web range and web speed missing under the smart anchor");
+        check(all[11].item == Item::elasticWeb && all[10].item == Item::weight && all[11].choices.size() == 4,
+              "elastic web missing under the weight");
+        check(all[12].item == Item::softRelease && all[12].choices.size() == 4,
+              "soft release missing under the elastic web");
+        check(all[13].item == Item::swingAssist && all[13].choices.empty(),
+              "swing assist missing under the soft release");
+        check(all[15].item == Item::slingshotSpeed && all[14].item == Item::webSlingshot,
+              "slingshot speed missing under the web slingshot");
+        check(all[16].item == Item::betterClimbing && all[18].item == Item::twoHandZip &&
+                  all[19].item == Item::ropeSteering,
+              "the hand gestures missing under better climbing");
+        check(all[14].item == Item::webSlingshot, "slingshot missing under SWINGING");
+        check(all[16].item == Item::betterClimbing, "better climbing missing under SWINGING");
+        std::bitset<256> seen;
+        unsigned headings = 0;
+        static_assert(static_cast<unsigned>(lastItem) < 256, "more settings than the test's bits");
+        for (const auto& row : all) {
+            check(row.title && *row.title, "a row without a title");
+            for (const char* c = row.title; *c; ++c)
+                check(!(*c >= 'a' && *c <= 'z'), "a title not in upper case, as the game's own");
+            if (row.item == Item::none) {
+                check(!row.help && row.choices.empty(), "a heading with help or choices");
+                ++headings;
+                continue;
+            }
+            const auto bit = static_cast<size_t>(row.item);
+            check(!seen.test(bit), "a setting twice");
+            seen.set(bit);
+            check(row.help && std::strlen(row.help) <= 80, "help missing, or too long for the game's column");
+            check(row.choices.size() <= maxChoices, "more choices than the tab shows");
+            for (const char* c : row.choices)
+                check(c && *c, "an empty choice");
+        }
+        // The sections (the player, October 19: "sort the options in spidy vr
+        // settings ingame into nice sections"), each with a setting in the tab.
+        const std::pair<size_t, const char*> sections[] = {{0, "WEBS"},     {8, "SWINGING"}, {20, "VENOM"},
+                                                           {23, "COMFORT"}, {26, "HAPTICS"}, {37, "DISPLAY"},
+                                                           {49, "BODY"},    {53, "EXPERIMENTAL"}};
+        check(headings == std::size(sections),
+              "the sections: webs, swinging, venom, comfort, haptics, display, body, experimental");
+        for (const auto& [at, title] : sections) {
+            check(all[at].item == Item::none && std::strcmp(all[at].title, title) == 0, "a section out of place");
+            size_t next = at + 1;
+            while (next < all.size() && all[next].place != Place::tab)
+                ++next;
+            check(next < all.size() && all[next].item != Item::none, "a section with no setting in the tab");
+        }
+        // BODY: the calibration, then your height and seated play (the user, October 23: "add proper height
+        // calibration or override for seated mode").
+        check(all[50].item == Item::calibrate && all[51].item == Item::height &&
+                  all[51].choices.size() == std::size(heights) && std::strcmp(all[51].choices[0], "AUTO") == 0 &&
+                  std::strcmp(all[51].choices[8], "190 CM") == 0 && all[52].item == Item::seated &&
+                  all[52].choices.empty(),
+              "BODY: CALIBRATE BODY, then HEIGHT (AUTO, 150 to 190 cm), then SEATED, a switch");
+        check(all[54].item == Item::flips && all[54].choices.empty() && std::strcmp(all[53].title, "EXPERIMENTAL") == 0,
+              "the flips: a switch under EXPERIMENTAL");
+        check(all[56].item == Item::flipSpeed && all[56].choices.size() == std::size(flipSpeeds),
+              "the flip speed under the flips");
+        check(all[57].item == Item::handClimb && all[57].choices.empty(),
+              "hand wall climbing switch under the flips");
+        const Item realistic[] = {Item::realisticFlips,        Item::automaticStrength,    Item::automaticSpeed,
+                                  Item::automaticMinimumSpeed, Item::automaticReleaseFlip, Item::automaticResponse,
+                                  Item::automaticHandStrength, Item::automaticFalloff,     Item::automaticHandThreshold,
+                                  Item::automaticAirBrake,     Item::automaticCombat};
+        // The realistic flips' rows come last, after the EXPERIMENTAL rows before them.
+        constexpr size_t firstRealistic = 88;
+        check(all.size() == firstRealistic + std::size(realistic), "the realistic flips' rows are not the last");
+        for (size_t i = 0; i < std::size(realistic); ++i)
+            check(all[firstRealistic + i].item == realistic[i], "the realistic flips' rows out of order");
+        check(std::strcmp(all[firstRealistic].title, "REALISTIC FLIPS") == 0 && all[firstRealistic].choices.empty(),
+              "realistic flips: a switch, first of its rows");
+        // AIR FISTS (November 11): a switch before them, on by default, shown on the Movement page after
+        // HALF PUNCH DAMAGE and kept as air_fists.
+        check(all[87].item == Item::airFists && std::strcmp(all[87].title, "AIR FISTS") == 0 &&
+                  all[87].choices.empty() && all[87].place == Place::tab && Values{}.airFists &&
+                  defaultChoice(Item::airFists) == 1 && !withTabOnly({}, "air_fists=0\n").airFists &&
+                  withTabOnly({}, "").airFists,
+              "AIR FISTS: an ON switch before the realistic flips, kept as air_fists");
+        check(all[55].item == Item::controlledFlips && all[58].item == Item::joystickRunCamera &&
+                  all[59].item == Item::wallRunCameraTilt && all[44].item == Item::halfPunchDamage,
+              "custom switches misplaced");
+        check(all[60].item == Item::webTie && std::strcmp(all[60].title, "WEB TIE") == 0 &&
+                  all[60].choices.empty() && all[60].place == Place::tab,
+              "WEB TIE: a switch in the tab after HALF PUNCH DAMAGE");
+        check(all[61].item == Item::webLines && std::strcmp(all[61].title, "WEB LINES") == 0 &&
+                  all[61].choices.empty() && all[61].place == Place::tab,
+              "WEB LINES: a switch in the tab after WEB TIE");
+        // EYE AIM, before the realistic flips: what the eyes aim, off by default (only a headset that tracks
+        // the eyes can).
+        check(all[62].item == Item::eyeAim && std::strcmp(all[62].title, "EYE AIM") == 0 &&
+                  all[62].choices.size() == 4 && std::strcmp(all[62].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[62].choices[1], "WEB BALLS") == 0 && std::strcmp(all[62].choices[2], "ZIPS") == 0 &&
+                  std::strcmp(all[62].choices[3], "BOTH") == 0 && all[62].place == Place::tab,
+              "EYE AIM: OFF, WEB BALLS, ZIPS, BOTH, in the tab before the realistic flips");
+        {
+            Values v;
+            check(v.eyeAim == 0 && defaultChoice(Item::eyeAim) == 0, "eye aim on by default");
+            check(choose(Item::eyeAim, 3, v) && v.eyeAim == (eyeAimShots | eyeAimZips) && choice(Item::eyeAim, v) == 3,
+                  "BOTH is web balls and zips");
+            check(choose(Item::eyeAim, 2, v) && v.eyeAim == eyeAimZips && choose(Item::eyeAim, 1, v) &&
+                      v.eyeAim == eyeAimShots && !choose(Item::eyeAim, 4, v),
+                  "ZIPS, WEB BALLS, and nothing past BOTH");
+            check(tabOnlyText({}).find("eye_aim=0\n") != std::string::npos &&
+                      withTabOnly({}, "eye_aim=2\n").eyeAim == eyeAimZips && withTabOnly({}, "eye_aim=9\n").eyeAim == 3,
+                  "spidy_vr.ini keeps EYE AIM as eye_aim, within its range");
+        }
+        // FLIP REPROJECTION, after EYE AIM: a switch in the tab, off by default so the headset can compare
+        // (the user, October 29), kept in spidy_vr.ini.
+        check(all[63].item == Item::flipReprojection && std::strcmp(all[63].title, "FLIP REPROJECTION") == 0 &&
+                  all[63].choices.empty() && all[63].place == Place::tab,
+              "FLIP REPROJECTION: a switch in the tab, after EYE AIM");
+        {
+            Values v;
+            check(!v.flipReprojection && defaultChoice(Item::flipReprojection) == 0, "flip reprojection on by default");
+            check(choose(Item::flipReprojection, 1, v) && v.flipReprojection && choice(Item::flipReprojection, v) == 1,
+                  "the switch did not turn it on");
+            check(tabOnlyText(v).find("flip_reprojection=1\n") != std::string::npos &&
+                      withTabOnly({}, "flip_reprojection=1\n").flipReprojection &&
+                      !withTabOnly({}, "flip_reprojection=0\n").flipReprojection,
+                  "spidy_vr.ini keeps FLIP REPROJECTION as flip_reprojection");
+        }
+        // STEADY HUD, after EYE AIM: a switch in the tab, off by default to compare, kept in
+        // spidy_vr.ini.
+        check(all[64].item == Item::steadyHud && std::strcmp(all[64].title, "STEADY HUD") == 0 &&
+                  all[64].choices.empty() && all[64].place == Place::tab,
+              "STEADY HUD: a switch in the tab, after EYE AIM");
+        {
+            Values v;
+            check(!v.steadyHud && defaultChoice(Item::steadyHud) == 0, "steady HUD on by default");
+            check(choose(Item::steadyHud, 1, v) && v.steadyHud && choice(Item::steadyHud, v) == 1,
+                  "the switch did not turn it on");
+            check(tabOnlyText(v).find("steady_hud=1\n") != std::string::npos &&
+                      withTabOnly({}, "steady_hud=1\n").steadyHud && !withTabOnly({}, "steady_hud=0\n").steadyHud,
+                  "spidy_vr.ini keeps STEADY HUD as steady_hud");
+        }
+        // NATIVE RUN, after STEADY HUD and before the realistic flips: a switch in the tab, off by
+        // default (the stick jogs as before), kept in spidy_vr.ini as native_run.
+        check(all[65].item == Item::nativeRun && std::strcmp(all[65].title, "NATIVE RUN") == 0 &&
+                  all[65].choices.empty() && all[65].place == Place::tab,
+              "NATIVE RUN: a switch in the tab, after STEADY HUD");
+        check(all[66].item == Item::airSlingshot && std::strcmp(all[66].title, "AIR SLINGSHOT") == 0 &&
+                  all[66].choices.empty() && all[66].place == Place::tab,
+              "AIR SLINGSHOT: a switch in the tab, after NATIVE RUN");
+        check(all[67].item == Item::webAngle && std::strcmp(all[67].title, "WEB ANGLE") == 0 &&
+                  all[67].choices.size() == 7 && std::strcmp(all[67].choices[3], "0") == 0 &&
+                  all[67].place == Place::tab && all[68].item == Item::wristShooters &&
+                  std::strcmp(all[68].title, "WRIST SHOOTERS") == 0 && all[68].choices.empty() &&
+                  all[68].place == Place::tab,
+              "WEB ANGLE and WRIST SHOOTERS: in the tab, after AIR SLINGSHOT");
+        check(all[69].item == Item::dodgeTumble && std::strcmp(all[69].title, "DODGE TUMBLE") == 0 &&
+                  all[69].choices.size() == 3 && std::strcmp(all[69].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[69].choices[2], "ROLL") == 0 && all[69].place == Place::tab,
+              "DODGE TUMBLE: OFF, LEAN or ROLL in the tab, after WRIST SHOOTERS");
+        // The run update's rows, after DODGE TUMBLE: RUN CURVE, NATIVE RUN AT (50 to 90%, 70 as before),
+        // RUN LOGS.
+        check(all[70].item == Item::runCurve && std::strcmp(all[70].title, "RUN CURVE") == 0 &&
+                  all[70].choices.empty() && all[70].place == Place::tab &&
+                  all[71].item == Item::nativeRunAt && std::strcmp(all[71].title, "NATIVE RUN AT") == 0 &&
+                  all[71].choices.size() == 5 && std::strcmp(all[71].choices[2], "70%") == 0 &&
+                  all[71].place == Place::tab && all[72].item == Item::runLogs &&
+                  std::strcmp(all[72].title, "RUN LOGS") == 0 && all[72].choices.empty() &&
+                  all[72].place == Place::tab,
+              "RUN CURVE, NATIVE RUN AT and RUN LOGS: in the tab, after DODGE TUMBLE");
+        check(all[73].item == Item::momentumLeap && std::strcmp(all[73].title, "RUNNING LEAP") == 0 &&
+                  all[73].choices.empty() && all[73].place == Place::tab && all[74].item == Item::earlyJump &&
+                  std::strcmp(all[74].title, "EARLY JUMP") == 0 && all[74].choices.size() == 3 &&
+                  std::strcmp(all[74].choices[0], "OFF") == 0 && std::strcmp(all[74].choices[2], "RUNNING") == 0 &&
+                  all[74].place == Place::tab,
+              "RUNNING LEAP and EARLY JUMP (OFF, QUICK TAP, RUNNING): in the tab, after RUN LOGS");
+        check(all[75].item == Item::softLanding && std::strcmp(all[75].title, "SOFT LANDING") == 0 &&
+                  all[75].choices.empty() && all[75].place == Place::tab,
+              "SOFT LANDING: a switch in the tab, after EARLY JUMP");
+        check(all[76].item == Item::spidyRun && std::strcmp(all[76].title, "SPIDY RUN") == 0 &&
+                  all[76].choices.empty() && all[76].place == Place::tab,
+              "SPIDY RUN: a switch in the tab, after SOFT LANDING");
+        check(all[77].item == Item::spidyRunFromStanding &&
+                  std::strcmp(all[77].title, "RUN FROM STANDING") == 0 && all[77].choices.empty() &&
+                  all[77].place == Place::tab,
+              "RUN FROM STANDING: a switch in the tab, after SPIDY RUN");
+        check(all[78].item == Item::webAimSource && std::strcmp(all[78].title, "WEB AIM") == 0 &&
+                  all[78].choices.size() == 2 && std::strcmp(all[78].choices[1], "MODEL FOREARM") == 0 &&
+                  all[78].place == Place::tab && all[79].item == Item::forearmBlend &&
+                  std::strcmp(all[79].title, "FOREARM BLEND") == 0 && all[79].choices.size() == 5 &&
+                  std::strcmp(all[79].choices[4], "100%") == 0 && all[79].place == Place::tab,
+              "WEB AIM and FOREARM BLEND: in the tab, after RUN FROM STANDING");
+        {
+            Values v;
+            check(!v.spidyRun && defaultChoice(Item::spidyRun) == 0, "SPIDY RUN on by default");
+            check(withTabOnly({}, "spidy_run=1\n").spidyRun && !withTabOnly({}, "").spidyRun,
+                  "spidy_vr.ini keeps spidy_run");
+        }
+        {
+            Values v;
+            check(!v.softLanding && defaultChoice(Item::softLanding) == 0, "soft landing on by default");
+            check(withTabOnly({}, "soft_landing=1\n").softLanding && !withTabOnly({}, "").softLanding,
+                  "spidy_vr.ini keeps soft_landing");
+        }
+        {
+            Values v;
+            check(!v.momentumLeap && v.earlyJump == 0 && defaultChoice(Item::momentumLeap) == 0 &&
+                      defaultChoice(Item::earlyJump) == 0,
+                  "momentum leap or early jump on by default");
+            check(withTabOnly({}, "running_leap=1\nearly_jump=7\n").momentumLeap &&
+                      withTabOnly({}, "running_leap=1\nearly_jump=7\n").earlyJump == 2,
+                  "spidy_vr.ini keeps running_leap and early_jump, within range");
+        }
+        {
+            Values v;
+            check(!v.runCurve && !v.runLogs && v.nativeRunPercent == 70 &&
+                      defaultChoice(Item::runCurve) == 0 && defaultChoice(Item::nativeRunAt) == 2 &&
+                      defaultChoice(Item::runLogs) == 0,
+                  "the run update's rows not as before by default");
+            check(choose(Item::nativeRunAt, 4, v) && v.nativeRunPercent == 90 &&
+                      !choose(Item::nativeRunAt, 5, v),
+                  "NATIVE RUN AT: 90% last");
+            check(withTabOnly({}, "native_run_at_percent=10\n").nativeRunPercent == 50 &&
+                      withTabOnly({}, "run_curve=1\nrun_logs=1\n").runCurve &&
+                      withTabOnly({}, "run_curve=1\nrun_logs=1\n").runLogs,
+                  "spidy_vr.ini keeps run_curve, native_run_at_percent and run_logs, within range");
+        }
+        {
+            Values v;
+            check(!v.nativeRun && defaultChoice(Item::nativeRun) == 0, "native run on by default");
+            check(choose(Item::nativeRun, 1, v) && v.nativeRun && choice(Item::nativeRun, v) == 1,
+                  "the switch did not turn native run on");
+            check(tabOnlyText(v).find("native_run=1\n") != std::string::npos &&
+                      withTabOnly({}, "native_run=1\n").nativeRun && !withTabOnly({}, "native_run=0\n").nativeRun &&
+                      !withTabOnly({}, "").nativeRun,
+                  "spidy_vr.ini keeps NATIVE RUN as native_run, off when absent");
+        }
+
+        // The wall view has no row of its own (the player, October 14: "i dont
+        // get why we have a wall run and a wall stand options where wall run
+        // actually controlls wheter i stand or crawl", then "also merge the
+        // two options"), nor the wall camera's distance (October 24); since
+        // October 25 neither is a setting at all.
+        for (const auto& row : all)
+            check(std::strcmp(row.title, "STAND ON WALLS") != 0 &&
+                      std::strcmp(row.title, "WALL CAMERA DISTANCE") != 0,
+                  "the wall view or the wall camera's distance has a row again");
+        check(all[39].item == Item::screenSize && all[41].item == Item::hud && all[41].choices.size() == 4 &&
+                  std::strcmp(all[41].choices[0], "OFF") == 0 && std::strcmp(all[41].choices[3], "LARGE") == 0,
+              "the HUD after the game screen's rows: OFF, SMALL, MEDIUM, LARGE");
+        check(all[40].item == Item::screenDepth && std::strcmp(all[40].title, "GAME SCREEN 3D") == 0 &&
+                  all[40].choices.size() == 4 && std::strcmp(all[40].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[40].choices[3], "HIGH") == 0,
+              "the game screen's depth under its size: OFF, LOW, MEDIUM, HIGH");
+        // The marks' look after the HUD (the player, October 21: "an optional alternative set of our custom
+        // ingame vr ui in more scifi techy style like the base game ui"): the printed ones first.
+        check(all[42].item == Item::uiStyle && std::strcmp(all[42].title, "UI STYLE") == 0 &&
+                  all[42].choices.size() == 2 && std::strcmp(all[42].choices[0], "COMIC") == 0 &&
+                  std::strcmp(all[42].choices[1], "TECH") == 0,
+              "the UI style after the HUD: COMIC, or TECH");
+        check(all[46].item == Item::nearClip && std::strcmp(all[46].title, "NEAR CLIP") == 0 &&
+                  all[46].choices.size() == std::size(nearClips) && std::strcmp(all[46].choices[6], "10 CM") == 0,
+              "the near clip under the UI style: 1 to 10 cm");
+        check(all[47].item == Item::recordingFov && std::strcmp(all[47].title, "RECORDING FOV") == 0 &&
+                  all[47].choices.size() == std::size(recording_fov::choices) &&
+                  std::strcmp(all[47].choices[0], "OFF") == 0 &&
+                  std::strcmp(all[47].choices[1], "70\xC2\xB0") == 0 &&
+                  std::strcmp(all[47].choices[8], "160\xC2\xB0") == 0,
+              "the recording FOV under DISPLAY: OFF, then 70 to 160 degrees");
+        check(all[48].item == Item::recordingSmoothing && all[48].choices.size() == 9 &&
+                  std::strcmp(all[48].choices[0], "OFF") == 0,
+              "the recording smoothing last under DISPLAY: OFF, then 10 to 100");
+        // Webs are always physical (the user, October 15: "remove non physical web, no need for it").
+        for (const auto& row : all)
+            check(std::strcmp(row.title, "PHYSICAL WEBS") != 0, "webs can still be made non-physical");
+        check(all[38].item == Item::view && std::strcmp(all[38].title, "VR VIEW") == 0 && all[38].choices.size() == 2 &&
+                  std::strcmp(all[38].choices[0], "VR") == 0 && std::strcmp(all[38].choices[1], "GAME SCREEN") == 0,
+              "the view above the game screen's rows: VR, or GAME SCREEN");
+        // VR VIEW is on the pause menu's first page, beside RESUME, and no other row is; the realistic
+        // flips' thresholds and how a spin builds and dies away are the launcher's alone (the user,
+        // October 25: "cleanup the redundant"). The other rows are the tab's.
+        for (const auto& row : all) {
+            const bool launcherOnly =
+                row.item == Item::automaticMinimumSpeed || row.item == Item::automaticResponse ||
+                row.item == Item::automaticFalloff || row.item == Item::automaticHandThreshold ||
+                row.item == Item::enemyTypes || // MilesVR (PR #1): the launcher's Enemy types
+                row.item == Item::pcMedia;     // MilesVR: Spidy's phone only
+            check(row.place == (row.item == Item::view ? Place::page
+                                : launcherOnly           ? Place::launcher
+                                                         : Place::tab),
+                  "a row in the wrong place");
+        }
+        check(std::count_if(all.begin(), all.end(), [](const Row& r) { return r.place == Place::tab; }) == 92,
+              "the tab's own rows");
+        check(all[1].item == Item::webStyle && std::strcmp(all[1].title, "WEB STYLE") == 0 &&
+                  all[1].choices.size() == 2 && std::strcmp(all[1].choices[0], "REALISTIC") == 0 &&
+                  std::strcmp(all[1].choices[1], "ARCADE") == 0,
+              "the web style first under WEBS: REALISTIC, or ARCADE");
+        check(all[2].item == Item::webButton && all[2].choices.size() == 2 &&
+                  std::strcmp(all[2].choices[0], "GRIP") == 0 && std::strcmp(all[2].choices[1], "TRIGGER") == 0,
+              "the web button under the web style: GRIP, or TRIGGER");
+        check(all[3].item == Item::aimMarkers && all[4].item == Item::airWebs, "the aim markers, then the air webs");
+        check(all[9].item == Item::swingSpeed && all[10].item == Item::weight, "SWINGING: the swing speed, the weight");
+        // SINGLE HAND YANK STRENGTH (pull request #55), before TWO HAND WEB ZIP: 50% to 300%, 100% as before.
+        check(all[17].item == Item::singleHandYankStrength && all[17].choices.size() == 8 &&
+                  std::strcmp(all[17].choices[2], "100%") == 0 && all[18].item == Item::twoHandZip,
+              "SWINGING: the one-hand yank's strength, then the two hand web zip");
+        check(all[24].item == Item::snapTurn && all[25].item == Item::smoothTurn, "COMFORT: snap and smooth turning");
+        // HAPTICS (October 20): the controllers' vibration, the bHaptics level and its four groups' switches.
+        check(all[30].item == Item::blowSounds && std::strcmp(all[30].title, "BLOW SOUNDS") == 0 &&
+                  all[30].choices.size() == 3 && std::strcmp(all[30].choices[0], "GAME") == 0 &&
+                  std::strcmp(all[30].choices[2], "OFF") == 0,
+              "BLOW SOUNDS under the vibration: GAME, SPIDY or OFF");
+        check(all[27].item == Item::haptics && all[28].item == Item::reelHaptics && all[28].choices.empty() &&
+                  all[29].item == Item::swingHaptics && all[29].choices.empty() &&
+                  all[31].item == Item::pcMedia && all[32].item == Item::bodyHaptics &&
+                  std::strcmp(all[32].title, "BODY HAPTICS") == 0 && all[33].item == Item::hapticWebs &&
+                  all[34].item == Item::hapticWind && all[35].item == Item::hapticCombat &&
+                  all[36].item == Item::hapticMovement && all[33].choices.empty() && all[36].choices.empty(),
+              "HAPTICS: the vibration, the reel and the swing, PC MEDIA, body haptics, then the web, wind, "
+              "combat and "
+              "movement switches");
+        check(all[50].item == Item::calibrate && all[50].choices.size() == 2 &&
+                  std::strcmp(all[50].choices[1], "ON RESUME") == 0,
+              "the body's calibration: NO, or ON RESUME");
+        // Every setting has a row.
+        std::bitset<256> everySetting;
+        for (size_t i = 1; i <= static_cast<size_t>(lastItem); ++i)
+            everySetting.set(i);
+        check(seen == everySetting, "a setting missing");
+        auto choicesOf = [&](Item item) {
+            return std::find_if(all.begin(), all.end(), [&](const Row& r) { return r.item == item; })->choices.size();
+        };
+        check(choicesOf(Item::swingSpeed) == std::size(swingSpeeds) && choicesOf(Item::snapTurn) == std::size(snapTurns) &&
+                  choicesOf(Item::smoothTurn) == std::size(smoothTurns) &&
+                  choicesOf(Item::haptics) == std::size(hapticLevels) &&
+                  choicesOf(Item::bodyHaptics) == std::size(hapticLevels) && choicesOf(Item::screenSize) == 3 &&
+                  choicesOf(Item::weight) == std::size(weights) &&
+                  choicesOf(Item::recordingFov) == std::size(recording_fov::choices) &&
+                  choicesOf(Item::airWebs) == 0 && choicesOf(Item::aimMarkers) == 0,
+              "lists: one choice per step; switches: the game's own ON and OFF");
+        check(choicesOf(Item::calibrate) == 2, "the calibration's switch names its two choices");
+    });
+    test("REEL HAPTICS: off by default, a switch kept as reel_haptics", [] {
+        using namespace vr_settings;
+        Values v;
+        check(!v.reelHaptics && defaultChoice(Item::reelHaptics) == 0, "reel haptics on by default");
+        check(choose(Item::reelHaptics, 1, v) && v.reelHaptics && choice(Item::reelHaptics, v) == 1, "not switched on");
+        check(tabOnlyText(v).find("reel_haptics=1\n") != std::string::npos &&
+                  withTabOnly({}, "reel_haptics=1\n").reelHaptics && !withTabOnly({}, "reel_haptics=0\n").reelHaptics,
+              "spidy_vr.ini does not keep REEL HAPTICS as reel_haptics");
+    });
+    test("WEB LINES: off by default, a switch kept as web_lines, sent in swing settings version 31", [] {
+        using namespace vr_settings;
+        Values v;
+        check(!v.webLines && defaultChoice(Item::webLines) == 0, "web lines on by default");
+        check(choose(Item::webLines, 1, v) && v.webLines && choice(Item::webLines, v) == 1, "not switched on");
+        check(tabOnlyText(v).find("web_lines=1\n") != std::string::npos &&
+                  withTabOnly({}, "web_lines=1\n").webLines && !withTabOnly({}, "web_lines=0\n").webLines &&
+                  !withTabOnly({}, "web_tie=1\n").webLines,
+              "spidy_vr.ini does not keep WEB LINES as web_lines");
+        game_swing::Settings s;
+        check(!s.webLines && offsetof(game_swing::Settings, webLines) == game_swing::settingsBytesV30 &&
+                  s.version == 32 && s.bytes == sizeof(game_swing::Settings),
+              "web lines on in a new packet, or not appended");
+        s.webLines = 1;
+        check(game_swing::validSettings(s), "a packet with web lines refused");
+        s.webLines = 2;
+        check(!game_swing::validSettings(s), "an invalid web lines switch accepted");
+        s = {};
+        s.version = 30;
+        s.bytes = game_swing::settingsBytesV30;
+        check(game_swing::validSettings(s), "a version 30 packet (no web lines) refused");
+        s.version = 23;
+        s.bytes = game_swing::settingsBytesV23;
+        check(game_swing::validSettings(s), "a version 23 packet (no web lines) refused");
+    });
+    test("WEB TIE: off by default, a switch kept as web_tie, sent in swing settings version 23", [] {
+        using namespace vr_settings;
+        Values v;
+        check(!v.webTie && defaultChoice(Item::webTie) == 0, "the web tie on by default");
+        check(choose(Item::webTie, 1, v) && v.webTie && choice(Item::webTie, v) == 1, "not switched on");
+        check(tabOnlyText(v).find("web_tie=1\n") != std::string::npos &&
+                  withTabOnly({}, "web_tie=1\n").webTie && !withTabOnly({}, "web_tie=0\n").webTie &&
+                  !withTabOnly({}, "pc_media=1\n").webTie,
+              "spidy_vr.ini does not keep WEB TIE as web_tie");
+        game_swing::Settings s;
+        check(!s.webTie && offsetof(game_swing::Settings, webTie) == game_swing::settingsBytesV22,
+              "the web tie on in a new packet, or not appended");
+        s.webTie = 1;
+        check(game_swing::validSettings(s), "a packet with the web tie refused");
+        s.webTie = 2;
+        check(!game_swing::validSettings(s), "an invalid web tie switch accepted");
+        s = {};
+        s.version = 22;
+        s.bytes = game_swing::settingsBytesV22;
+        check(game_swing::validSettings(s), "a version 22 packet (no web tie) refused");
+    });
+    test("PC MEDIA: off by default, a switch after BLOW SOUNDS kept as pc_media", [] {
+        using namespace vr_settings;
+        Values v;
+        const auto& all = rows();
+        check(all[30].item == Item::blowSounds && all[31].item == Item::pcMedia && all[31].choices.empty() &&
+                  std::strcmp(all[31].title, "PC MEDIA") == 0 && all[32].item == Item::bodyHaptics,
+              "PC MEDIA: a switch between BLOW SOUNDS and BODY HAPTICS");
+        check(!v.pcMedia && defaultChoice(Item::pcMedia) == 0, "PC media on by default");
+        check(choose(Item::pcMedia, 1, v) && v.pcMedia && choice(Item::pcMedia, v) == 1, "not switched on");
+        check(tabOnlyText(v).find("pc_media=1\n") != std::string::npos && withTabOnly({}, "pc_media=1\n").pcMedia &&
+                  !withTabOnly({}, "pc_media=0\n").pcMedia,
+              "spidy_vr.ini does not keep PC MEDIA as pc_media");
+    });
+    test("PC MEDIA: the song and its app as the phone shows them, and the app's mixer sessions", [] {
+        check(phoneMediaSong("The Killers", "Mr. Brightside") == "The Killers - Mr. Brightside",
+              "ARTIST - TITLE, the title's dot kept");
+        check(phoneMediaSong("", "Intro") == "Intro" && phoneMediaSong("Daft Punk", "") == "Daft Punk" &&
+                  phoneMediaSong("", "") == "SONG",
+              "a title or artist alone, or SONG");
+        check(phoneMediaSong("Beyonc\xc3\xa9", "Halo") == "Beyonce - Halo", "an accented letter as its letter");
+        check(phoneMediaSource("Spotify.exe") == "SPOTIFY", "Spotify's desktop app");
+        check(phoneMediaSource("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify") == "SPOTIFY", "Spotify's Store app");
+        check(phoneMediaSource("MSEdge") == "EDGE" && phoneMediaSource("Chrome") == "CHROME", "the browsers");
+        check(phoneMediaSource("308046B0AF4A39CB") == "PC" && phoneMediaSource("") == "PC",
+              "a hash for a name, or none: PC");
+        check(phoneMediaSource("C:\\Program Files\\Foo\\foobar2000.exe") == "FOOBAR2000", "a path: its file");
+        check(phoneMediaAppMatches("Spotify.exe", "C:\\Users\\me\\AppData\\Roaming\\Spotify\\Spotify.exe") &&
+                  phoneMediaAppMatches("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", "Spotify.exe") &&
+                  phoneMediaAppMatches("MSEdge", "msedge.exe") && phoneMediaAppMatches("Chrome", "chrome.exe"),
+              "the app's processes");
+        check(!phoneMediaAppMatches("Spotify.exe", "chrome.exe") && !phoneMediaAppMatches("Spotify.exe", "") &&
+                  !phoneMediaAppMatches("Spotify.exe", "sp.exe"),
+              "another app's process, none, or a name too short to tell");
+    });
     test("combat visuals choice persists without disabling punching or web aiming", [] {
         using namespace vr_settings;
         Values v;
@@ -22604,21 +25151,30 @@ int main() {
     test("VR settings only the tab offers: kept as key=value lines, read back sanitized, the rest left", [] {
         using namespace vr_settings;
         const Values defaults;
-        check(tabOnlyText(defaults) == "controlled_flips=0\nnear_clip_mm=20\nhand_climb=0\n"
-                                       "wall_run_camera_tilt=1\n"
-                                       "realistic_flips=0\n"
-                                       "rotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
-                                       "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\n"
-                                       "angular_drag_ms=3000\nhand_speed_min_cm=100\nair_rotation_brake=1\n"
+        check(tabOnlyText(defaults) == "controlled_flips=0\nnear_clip_mm=20\nhand_climb=0\njoystick_wall_run_camera=1\n"
+                                       "wall_run_camera_tilt=1\nhalf_punch_damage=0\nrealistic_flips=0\nrotation_strength=50\n"
+                                       "rotation_speed=240\nflight_speed_min=3\nswing_momentum=1\nrotation_response_ms=500\n"
+                                       "hand_momentum=100\nangular_drag_ms=3000\nhand_speed_min_cm=100\nair_rotation_brake=1\n"
                                        "flips_in_combat=1\nbody_haptics_webs=1\nbody_haptics_wind=1\nbody_haptics_combat=1\n"
-                                       "body_haptics_movement=1\nrecording_fov=0\nui_style=0\ncombat_visuals=1\nhalf_punch_damage=0\nenemy_types=1\nblow_sounds=0\n"
-                                       "web_slingshot=0\nbetter_climbing=0\nheight_cm=0\nseated=0\neye_aim=0\n"
-                                       "smart_anchor=0\nelastic_web=0\nsoft_release=0\nswing_assist=0\n"
-                                       "slingshot_speed=0\nrecording_smoothing=0\n"
-                                       "two_hand_zip=0\nrope_steering=0\nweb_range_m=100\nweb_speed=0\n"
-                                       "eye_aa=1\neye_history=0\neye_sharpen=0\nhud_height_cm=9\nhud_scale=100\n"
-                                       "hud_text=100\nhud_theme=0\nhud_text_color=0\n"
-                                       "tune_mode=-1\ntune_tier=-1\ntune_render_scale=0\ntune_game_TextureQuality=-1\ntune_game_TextureFiltering=-1\ntune_game_ShadowQuality=-1\ntune_game_LevelOfDetail=-1\ntune_game_AmbientOcclusionQuality=-1\ntune_game_ScreenSpaceReflections=-1\ntune_game_HairQuality=-1\ntune_game_CrowdDetail=-1\ntune_game_VehicleDetail=-1\ntune_game_ParticleLighting=-1\n",
+                                       "body_haptics_movement=1\nrecording_fov=0\nui_style=0\ncombat_visuals=1\n"
+                                       "enemy_types=1\nblow_sounds=0\nweb_slingshot=0\nbetter_climbing=0\n"
+                                       "height_cm=0\nseated=0\neye_aim=0\nsmart_anchor=0\n"
+                                       "elastic_web=0\nsoft_release=0\nswing_assist=0\nslingshot_speed=0\n"
+                                       "recording_smoothing=0\ntwo_hand_zip=0\nrope_steering=0\nweb_range_m=100\n"
+                                       "web_speed=0\neye_aa=1\neye_history=0\neye_sharpen=0\n"
+                                       "hud_height_cm=9\nhud_scale=100\nhud_text=100\nhud_theme=0\n"
+                                       "hud_text_color=0\ntune_mode=-1\ntune_tier=-1\ntune_render_scale=0\n"
+                                       "tune_game_TextureQuality=-1\ntune_game_TextureFiltering=-1\ntune_game_ShadowQuality=-1\ntune_game_LevelOfDetail=-1\n"
+                                       "tune_game_AmbientOcclusionQuality=-1\ntune_game_ScreenSpaceReflections=-1\ntune_game_HairQuality=-1\ntune_game_CrowdDetail=-1\n"
+                                       "tune_game_VehicleDetail=-1\ntune_game_ParticleLighting=-1\nflip_reprojection=0\nsteady_hud=0\n"
+                                       "reel_haptics=0\nswing_haptics=0\npc_media=0\nsingle_hand_yank_percent=100\n"
+                                       "web_tie=0\nnative_run=0\nair_slingshot=0\nweb_angle_degrees=0\n"
+                                       "wrist_shooters=0\ndodge_tumble=0\nrun_curve=0\nnative_run_at_percent=70\n"
+                                       "run_logs=0\nrunning_leap=0\nearly_jump=0\nsoft_landing=0\n"
+                                       "spidy_run=0\nspidy_run_from_standing=0\nweb_aim_source=0\nforearm_blend=100\n"
+                                       "web_landing_smooth=0\nweb_landing_impact_speed=24\nsteady_states=0\ncombat_responsive=0\n"
+                                       "spidy_run_jump=1\nforearm_aim_limit=180\npalm_shooters=0\nweb_lines=0\n"
+                                       "air_fists=1\n",
               "the defaults' text");
         Values changed = defaults;
         changed.recordingFov = 140;
@@ -22647,6 +25203,7 @@ int main() {
         changed.heightCm = 178;
         changed.seated = true;
         changed.eyeAim = 3;
+        changed.flipReprojection = true;
         check(withTabOnly(defaults, tabOnlyText(changed)) == sanitized(changed),
               "the settings did not come back");
         check(withTabOnly(defaults, "height_cm=40\n").heightCm == 120 &&
@@ -24836,6 +27393,839 @@ int main() {
               "another class was read as a body");
     });
 #endif
+    // FLIP REPROJECTION (flip_reprojection.hpp). The user, October 29: head turns are smooth in the headset,
+    // flips, spins and smooth turns judder; each pair went to OpenXR with the tracking pose it was rendered
+    // from, and the runtime turns a pair only to the newer head.
+    test("flip reprojection: a pair shows the world where the player's own turn has taken it since", [] {
+        namespace fr = flip_reprojection;
+        // Tracked eyes looking a little right and down, 64 mm apart.
+        const Quat look = Quat::around({0, 1, 0}, -.3f) * Quat::around({1, 0, 0}, -.2f);
+        const std::array<Pose, 2> eyes{Pose{{-.032f, 1.6f, .1f}, look}, Pose{{.032f, 1.6f, .1f}, look}};
+        // The tracking space in a backflip under a smooth turn when the pair was asked for, and two frames on.
+        const Quat rendered = Quat::yaw(.7f) * Quat::around({1, 0, 0}, 1.1f);
+        const Quat now = Quat::yaw(.75f) * Quat::around({1, 0, 0}, 1.25f);
+        const auto c = fr::correction({rendered, true}, {now, true});
+        check(c.applied && c.angle > .1f && c.angle < fr::maxTurn, "a 9 degree turn not applied");
+        near(c.angle, fr::angle(now.conjugate() * rendered), 1e-4f);
+        const auto layer = fr::layerEyes(eyes, c.layer);
+        for (unsigned e = 0; e < 2; ++e)
+            for (const Vec3 world : {Vec3{0, 0, -1}, Vec3{.6f, .3f, -.74f}, Vec3{-.2f, -.9f, .38f}}) {
+                const Vec3 d = normalized(world);
+                // The pixel that saw `d`, in the rendered eye's own axes, shows in the tracking space where
+                // the world is now.
+                const Vec3 pixel = (rendered * eyes[e].orientation).conjugate().rotate(d);
+                check(length(layer[e].orientation.rotate(pixel) - now.conjugate().rotate(d)) < 5e-4f,
+                      "the world is not where the turn has taken it");
+            }
+        // About the head: the eyes keep their distance and their middle.
+        near(length(layer[1].position - layer[0].position), .064f, 1e-5f);
+        check(length(layer[0].position + layer[1].position - eyes[0].position - eyes[1].position) < 1e-5f,
+              "the head moved");
+        // No turn since: the eyes as tracked.
+        const auto none = fr::correction({rendered, true}, {rendered, true});
+        check(none.applied && none.angle < 1e-3f, "no turn, yet turned");
+        const auto same = fr::layerEyes(eyes, none.layer);
+        check(length(same[0].position - eyes[0].position) < 1e-5f &&
+                  length(same[1].orientation.rotate({0, 0, -1}) - look.rotate({0, 0, -1})) < 1e-5f,
+              "eyes moved without a turn");
+    });
+    test("flip reprojection: snap turns, recenters and unknown turns show the pair as rendered", [] {
+        namespace fr = flip_reprojection;
+        // A 30 degree snap turn between render and display: past the limit, its angle still reported.
+        const auto snap = fr::correction({Quat::yaw(.2f), true}, {Quat::yaw(.2f + .5235988f), true});
+        check(!snap.applied, "a snap turn was reprojected");
+        near(snap.angle, .5235988f, 1e-4f);
+        check(!fr::correction({}, {Quat::yaw(.1f), true}).applied && !fr::correction({Quat::yaw(.1f), true}, {}).applied,
+              "turned with a turn not known");
+        // The tracking space's turn from the world's head and the tracked one.
+        const Quat space = Quat::yaw(1.2f) * Quat::around({0, 0, 1}, .4f);
+        const Quat tracked = Quat::around({1, 0, 0}, -.3f);
+        const auto t = fr::trackingTurn(space * tracked, tracked);
+        check(t.valid && length(t.turn.rotate({0, 0, -1}) - space.rotate({0, 0, -1})) < 1e-5f &&
+                  length(t.turn.rotate({0, 1, 0}) - space.rotate({0, 1, 0})) < 1e-5f,
+              "the tracking space's turn");
+        check(!fr::trackingTurn({0, 0, 0, 0}, tracked).valid &&
+                  !fr::trackingTurn(space, {std::numeric_limits<float>::quiet_NaN(), 0, 0, 1}).valid,
+              "a turn from a broken head");
+    });
+    test("flip reprojection: what the player holds stays with the head, the eyes' views as rendered", [] {
+        namespace fr = flip_reprojection;
+        const Quat rendered = Quat::yaw(-.4f) * Quat::around({1, 0, 0}, -.9f);
+        const Quat now = Quat::yaw(-.45f) * Quat::around({1, 0, 0}, -1.1f);
+        const auto c = fr::correction({rendered, true}, {now, true});
+        // The rendered frame: the tracking space at `rendered`, 1 km out in the city.
+        const Vec3 origin{1200, 85, -640};
+        const auto toWorld = [&](Pose p) { return Pose{origin + rendered.rotate(p.position), rendered * p.orientation}; };
+        const std::array<Pose, 2> eyes{Pose{{-.032f, 1.6f, 0}, {}}, Pose{{.032f, 1.6f, 0}, {}}};
+        GameMotionFrame f;
+        for (unsigned i = 0; i < 2; ++i) {
+            const Vec3 at = toWorld(eyes[i]).position;
+            f.eyes[i][12] = at.x;
+            f.eyes[i][13] = at.y;
+            f.eyes[i][14] = at.z;
+        }
+        const Pose hand{{.25f, 1.2f, -.4f}, Quat::around({0, 1, 0}, .5f)};
+        f.grips[1] = f.hands[1] = f.swing.hands[1].aim = toWorld(hand);
+        f.headPose = toWorld({{0, 1.6f, 0}, {}});
+        f.swing.trackingYaw = -.4f;
+        f.swing.tilt = Quat::around({1, 0, 0}, -.9f);
+        const auto shown = fr::held(f, c.world);
+        // Where the turned layer shows the drawn grip, in the tracking space: where the hand is.
+        const Vec3 middle = fr::eyesMiddle(f), trackedMiddle{0, 1.6f, 0};
+        const Vec3 seen = trackedMiddle + c.layer.rotate(rendered.conjugate().rotate(shown.grips[1].position - middle));
+        check(length(seen - hand.position) < 5e-4f, "the hand left the head");
+        const Quat seenTurn = c.layer * rendered.conjugate() * shown.grips[1].orientation;
+        check(length(seenTurn.rotate({0, 0, -1}) - hand.orientation.rotate({0, 0, -1})) < 1e-4f,
+              "the hand turned away");
+        check(length(shown.swing.hands[1].aim.position - shown.grips[1].position) < 1e-4f &&
+                  length(shown.hands[1].position - shown.grips[1].position) < 1e-4f,
+              "the aim or the glove left the grip");
+        // The aims are steadied in the tracking space's turn: it turns with them.
+        check(length(trackingTurn(shown.swing).rotate({0, 0, -1}) - (c.world * rendered).rotate({0, 0, -1})) < 1e-4f,
+              "the aims' turn");
+        // The eyes stay as rendered: the overlay's views must match the image.
+        check(shown.eyes == f.eyes && length(fr::eyesMiddle(shown) - middle) < 1e-3f, "the eyes were turned");
+    });
+    test("the steadier-HUD probe snapshots now and then and reads back only 8-bit colour", [] {
+        using namespace spidy::hud_capture;
+        check(snapshotDue(100, 0, false), "no first snapshot");
+        check(!snapshotDue(100 + snapshotMs - 1, 100, true) && snapshotDue(100 + snapshotMs, 100, true),
+              "snapshots not every few seconds");
+        {
+            // An empty panel is told from one with a little on it (the stale-texture reports: all alpha 0).
+            std::vector<uint8_t> panel(64 * 4 * 12, 0);
+            check(!anyAlpha(panel.data(), 64, 12, 64 * 4), "an empty panel had alpha");
+            panel[(3 * 64 + 10) * 4 + 3] = 255; // row 3, column 10: on the grid
+            check(anyAlpha(panel.data(), 64, 12, 64 * 4), "a panel with a mark was empty");
+        }
+        bool swap{};
+        check(readableBytes(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, swap) == 4 && !swap, "RGBA not read");
+        check(readableBytes(DXGI_FORMAT_B8G8R8A8_UNORM, swap) == 4 && swap, "BGRA not swapped");
+        check(readableBytes(DXGI_FORMAT_R16G16B16A16_FLOAT, swap) == 0 &&
+                  readableBytes(DXGI_FORMAT_R10G10B10A2_UNORM, swap) == 0,
+              "a format the picture cannot show was read");
+    });
+    // STEADY HUD (steady_hud.hpp): the panel as a quad layer of its own. The user, October 30: the arms and the
+    // HUD judder when the headset shows a pair again.
+    test("steady HUD: the layer spans what the panel did, where Follow holds it, as the markers see it", [] {
+        const Vec3 head{.1f, 1.6f, .2f};
+        const Quat facing = Quat::yaw(.5f) * Quat::around({1, 0, 0}, -.2f);
+        const float halfWidth = native_hud::halfWidth(2), distance = native_hud::Shape{}.distance;
+        const auto q = steady_hud::quad(head, facing, halfWidth, distance, 1920, 1080);
+        check(q.valid, "a medium HUD gave no layer");
+        // Two metres ahead the way the panel faces, facing back at the head.
+        check(length(q.pose.position - (head + facing.rotate({0, 0, -distance}))) < 1e-5f, "not ahead of the head");
+        check(length(q.pose.orientation.rotate({0, 0, 1}) - facing.rotate({0, 0, 1})) < 1e-5f, "not facing the head");
+        // 60 degrees across at medium, as high as the texture's shape.
+        near(q.width, 2 * std::tan(30.f * 3.14159265f / 180) * distance, 1e-4f);
+        near(q.height, q.width * 1080 / 1920, 1e-4f);
+        // The game projects its world markers onto the panel from the head (native_hud::project): a point
+        // on the layer's corner or edge shows at that place on the texture.
+        const Vec3 right = facing.rotate({1, 0, 0}), up = facing.rotate({0, 1, 0}), ahead = facing.rotate({0, 0, -1});
+        const Mat4 view{right.x, right.y, right.z, 0, -up.x, -up.y, -up.z, 0, ahead.x, ahead.y, ahead.z, 0,
+                        head.x,  head.y,  head.z,  1};
+        const struct {
+            float u, v;
+        } spots[] = {{0, 0}, {1, 1}, {.25f, .8f}, {.5f, .5f}};
+        for (const auto s : spots) {
+            const Vec3 at = q.pose.position + right * ((s.u - .5f) * q.width) + up * ((.5f - s.v) * q.height);
+            float x{}, y{};
+            bool front{};
+            check(native_hud::project(view, halfWidth, 1920.f / 1080, at, .1f, x, y, front) && front,
+                  "a point on the layer not projected");
+            near(x, s.u, 1e-4f);
+            near(y, s.v, 1e-4f);
+        }
+        // A facing not quite of unit length still faces that way.
+        const Quat scaled{facing.x * 1.5f, facing.y * 1.5f, facing.z * 1.5f, facing.w * 1.5f};
+        const auto again = steady_hud::quad(head, scaled, halfWidth, distance, 1920, 1080);
+        check(again.valid && length(again.pose.position - q.pose.position) < 1e-5f, "a scaled facing moved it");
+        // The HUD off, no texture, a broken head: no layer.
+        check(!steady_hud::quad(head, facing, 0, distance, 1920, 1080).valid &&
+                  !steady_hud::quad(head, facing, halfWidth, distance, 0, 1080).valid &&
+                  !steady_hud::quad(head, {0, 0, 0, 0}, halfWidth, distance, 1920, 1080).valid &&
+                  !steady_hud::quad({std::numeric_limits<float>::quiet_NaN(), 0, 0}, facing, halfWidth, distance,
+                                    1920, 1080)
+                       .valid,
+              "a layer without a panel");
+    });
+    test("steady HUD: a copy shows only while the game's pairs keep coming", [] {
+        using steady_hud::holdMs;
+        check(steady_hud::fresh(1000, 1000, true) && steady_hud::fresh(1000 + holdMs, 1000, true),
+              "a new copy not shown");
+        check(!steady_hud::fresh(1001 + holdMs, 1000, true), "a stale copy shown: the eyes would lack the panel");
+        check(!steady_hud::fresh(1000, 0, false) && !steady_hud::fresh(1000, 1200, true), "no copy, yet shown");
+    });
+    // The web tie (web_tie.hpp): one hand's web on a wall, the other's on a
+    // webbed-up enemy, hands together, the right stick's click.
+    auto tieHands = [](bool cocooned, float apart) {
+        std::array<TieHand, 2> h{};
+        h[0] = {true, {-apart / 2, -.4f, -.3f}, true, {5, 2, -10}, false, 0, false, false};
+        h[1] = {true, {apart / 2, -.4f, -.3f}, false, {}, true, 42, true, cocooned};
+        return h;
+    };
+    test("web tie: a swing command carrying the right stick's click (asks bit 1) is valid", [&] {
+        game_swing::Command c;
+        c.serial = 1;
+        c.focused = 1;
+        c.tilt = Quat{};
+        for (uint32_t asks = 0; asks < 64; ++asks) {
+            c.asks = asks;
+            check(game_swing::valid(c), "a command with the tie's click, a zip or a dodge was refused (2001)");
+        }
+        c.asks = 128;
+        check(!game_swing::valid(c), "an unknown ask was accepted");
+    });
+    // Web lines (web_line.hpp): both hands' webs on surfaces, hands together, the click.
+    auto lineHands = [](Vec3 a, Vec3 b, float apart) {
+        std::array<LineHand, 2> h{};
+        h[0] = {true, {-apart / 2, -.4f, -.3f}, true, a, false};
+        h[1] = {true, {apart / 2, -.4f, -.3f}, true, b, false};
+        return h;
+    };
+    test("web line: two webs on surfaces, hands together, a click makes a line between them", [&] {
+        LineGesture g;
+        const auto h = lineHands({0, 6, -20}, {3, 2, -1}, .1f);
+        check(!g.update(1 / 90.f, false, h) && g.armed(), "the gesture was not armed");
+        const auto r = g.update(1 / 90.f, true, h);
+        check(r && r->start.z == -20 && r->end.z == -1, "the click made no line");
+        check(!g.update(1 / 90.f, true, h), "a click held made a second line");
+    });
+    test("web line: no line with a target on a web, hands apart, one web in the air, or too short or long", [&] {
+        LineGesture g;
+        auto held = lineHands({0, 6, -20}, {3, 2, -1}, .1f);
+        held[1].grabbing = true;
+        check(!g.update(1 / 90.f, true, held) && !g.armed(), "a line with a target on a web");
+        g.update(1 / 90.f, false, held);
+        check(!g.update(1 / 90.f, true, lineHands({0, 6, -20}, {3, 2, -1}, .6f)), "a line with hands apart");
+        g.update(1 / 90.f, false, held);
+        auto air = lineHands({0, 6, -20}, {3, 2, -1}, .1f);
+        air[0].wallWeb = false;
+        check(!g.update(1 / 90.f, true, air), "a line from a web in the air");
+        g.update(1 / 90.f, false, air);
+        check(!g.update(1 / 90.f, true, lineHands({0, 2, -1}, {.5f, 2, -1}, .1f)), "a line under 1.5 m");
+        g.update(1 / 90.f, false, air);
+        check(!g.update(1 / 90.f, true, lineHands({0, 2, -60}, {0, 2, 0}, .1f)), "a line over 40 m");
+    });
+    test("web line: six at once, the oldest gives way; old or far lines go", [&] {
+        WebLines lines;
+        for (int i = 0; i < 7; ++i)
+            check(lines.add({0, 5, float(-10 * i)}, {10, 5, float(-10 * i)}), "a line was refused");
+        check(lines.lines().size() == 6 && lines.lines()[0].id == 2 && lines.expired() == 1,
+              "the oldest did not give way");
+        check(!lines.add({0, 0, 0}, {.5f, 0, 0}) && !lines.add({0, 0, 0}, {50, 0, 0}), "a bad line was taken");
+        lines.step(3600, {0, 0, 0});
+        lines.step(1, {0, 0, 400});
+        check(lines.lines().size() == 6, "lines went by age, or 400 m away");
+        lines.step(1, {0, 0, 700});
+        check(lines.lines().empty() && lines.made() == 7, "lines 700 m from the player stayed");
+    });
+    test("web line: a line on a line goes with it; the line the player is on never goes", [&] {
+        WebLines lines;
+        lines.add({0, 5, 0}, {10, 5, 0});                  // 1, on walls
+        lines.add({5, 5, 0}, {5, 5, -10}, 1, 0);           // 2, its start on line 1
+        lines.add({5, 5, -6}, {12, 5, -6}, 2, 0);          // 3, on line 2
+        for (int i = 0; i < 3; ++i)
+            lines.add({0, 9, float(-10 * i)}, {10, 9, float(-10 * i)});
+        check(lines.lines().size() == 6, "lines missing");
+        // A seventh: the oldest, line 1, goes, and lines 2 and 3 on it with it.
+        lines.add({0, 12, 0}, {10, 12, 0});
+        check(std::none_of(lines.lines().begin(), lines.lines().end(),
+                           [](const WebLineSpan& l) { return l.id <= 3; }),
+              "a line on a line that went stayed in the air");
+        check(lines.lines().size() == 4 && lines.expired() == 3, "the wrong lines went");
+        // The player on line 9 (on line 8): the limit takes neither, nor do age or distance.
+        WebLines kept;
+        for (int i = 0; i < 6; ++i)
+            kept.add({0, 5, float(-10 * i)}, {10, 5, float(-10 * i)});
+        kept.add({5, 5, 0}, {5, 9, 0}, 1, 0, 1); // line 7, on line 1, the player on 1: 2 goes
+        check(std::any_of(kept.lines().begin(), kept.lines().end(), [](const WebLineSpan& l) { return l.id == 1; }) &&
+                  std::none_of(kept.lines().begin(), kept.lines().end(), [](const WebLineSpan& l) { return l.id == 2; }),
+              "the limit took the line the player was on");
+        kept.step(500, {0, 0, 2000}, 7);
+        check(kept.lines().size() == 2, "age or distance took the line the player was on, or the one it is on");
+    });
+    test("web line: a ray meets a line within its radius, the nearest first", [&] {
+        WebLines lines;
+        lines.add({-5, 3, -10}, {5, 3, -10});
+        lines.add({-5, 3, -6}, {5, 3, -6});
+        const auto hit = lines.raycast({0, 3.05f, 0}, {0, 0, -1}, 30);
+        check(hit && hit->id == 2, "the ray did not meet the nearer line");
+        near(hit->point.z, -6);
+        near(hit->distance, 6);
+        check(!lines.raycast({0, 3.5f, 0}, {0, 0, -1}, 30), "a ray half a metre off met a line");
+        check(!lines.raycast({0, 3, 0}, {0, 0, -1}, 5), "a ray short of the line met it");
+        check(!lines.raycast({6, 3, 0}, {0, 0, -1}, 30), "a ray past a line's end met it");
+        near(nearestOnSegment({0, 0, 0}, {10, 0, 0}, {4, 3, 0}).x, 4);
+        near(nearestOnSegment({0, 0, 0}, {10, 0, 0}, {14, 3, 0}).x, 10);
+    });
+    test("web line zip: the line point the head looks at is the target, within its cone and reach", [&] {
+        WebLines lines;
+        lines.add({-10, 6, -15}, {10, 6, -15});
+        const auto hit = lineTarget(lines.lines(), {0, 1.7f, 0}, normalized(Vec3{.2f, .28f, -1}));
+        check(hit && hit->id == 1, "the line looked at was not the target");
+        near(hit->point.y, 6);
+        check(std::abs(hit->point.x - 3) < .8f, "the target was not where the head looks");
+        check(!lineTarget(lines.lines(), {0, 1.7f, 0}, {0, 0, 1}), "a line behind the head was the target");
+        check(!lineTarget(lines.lines(), {0, 1.7f, 0}, normalized(Vec3{1, 0, -.2f})), "a line far aside was the target");
+        check(!lineTarget(lines.lines(), {0, 1.7f, -80}, {0, 0, 1}), "a line out of reach was the target");
+    });
+    // A body moved by what a zip asks of it, at 60 steps a second.
+    auto zipRun = [&](LineZip& zip, const WebLineSpan& line, Vec3& p, Vec3& v, float seconds, Vec3 move = {},
+                      bool jump = false, bool* arrived = nullptr) {
+        for (float t = 0; t < seconds; t += 1 / 60.f) {
+            const auto s = zip.step(1 / 60.f, p, v, false, &line, move, jump);
+            if (arrived)
+                *arrived = *arrived || s.arrived;
+            if (!s.drive)
+                return;
+            v = s.velocity;
+            p = p + v * (1 / 60.f);
+        }
+    };
+    const WebLineSpan zipLine{1, {-5, 6, -15}, {15, 6, -15}, 0};
+    test("web line zip: off the ground to the line, onto its perch, held there", [&] {
+        LineZip zip;
+        zip.start({1, {3, 6, -15}});
+        Vec3 p{0, 1, 0}, v{};
+        auto s = zip.step(1 / 60.f, p, v, true, &zipLine);
+        check(!s.drive && zip.phase() == LineZip::Phase::Flying, "the zip moved a body still on the ground");
+        float fastest = 0, t = 0;
+        bool arrived = false;
+        for (; t < 3 && !arrived; t += 1 / 60.f) {
+            s = zip.step(1 / 60.f, p, v, false, &zipLine);
+            arrived = s.arrived;
+            v = s.velocity;
+            p = p + v * (1 / 60.f);
+            fastest = std::max(fastest, length(v));
+        }
+        check(arrived && t < 1.6f, "the zip did not arrive in time");
+        check(fastest <= 24.5f, "the zip flew too fast");
+        check(length(p - Vec3{3, 7, -15}) < .35f, "the zip did not end on its perch");
+        p = p + Vec3{0, -.4f, .3f};
+        zipRun(zip, zipLine, p, v, 2);
+        check(zip.phase() == LineZip::Phase::Perched && length(p - Vec3{3, 7, -15}) < .05f,
+              "the perch did not hold the body");
+        check(!zip.step(1 / 60.f, p, v, false, nullptr).drive && zip.phase() == LineZip::Phase::Idle,
+              "a perch on a line that went held on");
+        check(zip.zips() == 1 && zip.perches() == 1, "zips or perches miscounted");
+    });
+    test("web line zip: a far one as a web zip - the web shot first, then an arc onto the line, faster for far", [&] {
+        const WebLineSpan far{2, {-10, 8, -40}, {10, 8, -40}, 0};
+        LineZip zip;
+        zip.start({2, {0, 8, -40}});
+        Vec3 p{0, 1, 0}, v{0, 0, -1};
+        const float dt = 1 / 60.f;
+        float t = 0, highest = -1e9f, fastest = 0;
+        bool arrived = false, heldBack = true;
+        for (; t < 4 && !arrived; t += dt) {
+            const auto s = zip.step(dt, p, v, false, &far);
+            arrived = s.arrived;
+            if (t < .1f)
+                heldBack = heldBack && !s.drive; // the web is still on its way
+            if (s.drive)
+                v = s.velocity;
+            else
+                v = v + Vec3{0, -9.81f * dt, 0};
+            p = p + v * dt;
+            // Above the straight line from the start to the perch (y 1 to 9 over z 0 to -40).
+            const float along = std::clamp(-p.z / 40, 0.f, 1.f);
+            highest = std::max(highest, p.y - (1 + along * 8));
+            fastest = std::max(fastest, length(v));
+        }
+        check(heldBack, "the pull came before its web was out");
+        check(arrived && t < 3.5f, "a far zip did not arrive");
+        check(highest > .8f, "a far zip went straight, with no arc");
+        check(fastest > 18 && fastest <= 24.5f, "a far zip was not faster, or too fast");
+    });
+    test("web line walk: the stick walks along the line, never off its ends, the stick across it nowhere", [&] {
+        LineZip zip;
+        zip.start({1, {3, 6, -15}});
+        Vec3 p{3, 7, -15}, v{};
+        zipRun(zip, zipLine, p, v, .2f);
+        check(zip.phase() == LineZip::Phase::Perched, "not on the line");
+        zipRun(zip, zipLine, p, v, 1, {1, 0, 0});
+        check(p.x > 5.5f && p.x < 7.5f && std::abs(p.y - 7) < .1f && std::abs(p.z + 15) < .1f,
+              "the walk did not go along the line at its height");
+        zipRun(zip, zipLine, p, v, 1, {0, 0, 1});
+        check(std::abs(p.z + 15) < .1f, "the stick across the line took the body off it");
+        zipRun(zip, zipLine, p, v, 6, {1, 0, 0});
+        check(zip.phase() == LineZip::Phase::Perched && p.x < 15 && p.x > 14 && std::abs(p.y - 7) < .1f,
+              "the walk went past the line's end");
+    });
+    test("web line walk by the game: on the line within its slack, not across it, not past an end", [&] {
+        LineZip zip;
+        zip.start({1, {3, 6, -15}});
+        Vec3 p{3, 7, -15}, v{};
+        zipRun(zip, zipLine, p, v, .2f);
+        check(zip.gameWalk(p, {1, 0, 0}, zipLine), "the game may not walk him along the line");
+        check(!zip.gameWalk(p, {0, 0, 1}, zipLine), "the game may walk him across the line");
+        check(!zip.gameWalk(p + Vec3{0, 0, .7f}, {1, 0, 0}, zipLine), "the game may walk him off the line");
+        check(!zip.gameWalk({14.8f, 7, -15}, {1, 0, 0}, zipLine), "the game may walk him past its end");
+        check(zip.gameWalk({14.8f, 7, -15}, {-1, 0, 0}, zipLine), "the game may not walk him back from its end");
+        // Walked by the game, the line follows him, and holds him where he got to.
+        zip.follow({8, 7.05f, -15.1f}, zipLine);
+        p = {8, 7.05f, -15.1f};
+        zipRun(zip, zipLine, p, v, 1);
+        check(std::abs(p.x - 8) < .1f && std::abs(p.z + 15) < .05f && std::abs(p.y - 7) < .05f,
+              "the line did not hold him where the game walked him");
+    });
+    test("web line dodge: a dash along the line, the way it is asked, and on it still", [&] {
+        LineZip zip;
+        zip.start({1, {3, 6, -15}});
+        Vec3 p{3, 7, -15}, v{};
+        zipRun(zip, zipLine, p, v, .2f);
+        zip.dash({-1, 0, .3f});
+        zipRun(zip, zipLine, p, v, .5f);
+        check(p.x < 0.5f && p.x > -2 && std::abs(p.y - 7) < .1f && zip.phase() == LineZip::Phase::Perched,
+              "the dodge did not dash along the line, or left it");
+        zip.dash({1, 0, 0});
+        zipRun(zip, zipLine, p, v, .5f);
+        check(p.x > 1.5f && zip.dashes() == 2, "a second dodge did not dash the other way");
+    });
+    test("web line jump: up and down on the line again; off to the side, a fall", [&] {
+        LineZip zip;
+        zip.start({1, {3, 6, -15}});
+        Vec3 p{3, 7, -15}, v{};
+        zipRun(zip, zipLine, p, v, .2f);
+        bool landed = false;
+        zipRun(zip, zipLine, p, v, 1 / 60.f, {}, true);
+        check(zip.phase() == LineZip::Phase::Jumping, "the jump did not leave the line");
+        float highest = p.y;
+        for (int i = 0; i < 120 && zip.phase() == LineZip::Phase::Jumping; ++i) {
+            zipRun(zip, zipLine, p, v, 1 / 60.f, {}, true, &landed);
+            highest = std::max(highest, p.y);
+        }
+        check(highest > 8 && landed && zip.phase() == LineZip::Phase::Perched && std::abs(p.y - 7) < .45f,
+              "the jump did not come down on the line");
+        zipRun(zip, zipLine, p, v, .5f); // let go of the jump, settle
+        zipRun(zip, zipLine, p, v, 1 / 60.f, {0, 0, 1}, true);
+        for (int i = 0; i < 180 && zip.phase() == LineZip::Phase::Jumping; ++i)
+            zipRun(zip, zipLine, p, v, 1 / 60.f, {0, 0, 1}, true);
+        check(zip.phase() == LineZip::Phase::Idle && zip.jumps() == 2 && zip.landings() == 1,
+              "a jump off to the side did not fall");
+        // Off to the side, the line lets go as soon as the jump comes down with no
+        // line under it - not 0.8 m under it - and it fell at the swing's gravity.
+        LineZip heavy;
+        heavy.setGravity(20);
+        heavy.start({1, {3, 6, -15}});
+        Vec3 q{3, 7, -15}, w{};
+        zipRun(heavy, zipLine, q, w, .2f);
+        float lowest = 1e9f, fastestDown = 0;
+        Vec3 last{};
+        zipRun(heavy, zipLine, q, w, 1 / 60.f, {0, 0, 1}, true);
+        for (int i = 0; i < 180 && heavy.phase() == LineZip::Phase::Jumping; ++i) {
+            last = w;
+            zipRun(heavy, zipLine, q, w, 1 / 60.f, {0, 0, 1}, true);
+            lowest = std::min(lowest, q.y);
+            fastestDown = std::max(fastestDown, -w.y);
+        }
+        check(heavy.phase() == LineZip::Phase::Idle && lowest > 6.4f, "the line held a jump off the side too long");
+        (void)last;
+        (void)fastestDown;
+        // A jump falls at the swing's gravity: its upward speed goes by g a second.
+        LineZip weighed;
+        weighed.setGravity(20);
+        weighed.start({1, {3, 6, -15}});
+        Vec3 r{3, 7, -15}, u{};
+        zipRun(weighed, zipLine, r, u, .2f);
+        zipRun(weighed, zipLine, r, u, 1 / 60.f, {}, true);
+        const float before = u.y;
+        zipRun(weighed, zipLine, r, u, 6 / 60.f, {}, true);
+        near(before - u.y, 20 * 6 / 60.f);
+    });
+    test("web line zip: a flight not there in time lets go", [&] {
+        LineZip zip;
+        zip.start({1, {0, 6, -15}});
+        for (int i = 0; i < 200; ++i)
+            zip.step(1 / 60.f, {0, 1, 0}, {}, false, &zipLine); // the body never moves
+        check(zip.phase() == LineZip::Phase::Idle, "a stuck zip held on");
+        LineZip grounded;
+        grounded.start({1, {0, 6, -15}});
+        for (int i = 0; i < 70; ++i)
+            grounded.step(1 / 60.f, {0, 1, 0}, {}, true, &zipLine); // the jump never comes
+        check(grounded.phase() == LineZip::Phase::Idle, "a zip waiting on a jump that never came held on");
+    });
+    test("web line aim: held it aims, let go it zips; a gesture's click never does, before or after", [&] {
+        LineAim aim;
+        const float dt = 1 / 60.f;
+        auto hold = [&](float seconds, bool armed = false, bool took = false) {
+            LineAim::State last{};
+            for (float t = 0; t < seconds; t += dt)
+                last = aim.update(dt, true, armed, took);
+            return last;
+        };
+        check(!hold(.1f).aiming, "aiming before the hold");
+        check(hold(.3f).aiming, "no aim after the hold");
+        check(aim.update(dt, false, false, false).zip, "no zip on letting go after aiming");
+        check(!aim.update(dt, false, false, false).zip, "a second zip with nothing held");
+        // A short click: no aim, no zip.
+        hold(.1f);
+        check(!aim.update(dt, false, false, false).zip, "a short click zipped");
+        // A gesture's click (made with it): never aims.
+        aim.update(dt, true, false, true);
+        check(!hold(.5f).aiming && !aim.update(dt, false, false, false).zip, "a gesture's click aimed or zipped");
+        // And the next press after it aims as before (November 3, 17:13: after a
+        // line was made, no press aimed again).
+        check(hold(.4f).aiming && aim.update(dt, false, false, false).zip, "no aim after a gesture's click");
+        // Armed as it goes down: the gesture's.
+        aim.update(dt, true, true, false);
+        check(!hold(.5f).aiming, "a press a gesture was armed for aimed");
+        aim.update(dt, false, false, false);
+        check(hold(.4f).aiming, "no aim after an armed press");
+    });
+    test("web line world: webs meet a line before the wall behind it, not one under the feet", [&] {
+        struct Wall final : WorldQueries {
+            std::optional<RayHit> raycast(Vec3 o, Vec3 d, float dist) const override {
+                // A wall at z = -20.
+                if (d.z >= -1e-3f)
+                    return {};
+                const float t = (-20 - o.z) / d.z;
+                if (t < 0 || t > dist)
+                    return {};
+                return RayHit{o + d * t, {0, 0, 1}, 7, true};
+            }
+            bool exists(std::uint64_t s) const override {
+                return s == 7;
+            }
+        } wall;
+        WebLines lines;
+        lines.add({-5, 3, -10}, {5, 3, -10});
+        const LineWorld world(wall, lines);
+        const auto hit = world.raycast({0, 3, 0}, {0, 0, -1}, 50);
+        check(hit && (hit->surface & lineSurfaceMask) == lineSurface && std::abs(hit->point.z + 10) < .01f,
+              "the web went through the line");
+        check(world.exists(hit->surface) && world.exists(7), "a line's or the wall's surface did not exist");
+        check(!world.bodyRaycast({0, 3, 0}, {0, 0, -1}, 15), "the body met a line");
+        const auto past = world.raycast({0, 5, 0}, {0, 0, -1}, 50);
+        check(past && past->surface == 7, "a web over the line did not reach the wall");
+        // Standing on the line: a web aimed down through it goes on.
+        check(!world.raycast({0, 4.3f, -10}, {0, -1, 0}, 30), "a web aimed down met the line under the feet");
+        lines.clear();
+        check(!world.exists(hit->surface), "a line that went still existed");
+    });
+    test("web tie: hands together on a wall web and a webbed-up enemy, a click ties him", [&] {
+        TieGesture g;
+        const auto h = tieHands(true, .1f);
+        check(!g.update(1 / 90.f, false, h), "nothing tied without a click");
+        check(g.armed(), "the gesture was not armed");
+        const auto r = g.update(1 / 90.f, true, h);
+        check(r && r->anchorHand == 0 && r->targetHand == 1 && r->target == 42, "the click tied nothing");
+        near(r->anchor.z, -10);
+        check(!g.update(1 / 90.f, true, h), "a click held tied twice");
+        check(!g.update(1 / 90.f, false, h) && g.update(1 / 90.f, true, h), "a second click tied nothing");
+    });
+    test("web tie: either hand may hold the wall", [&] {
+        TieGesture g;
+        auto h = tieHands(true, .1f);
+        std::swap(h[0], h[1]);
+        const auto r = g.update(1 / 90.f, true, h);
+        check(r && r->anchorHand == 1 && r->targetHand == 0, "the swapped hands tied nothing");
+    });
+    test("web tie: no tie for an enemy not webbed up, hands apart, a prop, or a web in the air", [&] {
+        TieGesture g;
+        check(!g.update(1 / 90.f, true, tieHands(false, .1f)) && !g.armed(), "an enemy not webbed up was tied");
+        g.update(1 / 90.f, false, tieHands(false, .1f));
+        check(!g.update(1 / 90.f, true, tieHands(true, .6f)) && !g.armed(), "hands apart tied");
+        g.update(1 / 90.f, false, tieHands(true, .6f));
+        auto prop = tieHands(true, .1f);
+        prop[1].character = false;
+        check(!g.update(1 / 90.f, true, prop), "a prop was tied");
+        g.update(1 / 90.f, false, prop);
+        auto air = tieHands(true, .1f);
+        air[0].wallWeb = false;
+        check(!g.update(1 / 90.f, true, air), "a hand without a web on a surface tied");
+        g.update(1 / 90.f, false, air);
+        auto lost = tieHands(true, .1f);
+        lost[1].tracked = false;
+        check(!g.update(1 / 90.f, true, lost), "an untracked hand tied");
+    });
+    test("web tie: the click may come just after the hands part, not long after", [&] {
+        TieGesture g;
+        g.update(1 / 90.f, false, tieHands(true, .1f));
+        for (int i = 0; i < 18; ++i) // 0.2 s apart
+            g.update(1 / 90.f, false, tieHands(true, .6f));
+        check(g.update(1 / 90.f, true, tieHands(true, .6f)).has_value(), "a click 0.2 s after tied nothing");
+        TieGesture late;
+        late.update(1 / 90.f, false, tieHands(true, .1f));
+        for (int i = 0; i < 60; ++i) // 0.67 s apart
+            late.update(1 / 90.f, false, tieHands(true, .6f));
+        check(!late.update(1 / 90.f, true, tieHands(true, .6f)), "a click long after tied");
+    });
+    test("web tie: the place is off the surface by the target's radius", [&] {
+        const Vec3 p = tiePlace({0, 3, -5}, {0, 0, 2}, .45f);
+        near(p.x, 0);
+        near(p.y, 3);
+        near(p.z, -4.5f);
+        const Vec3 floor = tiePlace({1, 0, 1}, {}, .4f);
+        near(floor.y, .45f);
+        // Under a ceiling his head touches it: his centre 1 m below, not his radius.
+        near(tiePlace({0, 5, 0}, {0, -1, 0}, .45f).y, 5 - 1.05f);
+        // A surface tilted half down: between the two.
+        const Vec3 tilted = tiePlace({0, 5, 0}, normalized(Vec3{1, -1, 0}), .45f);
+        check(length(tilted - Vec3{0, 5, 0}) > .5f && length(tilted - Vec3{0, 5, 0}) < 1.05f, "a tilted place off its surface");
+    });
+    // A thug 8 m from a wall, drawn to a place on it 2.5 m up, at 30 physics steps a second.
+    auto tieRun = [&](GrabTargets& world, WebTies& ties, float seconds, bool fightOn, float& fastest,
+                      std::vector<std::uint64_t> taken = {}) {
+        const float dt = 1 / 30.f;
+        for (float t = 0; t < seconds; t += dt) {
+            std::vector<TargetCommand> commands;
+            ties.step(dt, world, fightOn, taken, commands);
+            world.apply(dt, commands);
+            for (const auto& item : world.items)
+                fastest = std::max(fastest, length(item.velocity));
+        }
+    };
+    test("web tie: a tied thug comes onto the wall gently and stays there", [&] {
+        GrabTargets world;
+        world.add(7, {0, .95f, 0}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        check(ties.add(*world.find(7), {0, 2.5f, -8}, {0, 0, 1}), "the tie was not made");
+        float fastest = 0;
+        tieRun(world, ties, 1.5f, true, fastest);
+        const Vec3 place{0, 2.5f, -8 + .45f + .05f};
+        check(length(world.items[0].position - place) < .1f, "the thug did not reach the wall within 1.5 s");
+        check(ties.ties()[0].arrived, "the tie did not see him arrive");
+        check(fastest <= 16.5f, "the thug flew faster than the tie draws");
+        // On it, he hangs still: no sag under gravity, for as long as the fight goes on.
+        float still = 0;
+        tieRun(world, ties, 60, true, still);
+        check(length(world.items[0].position - place) < .05f, "the thug sagged off the wall");
+        check(length(world.items[0].velocity) < .05f, "the thug was not held still");
+        check(ties.tied(7) && ties.ended() == 0, "the tie let go during the fight");
+    });
+    test("web tie: a thug far off comes in an arc, lifted off the ground, and a yank starts him", [&] {
+        GrabTargets world;
+        world.add(7, {0, .95f, 0}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        ties.add(*world.find(7), {0, 1.5f, -14}, {0, 0, 1});
+        const Vec3 place = ties.ties()[0].place;
+        const Vec3 launch = tieLaunch(*world.find(7), ties.ties()[0]);
+        check(length(launch) > 4 && length(launch) < 10, "the first pull was no yank");
+        world.items[0].velocity = launch;
+        float highest = 0, fastest = 0;
+        const float dt = 1 / 30.f;
+        for (float t = 0; t < 2.5f; t += dt) {
+            std::vector<TargetCommand> commands;
+            ties.step(dt, world, true, {}, commands);
+            world.apply(dt, commands);
+            const auto& p = world.items[0].position;
+            // Above the straight line from where he started to his place.
+            const float along = std::clamp((0 - p.z) / 13.5f, 0.f, 1.f);
+            highest = std::max(highest, p.y - (.95f + along * (1.5f - .95f)));
+            fastest = std::max(fastest, length(world.items[0].velocity));
+        }
+        check(highest > .5f, "he came along the straight line, not an arc");
+        check(length(world.items[0].position - place) < .1f, "he did not come to his place");
+        check(fastest <= 16.5f, "he flew faster than the tie draws");
+        near(tieAim({0, 1, -13}, place, {0, 0, 1}).y, place.y);
+        // Under a ceiling, no arc up into it.
+        near(tieAim({0, 1, 0}, {0, 4, -12}, {0, -1, 0}).y, 4);
+    });
+    test("web tie: settled short of his place, he is held where he came to", [&] {
+        GrabTargets world;
+        world.add(7, {0, 3.9f, -2}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        ties.add(*world.find(7), {0, 5, -2}, {0, -1, 0});
+        ties.settle(7, {0, 3.9f, -2});
+        check(ties.ties()[0].arrived, "a settled tie did not arrive");
+        float fastest = 0;
+        const float dt = 1 / 30.f;
+        for (float t = 0; t < 5; t += dt) {
+            std::vector<TargetCommand> commands;
+            ties.step(dt, world, true, {}, commands);
+            world.apply(dt, commands);
+            fastest = std::max(fastest, length(world.items[0].velocity));
+        }
+        check(length(world.items[0].position - Vec3{0, 3.9f, -2}) < .03f && fastest < .2f,
+              "a settled thug did not stay where he came to");
+    });
+    test("web tie: the fight over, every tie lets go; a short lull does not", [&] {
+        GrabTargets world;
+        world.add(7, {0, .95f, 0}, 80, .45f, TargetKind::Character);
+        world.add(8, {3, .95f, 0}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        ties.add(*world.find(7), {0, 2.5f, -8}, {0, 0, 1});
+        ties.add(*world.find(8), {3, 0, 0}, {0, 1, 0});
+        float fastest = 0;
+        tieRun(world, ties, 3, false, fastest);
+        tieRun(world, ties, .1f, true, fastest);
+        check(ties.ties().size() == 2, "a lull of 3 s ended the ties");
+        tieRun(world, ties, 5.2f, false, fastest);
+        check(ties.ties().empty() && ties.ended() == 2, "the end of the fight kept the ties");
+    });
+    test("web tie: a gone target or one a web takes again ends its tie", [&] {
+        GrabTargets world;
+        world.add(7, {0, .95f, 0}, 80, .45f, TargetKind::Character);
+        world.add(8, {3, .95f, 0}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        ties.add(*world.find(7), {0, 2.5f, -8}, {0, 0, 1});
+        ties.add(*world.find(8), {3, 2.5f, -8}, {0, 0, 1});
+        float fastest = 0;
+        tieRun(world, ties, .5f, true, fastest, {8});
+        check(ties.tied(7) && !ties.tied(8), "a target the hand took again stayed tied");
+        world.items.erase(world.items.begin());
+        tieRun(world, ties, .1f, true, fastest);
+        check(!ties.tied(7), "a gone target stayed tied");
+        check(ties.made() == 2 && ties.taken() == 1 && ties.gone() == 1, "ties made or ended were miscounted");
+    });
+    test("web tie: tying a tied target again moves its tie; bad configurations throw", [&] {
+        GrabTargets world;
+        world.add(7, {0, .95f, 0}, 80, .45f, TargetKind::Character);
+        WebTies ties;
+        ties.add(*world.find(7), {0, 2.5f, -8}, {0, 0, 1});
+        ties.add(*world.find(7), {4, 0, 0}, {0, 1, 0});
+        check(ties.ties().size() == 1 && ties.ties()[0].anchor.x == 4, "a target was tied twice");
+        TieConfig bad;
+        bad.webForce = 0;
+        bool threw = false;
+        try {
+            WebTies broken(bad);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        check(threw, "a tie without strength was accepted");
+    });
+    test("web tie: the hands' webs are handed over, a held grip shoots nothing new", [&] {
+        GrabTargets world;
+        world.add(5, {0, 1, -6}, 80, .45f, TargetKind::Character);
+        WebGrab grab;
+        Input in = forward();
+        LabWorld lab{std::vector<Box>{}};
+        grab.claim(1 / 90.f, in, lab, world, Body{{0, 1, 0}, {}, true});
+        check(grab.grabs()[0].phase != GrabPhase::None, "the grab caught nothing");
+        grab.handOver(0);
+        check(grab.grabs()[0].phase == GrabPhase::None, "the grab kept its target");
+        grab.claim(1 / 90.f, in, lab, world, Body{{0, 1, 0}, {}, true});
+        check(grab.grabs()[0].phase == GrabPhase::None, "a held grip caught again");
+        check(grab.forSwing(in).hands[0].grip == 0, "a held grip went to the swing");
+    });
+    test("session diagnostics: forearm aim in its own ring, the rest kept, the build named", [] {
+        using namespace diag_log;
+        check(channelOf("forearm aim: L none, turn 3.0 deg") == Channel::aim &&
+                  channelOf("run log: touchdown at 12.0 m/s") == Channel::main &&
+                  channelOf("dodge tumble: no tumble") == Channel::main && channelOf("") == Channel::main,
+              "a line in the wrong ring");
+        // Thirty seconds of forearm aim lines push out nothing of the main ring's.
+        auto data = std::make_unique<Data>();
+        data->main.push("run log: touchdown at 14.0 m/s across");
+        for (int i = 0; i < 200; ++i)
+            data->aim.push("forearm aim: R none");
+        check(data->main.written == 1 && std::strcmp(data->main.at(0), "run log: touchdown at 14.0 m/s across") == 0,
+              "a run log line lost to forearm aim lines");
+        check(data->aim.written == 200 && data->aim.at(199) && !data->aim.at(200) && !data->aim.at(183) &&
+                  data->aim.at(184),
+              "the aim ring does not keep its newest 16");
+        // A line longer than a slot is cut, never overflows.
+        std::string longLine(600, 'x');
+        data->main.push(longLine.c_str());
+        check(std::strlen(data->main.at(1)) == lineChars - 1, "a long line not cut to the slot");
+        // The layout run_game_vr.py's diag_snapshot reads.
+        check(Data{}.magic == 0x47414944 && Data{}.version == 1 && sizeof(Data) == 34696,
+              "SpidyDiagData's layout moved: change run_game_vr.py's DIAG_ constants with it");
+        check(buildId("0.7.0", "56fb4f8abc", "x") == "Spidy 0.7.0 (commit 56fb4f8abc)" &&
+                  buildId("0.7.0", "", "20261103-1600Z") == "Spidy 0.7.0 (built 20261103-1600Z)",
+              "the build id does not tell builds apart");
+    });
+    test("session diagnostics: forearm aim lines only as they change, and a heartbeat", [] {
+        diag_log::ChangeOnly c;
+        check(c.update(.01f, 0, 10), "the first line not written");
+        int lines = 0;
+        for (int i = 0; i < 300; ++i) // 3 s, nothing changes
+            lines += c.update(.01f, 0, 10.5f);
+        check(lines == 0, "an unchanged forearm aim written again");
+        diag_log::ChangeOnly d;
+        d.update(.01f, 0, 10);
+        int changed = 0;
+        for (int i = 0; i < 100; ++i) // a new fallback, at most once in `quiet`
+            changed += d.update(.01f, i % 2 ? 1 : 2, 10);
+        check(changed == 1 || changed == 2, "a flapping fallback floods the diagnostics");
+        diag_log::ChangeOnly e;
+        e.update(.01f, 0, 10);
+        int beats = 0;
+        for (int i = 0; i < 2100; ++i) // 21 s steady
+            beats += e.update(.01f, 0, 10);
+        check(beats == 2, "no heartbeat every 10 s");
+        diag_log::ChangeOnly f;
+        f.update(.01f, 0, 10);
+        int turned = 0;
+        for (int i = 0; i < 60; ++i)
+            turned += f.update(.01f, 0, 16);
+        check(turned == 1, "a 6-degree turn not written");
+    });
+    test("STEADY STATES: RT comes back after a moment, goes at once, never in a fight; off as before", [] {
+        using namespace ground_state;
+        RiseDelay r;
+        check(!r.update(.05f, true) && !r.update(.05f, true) && r.update(.05f, true), "RT not back after 0.15 s");
+        check(!r.update(.01f, false) && r.drops() == 1, "RT not gone at once");
+        // A flicker every other frame keeps it off.
+        bool any = false;
+        for (int i = 0; i < 40; ++i)
+            any |= r.update(.025f, i % 2 == 0);
+        check(!any, "a flickering permission held RT");
+        game_pad::NativeRunGate g;
+        g.setting = g.playing = g.gameOwnsGround = true;
+        game_pad::Walk w;
+        check(game_pad::nativeRunAllowed(g, w), "a plain run refused");
+        g.fighting = true;
+        check(game_pad::nativeRunAllowed(g, w), "a fight refused RT with STEADY STATES off");
+        g.steady = true;
+        check(!game_pad::nativeRunAllowed(g, w), "RT in a fight with STEADY STATES on");
+        g.fighting = false;
+        check(game_pad::nativeRunAllowed(g, w), "STEADY STATES refused a plain run");
+        vr_settings::Values values;
+        check(!values.steadyStates && vr_settings::defaultChoice(vr_settings::Item::steadyStates) == 0,
+              "STEADY STATES on by default");
+        check(vr_settings::withTabOnly({}, "steady_states=1\n").steadyStates &&
+                  !vr_settings::withTabOnly({}, "").steadyStates,
+              "spidy_vr.ini keeps steady_states");
+        const auto& all = vr_settings::rows();
+        check(all[82].item == vr_settings::Item::steadyStates && std::strcmp(all[82].title, "STEADY STATES") == 0 &&
+                  all[82].choices.empty() && all[82].place == vr_settings::Place::tab,
+              "STEADY STATES: a switch in the tab, after WEB LANDING IMPACT");
+    });
+    test("state changes: a line at each landing and take-off, why and how fast; a flapping state summed up", [] {
+        using namespace ground_state;
+        StateLog log;
+        Sample s;
+        s.fresh = true;
+        s.owned = true;
+        s.webbed = true;
+        s.velocity = {9, -6, 0};
+        check(!log.update(.02f, s), "a line with nothing changed");
+        s.grounded = true;
+        const char* line = log.update(.02f, s);
+        check(line && std::strstr(line, "grounded 0->1 (touchdown, the swing driving)") &&
+                  std::strstr(line, "9.0 m/s across"),
+              "no touchdown line, or no speed in it");
+        s.owned = false;
+        line = log.update(.02f, s);
+        check(line && std::strstr(line, "owned 1->0 (the game's on the ground)"), "no hand-over line");
+        check(!log.update(.02f, s), "a line again with nothing changed");
+        // A stale sample says nothing.
+        Sample stale = s;
+        stale.fresh = false;
+        stale.grounded = false;
+        check(!log.update(.02f, stale), "a stale sample written");
+        // Flapping for a second: at most perSecond lines, then a summary.
+        StateLog flap;
+        Sample f;
+        f.fresh = true;
+        flap.update(.01f, f);
+        int lines = 0;
+        bool summed = false;
+        for (int i = 0; i < 100; ++i) {
+            f.grounded = !f.grounded;
+            if (const char* l = flap.update(.0105f, f)) {
+                summed |= std::strstr(l, "in the last second") != nullptr;
+                lines += !std::strstr(l, "in the last second");
+            }
+        }
+        check(lines <= 2 * static_cast<int>(StateLog::perSecond) && lines >= static_cast<int>(StateLog::perSecond) &&
+                  summed,
+              "flapping not capped and summed up");
+    });
     std::cout << total - failed << '/' << total << " tests passed\n";
     return failed ? 1 : 0;
 }

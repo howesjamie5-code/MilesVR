@@ -1452,6 +1452,37 @@ void App::optionsCard(ImVec2 size) {
                [&] { tabToggle("##brake", Item::automaticAirBrake); });
         ImGui::Unindent(S(16));
     }
+    // SpidyVR 0.8.0-0.8.6's new settings (as Spidy has them; the game's VR tabs have them too), from their
+    // rows: a switch, or a choice of steps.
+    {
+        static constexpr Item spidy08[] = {
+            Item::webTie, Item::webLines, Item::singleHandYankStrength, Item::airSlingshot, Item::webAimSource,
+            Item::forearmBlend, Item::forearmAimLimit, Item::wristShooters, Item::palmShooters, Item::webAngle,
+            Item::nativeRun, Item::nativeRunAt, Item::runCurve, Item::steadyStates, Item::spidyRun,
+            Item::spidyRunFromStanding, Item::spidyRunJump, Item::momentumLeap, Item::earlyJump, Item::softLanding,
+            Item::webLandingSmooth, Item::webLandingImpact, Item::combatResponsive, Item::joystickRunCamera,
+            Item::dodgeTumble, Item::airFists, Item::flipReprojection, Item::steadyHud, Item::reelHaptics,
+            Item::swingHaptics, Item::runLogs,
+        };
+        ImGui::Dummy(ImVec2(0, S(6)));
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kMuted));
+        ImGui::TextUnformatted("FROM SPIDYVR 0.8 (EXPERIMENTAL)");
+        ImGui::PopStyleColor();
+        for (const Item item : spidy08) {
+            const auto* row = spidy::vr_settings::rowFor(item);
+            if (!row)
+                continue;
+            std::string title = row->title;
+            for (size_t i = 1; i < title.size(); ++i)
+                title[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(title[i])));
+            const std::string id = "##spidy08_" + std::to_string(static_cast<int>(item));
+            if (row->choices.empty())
+                option(title.c_str(), row->help, S(40), [&] { tabToggle(id.c_str(), item); });
+            else
+                option(title.c_str(), row->help, S(150), [&] { tabCombo(id.c_str(), item); });
+        }
+        ImGui::Dummy(ImVec2(0, S(6)));
+    }
     option("Small game window", "Saves GPU time while you play in VR.", S(40),
            [&] { changed |= toggle("##small", &o.smallWindow); });
     option("Game's depth of field",
@@ -1817,6 +1848,31 @@ void App::profiles(ImVec2 origin, ImVec2 size) {
     ImGui::TextUnformatted("A profile file another player sent you (.spidy).");
     ImGui::PopStyleColor();
 
+    // SpidyVR 0.8.5's gameplay presets: each sets the gameplay settings only (launcher_presets.hpp); the
+    // player's own setup (turning, haptics, display, the web and venom buttons, the body) stays.
+    heading("GAMEPLAY PRESETS");
+    for (const auto& preset : lp::builtInProfiles()) {
+        ImGui::PushID(preset.profile.name.c_str());
+        if (secondaryButton(preset.profile.name.c_str(), S(110))) {
+            lp::PlaySettings loaded = current;
+            lp::applyProfile(preset.profile, loaded);
+            settings_.options = loaded.options;
+            tabOnly_ = loaded.tab;
+            settings_.profile.clear();
+            save();
+            saveTabOnly(tabOnly_);
+            notice(format("Preset \"%s\": %s", preset.profile.name.c_str(), preset.description));
+            deleting_.clear();
+            renaming_.clear();
+        }
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::PushStyleColor(ImGuiCol_Text, vec(kFaint));
+        ImGui::TextUnformatted(preset.description);
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+    }
+
     // YOUR PROFILES: each kept one, with LOAD, RENAME and DELETE.
     heading("YOUR PROFILES");
     if (profiles_.empty()) {
@@ -2002,6 +2058,14 @@ void App::controls(ImVec2 origin, ImVec2 size) {
          {{"Hand wall climbing: grip near a wall", "Hold on and pull to climb. Both grips held and rolled = turn the "
                                                    "view. A = jump off"},
           {"Realistic flips: arms in the air", "Swing your arms to spin. A in the air = stop and come upright"}}},
+        {"FROM SPIDYVR 0.8 (OPTIONS, OFF UNTIL TURNED ON)",
+         {{"Web tie: hands together + right stick click", "Webs a webbed enemy to the wall, ceiling or crane your "
+                                                          "web is on"},
+          {"Web lines: two webs on two walls, hands together + click", "A taut web line (six at most). Hold the "
+                                                                      "click to aim at one, let go = zip onto it; "
+                                                                      "A jumps, B dashes along it"},
+          {"Native run: left stick past 70% on the ground", "The game's own sprint, vaults and wall runs"},
+          {"Air slingshot: two webs taut, both grips, arms back", "Let go = launch along the webs"}}},
         {"WRIST MENU",
          {{"Right hand on the left forearm + trigger", "Opens or closes the hologram over your left wrist (F8 on the "
                                                        "keyboard too)"},

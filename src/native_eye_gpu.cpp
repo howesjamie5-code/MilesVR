@@ -4,6 +4,7 @@
 #include "spidy/native_hud.hpp"
 #include "spidy/eye_sharpen.hpp"
 #include "spidy/eye_debug.hpp"
+#include "spidy/hud_capture.hpp"
 #include "spidy/monitor_rate.hpp"
 #include "spidy/presentation_gate.hpp"
 #include <MinHook.h>
@@ -28,6 +29,7 @@ extern "C" {
 __declspec(dllexport) native_gpu::Data SpidyGpuData;
 __declspec(dllexport) native_gpu::ScreenData SpidyScreenData;
 __declspec(dllexport) native_gpu::HistoryData SpidyEyeHistoryData;
+__declspec(dllexport) hud_capture::Data SpidyHudCapture;
 }
 namespace spidy::native_gpu {
 namespace {
@@ -69,7 +71,7 @@ struct Marker {
 thread_local Marker currentMarker{};
 struct Event {
     unsigned eye{};
-    bool marker{}, ended{};
+    bool marker{}, ended{}, hud{};
     EyePairState::Stamp stamp{};
     D3D12_RESOURCE_TRANSITION_BARRIER transition{};
     D3D12_RESOURCE_BARRIER_FLAGS flags{};
@@ -107,8 +109,7 @@ struct CopyCommands {
     ComPtr<ID3D12GraphicsCommandList> list;
     uint64_t fence{};
 };
-std::array<CopyCommands, 3> captureCommands, presentCommands, screenCommands, mirrorCommands, shownCommands,
-    hudCommands;
+std::array<CopyCommands, 3> captureCommands, presentCommands, screenCommands, mirrorCommands, shownCommands;
 std::array<ComPtr<ID3D12Resource>, 2> stagedEyes;
 EyePairState::Stamp capturedStamp;
 uint64_t capturedPairs{}, reusedPairs{}, capturedMs{};
@@ -195,18 +196,73 @@ struct MirrorPipeline {
     bool failed{};
 } mirrorPipeline;
 std::atomic<uint32_t> screenSkipped{}, backBufferFormat{};
-// MilesVR 0.1.80: the game's HUD texture (recording lock), its state after the barriers the game has
-// submitted, and the copy of it made at each wanted Present (submission lock).
-ComPtr<ID3D12Resource> hudResource;
+// The steadier-HUD probe (hud_capture.hpp; recording lock, the copies also
+// under the submission lock). The panel's texture, a replaced one kept a few
+// seconds for a copy still reading it, the state the game's executed barriers
+// left it in, and the newest snapshot's readback and rows.
+struct HudProbe {
+    ComPtr<ID3D12Resource> resource, readback;
+    std::vector<Retired> retired;
+    uint32_t path{}, mips{};
+    D3D12_RESOURCE_STATES state{};
+    bool known{};
+    uint64_t barriers{}, executed{}, otherQueue{}, odd{}, mismatched{}, presents{}, copies{}, snapshots{};
+    uint64_t executedMs{}; // when a barrier on the followed texture last executed (or it was registered)
+    uint32_t skip{}, refused{}, registered{};
+    uint32_t emptyScans{}; // snapshots in a row with no alpha at all; hud_capture::blankScans of them: blank
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+    uint32_t shotWidth{}, shotHeight{}, shotBytes{};
+    bool shotSwap{}, pending{}, taken{};
+    uint64_t pendingFence{}, lastMs{};
+    std::vector<uint8_t> pixels;
+    uint32_t rowPitch{}, swap{};
+    // STEADY HUD: the panel as the newest eye pair's frame left it
+    // (COPY_SOURCE between uses), when it was copied, the copies into the
+    // layer's image and the headset frames that showed the layer.
+    ComPtr<ID3D12Resource> staged;
+    uint64_t stagedCopies{}, stagedMs{}, layerCopies{}, layerFrames{};
+    uint32_t stageSkip{};
+} hud;
 std::atomic<ID3D12Resource*> hudWatched{};
-D3D12_RESOURCE_STATES hudState{};
-bool hudKnown{};
-std::atomic<bool> hudWanted{};
-Screen hud;
-uint64_t hudMs{};
-std::vector<Retired> retiredHuds;
-std::atomic<uint32_t> hudCopied{}, hudSkipped{};
-constexpr unsigned hudEvent = 2; // Event::eye for the HUD texture
+std::atomic<bool> hudWanted{}, hudLayerWanted{};
+std::array<CopyCommands, 3> hudCommands, hudLayerCommands;
+void publishHud() { // recording held by caller
+    std::lock_guard lock(telemetry);
+    auto& d = SpidyHudCapture;
+    InterlockedIncrement64(&d.sequence);
+    d.path = hud.path;
+    d.resource = reinterpret_cast<uint64_t>(hud.resource.Get());
+    if (hud.resource) {
+        const auto desc = hud.resource->GetDesc();
+        d.width = static_cast<uint32_t>(desc.Width);
+        d.height = desc.Height;
+        d.format = desc.Format;
+        d.mips = desc.MipLevels;
+        d.flags = desc.Flags;
+        d.samples = desc.SampleDesc.Count;
+    }
+    d.barriers = hud.barriers;
+    d.executed = hud.executed;
+    d.otherQueue = hud.otherQueue;
+    d.odd = hud.odd;
+    d.mismatched = hud.mismatched;
+    d.state = hud.state;
+    d.known = hud.known;
+    d.presents = hud.presents;
+    d.copies = hud.copies;
+    d.skip = hud.skip;
+    d.refused = hud.refused;
+    d.snapshots = hud.snapshots;
+    d.pixels = hud.pixels.empty() ? 0 : reinterpret_cast<uint64_t>(hud.pixels.data());
+    d.rowPitch = hud.rowPitch;
+    d.swap = hud.swap;
+    d.staged = hud.stagedCopies;
+    d.layerCopies = hud.layerCopies;
+    d.layerFrames = hud.layerFrames;
+    d.stageSkip = hud.stageSkip;
+    d.registered = hud.registered;
+    InterlockedIncrement64(&d.sequence);
+}
 void publishScreen(uint32_t status, const void* rows, uint32_t rowBytes) {
     std::lock_guard lock(telemetry);
     auto& d = SpidyScreenData;
@@ -286,19 +342,20 @@ void STDMETHODCALLTYPE barrier(ID3D12GraphicsCommandList* list, UINT count,
     if (enabled) {
         const auto* left = watched[0].load();
         const auto* right = watched[1].load();
-        const auto* hudTexture = hudWatched.load();
+        // The panel's only while STEADY HUD is on: off, its barriers pass as before.
+        const auto* panel = hudLayerWanted ? hudWatched.load() : nullptr;
         bool relevant{};
         for (UINT n = 0; n < count; ++n)
             relevant |= bs[n].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION &&
                         (bs[n].Transition.pResource == left || bs[n].Transition.pResource == right ||
-                         (hudTexture && bs[n].Transition.pResource == hudTexture));
+                         (panel && bs[n].Transition.pResource == panel));
         if (!relevant) {
             originalBarrier(list, count, bs);
             return;
         }
         std::lock_guard lock(recording);
         for (UINT n = 0; n < count; ++n)
-            if (bs[n].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION)
+            if (bs[n].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION) {
                 for (unsigned i = 0; i < 2; ++i)
                     if (resources[i] && bs[n].Transition.pResource == resources[i].Get()) {
                         Event e{};
@@ -307,14 +364,20 @@ void STDMETHODCALLTYPE barrier(ID3D12GraphicsCommandList* list, UINT count,
                         e.flags = bs[n].Flags;
                         add(list, e);
                     }
-        for (UINT n = 0; n < count; ++n)
-            if (bs[n].Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION && hudResource &&
-                bs[n].Transition.pResource == hudResource.Get()) {
-                Event e{};
-                e.eye = hudEvent;
-                e.transition = bs[n].Transition;
-                e.flags = bs[n].Flags;
-                add(list, e);
+                // The HUD probe's: a full list is skipped, never a fault.
+                if (panel && hud.resource && bs[n].Transition.pResource == hud.resource.Get()) {
+                    ++hud.barriers;
+                    auto found = lists.find(list);
+                    if (found == lists.end() && lists.size() < 4096)
+                        found = lists.emplace(list, std::vector<Event>{}).first;
+                    if (found != lists.end() && found->second.size() < 4096) {
+                        Event e{};
+                        e.hud = true;
+                        e.transition = bs[n].Transition;
+                        e.flags = bs[n].Flags;
+                        found->second.push_back(e);
+                    }
+                }
             }
     }
     originalBarrier(list, count, bs);
@@ -1436,6 +1499,47 @@ void drawHistory(ID3D12GraphicsCommandList* list, size_t slot, uint64_t serial) 
     if (!viewed)
         ++SpidyEyeHistoryData.unviewed;
 }
+// STEADY HUD: the panel's texture as the pair's frame left it, copied after
+// the pair on the same list. Its own failures only skip it.
+hud_capture::Skip stageHud(ID3D12GraphicsCommandList* list) { // submission and recording held by caller
+    if (!hud.resource)
+        return hud_capture::skipNoResource;
+    if (!hud.known)
+        return hud_capture::skipUnknownState;
+    // The game draws the panel every frame, each time through barriers on its texture. None for this long: it
+    // draws into another texture now (registerHud follows it), and this one would show an empty panel.
+    if (GetTickCount64() - hud.executedMs > hud_capture::staleMs)
+        return hud_capture::skipStale;
+    // The followed texture is empty although the HUD is wanted (the game's panel drew somewhere else, or
+    // nowhere, after a death, a checkpoint or a scene): its copy would show the layer nothing, and the eyes
+    // would leave the panel out. Not copied, the eyes draw it, as with STEADY HUD off.
+    if (hud.emptyScans >= hud_capture::blankScans)
+        return hud_capture::skipBlank;
+    const auto desc = hud.resource->GetDesc();
+    if (!rgba8CopyTarget(desc))
+        return hud_capture::skipFormat;
+    if (hud.staged) {
+        const auto own = hud.staged->GetDesc();
+        if (own.Width != desc.Width || own.Height != desc.Height || own.Format != desc.Format) {
+            hud.retired.push_back({hud.staged, GetTickCount64() + 3000});
+            hud.staged.Reset();
+        }
+    }
+    if (!hud.staged) {
+        auto copy = desc;
+        copy.Flags = D3D12_RESOURCE_FLAG_NONE;
+        copy.Alignment = 0;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &copy,
+                                                   D3D12_RESOURCE_STATE_COPY_SOURCE, nullptr,
+                                                   IID_PPV_ARGS(&hud.staged))))
+            return hud_capture::skipFailed;
+    }
+    copyEyeTexture(list, hud.resource.Get(), hud.state, hud.staged.Get(), originalBarrier,
+                   D3D12_RESOURCE_STATE_COPY_SOURCE);
+    return hud_capture::skipNone;
+}
 void stagePair(EyePairState::Stamp stamp) {
     if (!known[0] || !known[1] || !makeReadbacks())
         return;
@@ -1481,9 +1585,18 @@ void stagePair(EyePairState::Stamp stamp) {
         drawHistory(slot->list.Get(), index, stamp.serial);
     else
         history.valid = false;
+    const auto hudSkip = hudLayerWanted ? stageHud(slot->list.Get()) : hud_capture::skipNoResource;
     if (!submitCommands(*slot)) {
         history.valid = false;
         return;
+    }
+    if (hudLayerWanted) {
+        hud.stageSkip = hudSkip;
+        if (hudSkip == hud_capture::skipNone) {
+            ++hud.stagedCopies;
+            hud.stagedMs = GetTickCount64();
+        }
+        publishHud();
     }
     aaPairs += smooth;
     capturedStamp = stamp;
@@ -1589,16 +1702,19 @@ void STDMETHODCALLTYPE execute(ID3D12CommandQueue* q, UINT count, ID3D12CommandL
         originalExecute(q, count, commands);
         std::lock_guard recordLock(recording);
         for (UINT n = 0; n < count; ++n)
-            if (auto found = lists.find(commands[n]); found != lists.end())
-                for (const auto& e : found->second) {
-                    if (e.eye == hudEvent) {
-                        hudKnown = false; // its state now changes off the game's queue
-                        continue;
-                    }
+            if (auto found = lists.find(commands[n]); found != lists.end() && !found->second.empty()) {
+                // The HUD probe's barriers elsewhere leave its state unknown.
+                const auto own = std::count_if(found->second.begin(), found->second.end(),
+                                               [](const Event& e) { return e.hud; });
+                if (own) {
+                    hud.otherQueue += own;
+                    hud.known = false;
+                }
+                if (static_cast<size_t>(own) < found->second.size()) {
                     fault = 3401;
                     copyReady.notify_all();
-                    break;
                 }
+            }
         return;
     }
     std::lock_guard submitLock(submission);
@@ -1611,15 +1727,19 @@ void STDMETHODCALLTYPE execute(ID3D12CommandQueue* q, UINT count, ID3D12CommandL
     for (UINT n = 0; n < count; ++n)
         if (auto found = lists.find(commands[n]); found != lists.end())
             for (const auto& e : found->second) {
-                if (e.eye == hudEvent) {
-                    // The HUD's: the game's own word on its state from here on in the queue. A split
-                    // barrier or one subresource leaves it unknown (it has one).
-                    if (q != queue.Get() || !hudResource || e.transition.pResource != hudResource.Get())
+                if (e.hud) {
+                    ++hud.executed;
+                    hud.executedMs = GetTickCount64();
+                    if (e.flags != D3D12_RESOURCE_BARRIER_FLAG_NONE ||
+                        (e.transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES &&
+                         (e.transition.Subresource != 0 || hud.mips != 1))) {
+                        ++hud.odd;
+                        hud.known = false;
                         continue;
-                    hudKnown = e.flags == D3D12_RESOURCE_BARRIER_FLAG_NONE &&
-                               (e.transition.Subresource == 0 ||
-                                e.transition.Subresource == D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);
-                    hudState = e.transition.StateAfter;
+                    }
+                    hud.mismatched += hud.known && hud.state != e.transition.StateBefore;
+                    hud.state = e.transition.StateAfter;
+                    hud.known = true;
                     continue;
                 }
                 relevant = true;
@@ -1919,63 +2039,138 @@ void mirrorEye(IDXGISwapChain* swapchain) {
     }
     shownWanted = true;
 }
-// Present thread (MilesVR 0.1.80): the game's HUD texture copied on its queue, after the frame that drew
-// it, in the state the game's submitted barriers left it and back to that state.
-bool copyHud() {
-    std::lock_guard submitLock(submission);
-    std::lock_guard recordLock(recording);
-    if (!enabled || fault || GetTickCount64() >= deadline || !hudResource || !hudKnown)
-        return false;
-    const auto desc = hudResource->GetDesc();
-    if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
-        desc.DepthOrArraySize != 1 || desc.MipLevels != 1 || !validEyeSize(desc.Width) || !validEyeSize(desc.Height))
-        return false;
-    bool linear{};
-    const auto view = screenView(desc.Format, linear);
-    if (view == DXGI_FORMAT_UNKNOWN)
-        return false;
-    const auto now = GetTickCount64();
-    std::erase_if(retiredHuds, [&](const Retired& old) { return now >= old.releaseMs; });
-    if (!hud.texture || hud.width != desc.Width || hud.height != desc.Height || hud.view != view) {
-        if (hud.texture)
-            retiredHuds.push_back({hud.texture, now + 3000});
-        hud = {};
-        auto copy = desc;
-        copy.Format = typelessFamily(view);
-        copy.Flags = D3D12_RESOURCE_FLAG_NONE;
-        copy.Alignment = 0;
+// The HUD probe at a Present on the game's queue: the frame's work, the
+// panel's drawing with it, is queued before; the next frame's after. Reads
+// a finished snapshot into memory, and when one is due copies the panel in
+// the state the executed barriers left it, then puts that state back.
+// Its failures skip; they never fault the eye views.
+hud_capture::Skip copyHud() { // submission and recording held by caller
+    using namespace hud_capture;
+    if (!hud.resource)
+        return skipNoResource;
+    if (!hud.known)
+        return skipUnknownState;
+    const auto desc = hud.resource->GetDesc();
+    bool swap{};
+    const auto bytes = readableBytes(desc.Format, swap);
+    if (!bytes || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
+        desc.DepthOrArraySize != 1)
+        return skipFormat;
+    if (hud.pending)
+        return skipBusy;
+    if (!hud.readback || hud.shotWidth != desc.Width || hud.shotHeight != desc.Height) {
+        hud.readback.Reset();
+        UINT64 size{};
+        device->GetCopyableFootprints(&desc, 0, 1, 0, &hud.layout, nullptr, nullptr, &size);
         D3D12_HEAP_PROPERTIES heap{};
-        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
-        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &copy,
-                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
-                                                   IID_PPV_ARGS(&hud.texture))))
-            return false;
-        hud.view = view;
-        hud.linear = linear;
-        hud.width = static_cast<uint32_t>(desc.Width);
-        hud.height = desc.Height;
+        heap.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC buffer{};
+        buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        buffer.Width = size;
+        buffer.Height = 1;
+        buffer.DepthOrArraySize = 1;
+        buffer.MipLevels = 1;
+        buffer.SampleDesc.Count = 1;
+        buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer,
+                                                   D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                   IID_PPV_ARGS(&hud.readback))))
+            return skipFailed;
+        hud.shotWidth = static_cast<uint32_t>(desc.Width);
+        hud.shotHeight = desc.Height;
     }
     auto* slot = readyCommands(hudCommands);
     if (!slot)
-        return false;
-    D3D12_RESOURCE_BARRIER b[2]{};
-    b[0].Type = b[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b[0].Transition = {hudResource.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, hudState,
-                       D3D12_RESOURCE_STATE_COPY_SOURCE};
-    b[1].Transition = {hud.texture.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                       D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
-    // Already readable for a copy: only the copy's own texture moves.
-    const bool move = hudState != D3D12_RESOURCE_STATE_COPY_SOURCE;
-    originalBarrier(slot->list.Get(), move ? 2 : 1, move ? b : b + 1);
-    slot->list->CopyResource(hud.texture.Get(), hudResource.Get());
-    for (auto& barrier : b)
-        std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-    originalBarrier(slot->list.Get(), move ? 2 : 1, move ? b : b + 1);
-    if (!submitCommands(*slot))
-        return false;
-    ++hud.frame;
-    hudMs = now;
-    return true;
+        return skipBusy;
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition = {hud.resource.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, hud.state,
+                    D3D12_RESOURCE_STATE_COPY_SOURCE};
+    const bool turn = hud.state != D3D12_RESOURCE_STATE_COPY_SOURCE;
+    if (turn)
+        originalBarrier(slot->list.Get(), 1, &b);
+    D3D12_TEXTURE_COPY_LOCATION src{}, dst{};
+    src.pResource = hud.resource.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.pResource = hud.readback.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = hud.layout;
+    slot->list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+    if (turn)
+        originalBarrier(slot->list.Get(), 1, &b);
+    if (FAILED(slot->list->Close()))
+        return skipFailed;
+    ID3D12CommandList* list = slot->list.Get();
+    originalExecute(queue.Get(), 1, &list);
+    slot->fence = ++fenceValue;
+    if (FAILED(queue->Signal(fence.Get(), slot->fence)))
+        return skipFailed;
+    hud.pending = true;
+    hud.pendingFence = slot->fence;
+    hud.shotBytes = bytes;
+    hud.shotSwap = swap;
+    ++hud.copies;
+    return skipNone;
+}
+void readHud() { // submission and recording held by caller
+    if (!hud.pending || fence->GetCompletedValue() < hud.pendingFence)
+        return;
+    hud.pending = false;
+    const auto rowBytes = hud.shotWidth * hud.shotBytes;
+    void* data{};
+    D3D12_RANGE range{
+        0, static_cast<SIZE_T>(hud.layout.Offset +
+                               static_cast<UINT64>(hud.layout.Footprint.RowPitch) * (hud.shotHeight - 1) +
+                               rowBytes)};
+    if (FAILED(hud.readback->Map(0, &range, &data))) {
+        hud.skip = hud_capture::skipFailed;
+        return;
+    }
+    hud.pixels.resize(static_cast<size_t>(rowBytes) * hud.shotHeight);
+    for (uint32_t y = 0; y < hud.shotHeight; ++y)
+        std::memcpy(hud.pixels.data() + static_cast<size_t>(y) * rowBytes,
+                    static_cast<uint8_t*>(data) + hud.layout.Offset +
+                        static_cast<size_t>(y) * hud.layout.Footprint.RowPitch,
+                    rowBytes);
+    D3D12_RANGE written{0, 0};
+    hud.readback->Unmap(0, &written);
+    hud.rowPitch = rowBytes;
+    hud.swap = hud.shotSwap;
+    ++hud.snapshots;
+    // (An 8-bit colour format is all the probe reads back: alpha is the 4th byte, RGBA or BGRA.)
+    if (hud.shotBytes == 4)
+        hud.emptyScans = hud_capture::anyAlpha(hud.pixels.data(), hud.shotWidth, hud.shotHeight, rowBytes)
+                             ? 0
+                             : hud.emptyScans + 1;
+}
+void captureHud(IDXGISwapChain* swapchain) {
+    ComPtr<IDXGISwapChain3> chain;
+    ComPtr<ID3D12Resource> buffer;
+    ComPtr<ID3D12Device> owner;
+    ComPtr<IUnknown> ownerIdentity, gameIdentity;
+    // Only the game's own swapchain: its Present follows the frame on the game's queue.
+    if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&chain))) ||
+        FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&buffer))) ||
+        FAILED(buffer->GetDevice(IID_PPV_ARGS(&owner))) || FAILED(owner.As(&ownerIdentity)) ||
+        FAILED(device.As(&gameIdentity)) || ownerIdentity.Get() != gameIdentity.Get())
+        return;
+    std::lock_guard submitLock(submission);
+    std::lock_guard recordLock(recording);
+    if (!enabled || fault || GetTickCount64() >= deadline)
+        return;
+    ++hud.presents;
+    readHud();
+    const auto now = GetTickCount64();
+    if (hud_capture::snapshotDue(now, hud.lastMs, hud.taken)) {
+        hud.skip = copyHud();
+        if (hud.skip == hud_capture::skipNone) {
+            hud.lastMs = now;
+            hud.taken = true;
+        }
+    }
+    std::erase_if(hud.retired, [&](const Retired& old) { return now >= old.releaseMs; });
+    publishHud();
 }
 void captureScreen(IDXGISwapChain* swapchain) {
     ++screenPresents;
@@ -1987,8 +2182,8 @@ thread_local bool presenting{};
 void presentFrame(IDXGISwapChain* swapchain, UINT flags) {
     if (!enabled || (flags & DXGI_PRESENT_TEST))
         return;
-    if (hudWanted)
-        ++(copyHud() ? hudCopied : hudSkipped);
+    if (hudWanted && hudLayerWanted)
+        captureHud(swapchain);
     if (screenWanted)
         captureScreen(swapchain);
     else if (mirrorWanted)
@@ -2152,38 +2347,6 @@ void wantScreen(bool wanted) {
 }
 bool screenRequested() {
     return screenWantedFlag();
-}
-void registerHud(ID3D12Resource* resource) {
-    if (!enabled || hudWatched.load() == resource)
-        return;
-    std::lock_guard lock(recording);
-    if (resource) {
-        ComPtr<ID3D12Device> owner;
-        ComPtr<IUnknown> a, b;
-        if (FAILED(resource->GetDevice(IID_PPV_ARGS(&owner))) || FAILED(owner.As(&a)) || FAILED(device.As(&b)) ||
-            a.Get() != b.Get())
-            resource = nullptr;
-    }
-    hudResource = resource;
-    hudWatched = resource;
-    hudKnown = false;
-}
-void wantHud(bool wanted) {
-    hudWanted = wanted;
-}
-bool latestHud(Screen& out, uint64_t maxAgeMs) {
-    std::lock_guard submitLock(submission);
-    const auto now = GetTickCount64();
-    if (!hud.texture || !hud.frame || now < hudMs || now - hudMs > maxAgeMs)
-        return false;
-    out = hud;
-    return true;
-}
-uint32_t hudCopies() {
-    return hudCopied.load();
-}
-uint32_t hudSkips() {
-    return hudSkipped.load();
 }
 bool latestScreen(Screen& out, uint64_t maxAgeMs) {
     std::lock_guard submitLock(submission);
@@ -2422,6 +2585,104 @@ void registerEye(unsigned eye, ID3D12Resource* resource) {
     }
     resources[eye] = resource;
     watched[eye] = resource;
+}
+void registerHud(ID3D12Resource* resource, uint32_t path) {
+    if (!enabled || !resource)
+        return;
+    std::lock_guard lock(recording);
+    if (hud.resource.Get() == resource)
+        return;
+    ComPtr<ID3D12Device> owner;
+    ComPtr<IUnknown> a, b;
+    bool fits = SUCCEEDED(resource->GetDevice(IID_PPV_ARGS(&owner))) && SUCCEEDED(owner.As(&a)) &&
+                SUCCEEDED(device.As(&b)) && a.Get() == b.Get();
+    D3D12_RESOURCE_DESC desc{};
+    if (fits) {
+        desc = resource->GetDesc();
+        fits = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Width >= 64 &&
+               desc.Width <= 16384 && desc.Height >= 64 && desc.Height <= 16384 && desc.DepthOrArraySize == 1;
+    }
+    if (!fits) {
+        ++hud.refused;
+        publishHud();
+        return;
+    }
+    // A copy may still read the old one; the game may have let it go already.
+    if (hud.resource)
+        hud.retired.push_back({hud.resource, GetTickCount64() + 3000});
+    hud.resource = resource;
+    ++hud.registered;
+    hud.emptyScans = 0; // the new texture is looked at anew
+    hud.executedMs = GetTickCount64();
+    hud.path = path;
+    hud.mips = desc.MipLevels;
+    hud.known = false;
+    hudWatched = resource;
+    publishHud();
+}
+void refuseHud() {
+    if (!enabled)
+        return;
+    std::lock_guard lock(recording);
+    ++hud.refused;
+    publishHud();
+}
+void wantHud(bool wanted) {
+    hudWanted = wanted;
+}
+void wantHudLayer(bool wanted) {
+    // Its barriers are followed only while it is on: switched on again, the
+    // state the game left the panel in is learnt anew.
+    if (wanted && !hudLayerWanted.exchange(true)) {
+        std::lock_guard lock(recording);
+        hud.known = false;
+    } else if (!wanted) {
+        hudLayerWanted = false;
+    }
+}
+bool hudLayerOn() {
+    return hudLayerWanted;
+}
+bool latestHud(uint32_t& hudWidth, uint32_t& hudHeight, uint64_t& copies, uint64_t& copiedMs) {
+    std::lock_guard recordLock(recording);
+    if (!enabled || !hud.staged || !hud.stagedCopies)
+        return false;
+    const auto desc = hud.staged->GetDesc();
+    hudWidth = static_cast<uint32_t>(desc.Width);
+    hudHeight = desc.Height;
+    copies = hud.stagedCopies;
+    copiedMs = hud.stagedMs;
+    return true;
+}
+bool fillHudLayer(ID3D12Resource* target) {
+    if (!target)
+        return false;
+    std::lock_guard submitLock(submission);
+    std::lock_guard recordLock(recording);
+    if (!enabled || fault || !hud.staged || GetTickCount64() >= deadline)
+        return false;
+    const auto desc = target->GetDesc(), own = hud.staged->GetDesc();
+    ComPtr<ID3D12Device> owner;
+    ComPtr<IUnknown> a, b;
+    if (!rgba8CopyTarget(desc) || desc.Width != own.Width || desc.Height != own.Height ||
+        FAILED(target->GetDevice(IID_PPV_ARGS(&owner))) || FAILED(owner.As(&a)) || FAILED(device.As(&b)) ||
+        a.Get() != b.Get())
+        return false;
+    auto* slot = readyCommands(hudLayerCommands);
+    if (!slot)
+        return false; // earlier copies still in flight: the layer keeps its last image
+    copyEyeTexture(slot->list.Get(), hud.staged.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, target,
+                   originalBarrier);
+    if (!submitCommands(*slot))
+        return false;
+    ++hud.layerCopies;
+    publishHud();
+    return true;
+}
+void hudLayerShown() {
+    std::lock_guard recordLock(recording);
+    ++hud.layerFrames;
+    publishHud();
 }
 bool arm(uint64_t serial, ID3D12Resource* left, ID3D12Resource* right) {
     std::lock_guard submitLock(submission);
@@ -2706,6 +2967,8 @@ DWORD stop() {
     std::lock_guard life(lifecycle);
     enabled = false;
     screenWanted = false;
+    hudWanted = false;
+    hudLayerWanted = false;
     copyReady.notify_all();
     if (hooked) {
         for (auto h : hooks)

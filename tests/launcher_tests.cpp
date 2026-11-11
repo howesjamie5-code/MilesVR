@@ -1,4 +1,5 @@
 #include "spidy/launcher_profile.hpp"
+#include "spidy/launcher_presets.hpp"
 #include "spidy/launcher_text.hpp"
 #include "spidy/launcher_update.hpp"
 #include <functional>
@@ -587,17 +588,116 @@ int main() {
         const auto found = std::find_if(begin, end, [&](const ProfileSetting& s) { return s.key == key; });
         return static_cast<size_t>(found - begin);
     };
+    test("gameplay presets classify every profile setting once and contain only valid values", [&] {
+        for (const auto& setting : profileSettings) {
+            const auto game = std::count_if(std::begin(gameplayPresetSettings), std::end(gameplayPresetSettings),
+                [&](const PresetSetting& p) { return p.key == setting.key; });
+            const auto personal = std::count(std::begin(personalProfileSettings),
+                                             std::end(personalProfileSettings), setting.key);
+            check(game + personal == (setting.retired() ? 0 : 1), std::string(setting.key).c_str());
+        }
+        for (const auto& p : gameplayPresetSettings) {
+            check(at(p.key) < std::size(profileSettings), "unknown gameplay key");
+            const auto& setting = profileSettings[at(p.key)];
+            for (const int value : p.values)
+                check(value >= setting.low && value <= setting.high, std::string(p.key).c_str());
+        }
+        for (const auto key : personalProfileSettings)
+            check(at(key) < std::size(profileSettings), "unknown personal key");
+    });
+    test("presets replace all gameplay, preserve personal setup and survive sharing", [&] {
+        PlaySettings personal;
+        for (const auto& setting : profileSettings)
+            setProfileValue(setting, setting.high, personal);
+        personal.options.eyeHeightMm = 1780;
+        personal.options.armLengthMm = 560;
+        personal.options.calibrationPrompt = false;
+        personal.options.renderScale = 150;
+        personal.options.upscale = 70;
+        personal.options.monitorRate = 15;
+        personal.options.cutscenes = 2;
+        personal.options.cutsceneHeadTracking = false;
+        personal.tab.heightCm = 188;
+        personal.tab.eyeAim = 3;
+        personal.tab.recordingFov = 90;
+        personal.tab.recordingSmoothing = 80;
+        personal.tab.flipReprojection = true;
+        personal.tab.steadyHud = true;
+        for (const auto& preset : builtInProfiles()) {
+            const auto& profile = preset.profile;
+            check(profile.count() == std::size(gameplayPresetSettings), "incomplete gameplay preset");
+            check(!profile.complete(), "preset includes personal setup");
+            const auto imported = readProfile(profileText(profile, "test"));
+            check(imported && imported->values == profile.values, "sharing loses the preset's scope");
+            PlaySettings changed = personal;
+            applyProfile(*imported, changed);
+            check(profileMatches(profile, changed), "preset does not match after applying it");
+            for (const auto& setting : profileSettings)
+                if (profile.values[at(setting.key)])
+                    setProfileValue(setting, profileValue(setting, personal), changed);
+            check(changed.options == personal.options && changed.tab == personal.tab,
+                  "preset altered personal setup, calibration, graphics or recording");
+            // Every possible preceding preset and a completely different custom starting point
+            // reach the same gameplay values, including values behind disabled controls.
+            for (const auto& previous : builtInProfiles()) {
+                PlaySettings after = personal, direct;
+                applyProfile(previous.profile, after);
+                applyProfile(profile, after);
+                applyProfile(profile, direct);
+                for (const auto& setting : profileSettings)
+                    if (profile.values[at(setting.key)])
+                        check(profileValue(setting, after) == profileValue(setting, direct),
+                              "previous preset leaked gameplay values");
+                const PlaySettings once = after;
+                applyProfile(profile, after);
+                check(after.options == once.options && after.tab == once.tab, "preset is not idempotent");
+            }
+        }
+    });
+    test("preset identities and controls remain distinct without conflicting modes", [&] {
+        check(builtInProfiles()[0].profile.name == "Arcade" &&
+                  builtInProfiles()[1].profile.name == "Balanced" &&
+                  builtInProfiles()[2].profile.name == "Pro", "preset names missing or duplicated");
+        std::array<PlaySettings, 3> settings;
+        for (size_t i = 0; i < settings.size(); ++i) {
+            const auto& profile = builtInProfiles()[i].profile;
+            check(builtInProfileKey(profile.name) != profileFileName(builtInProfileKey(profile.name)),
+                  "built-in identity can collide with a saved profile filename");
+            applyProfile(profile, settings[i]);
+            const auto& o = settings[i].options;
+            const auto& v = settings[i].tab;
+            check(!(o.airWebs && v.smartAnchor), "air webs override smart anchor");
+            check(int(o.flips) + int(v.controlledFlips) + int(v.realisticFlips) <= 1,
+                  "flip modes override each other");
+            check(!v.spidyRunFromStanding || v.spidyRun, "standing run is inactive");
+            check(!v.automaticCombat && v.combatResponsive && v.automaticAirBrake,
+                  "combat rotation or recovery differs from the preset contract");
+            for (size_t other = 0; other < i; ++other)
+                check(!profileMatches(profile, settings[other]), "two presets play identically");
+        }
+        check(settings[0].options.arcadeWebs && settings[0].options.airWebs && settings[0].tab.swingAssist,
+              "Arcade lacks its forgiving webs");
+        check(!settings[1].options.airWebs && settings[1].tab.smartAnchor && settings[1].tab.controlledFlips,
+              "Balanced lacks real anchors or deliberate manual flips");
+        check(!settings[2].tab.swingAssist && settings[2].tab.realisticFlips && settings[2].tab.handClimb,
+              "Pro lacks physical control");
+        check(settings[0].options.weight < settings[1].options.weight &&
+                  settings[1].options.weight < settings[2].options.weight,
+              "preset weight progression is lost");
+    });
     test("a profile holds every setting of the SPIDY VR tab, the tab's own ones by spidy_vr.ini's keys", [&] {
         // Not VR VIEW (each session starts in VR), CALIBRATE BODY (a request), HEIGHT (the player's own, as a
-        // calibration is), RECORDING FOV (the monitor's, which suits one PC, as the graphics options do) or
-        // EYE AIM (the headset's: an eye tracker or none).
+        // calibration is), RECORDING FOV (the monitor's, which suits one PC, as the graphics options do),
+        // EYE AIM (the headset's: an eye tracker or none), FLIP REPROJECTION or STEADY HUD (comparisons on
+        // one headset).
         for (const auto& row : spidy::vr_settings::rows()) {
             if (row.item == Item::none)
                 continue;
             const bool leftOut = row.item == Item::view || row.item == Item::calibrate ||
                                  row.item == Item::height || row.item == Item::recordingFov ||
                                  row.item == Item::eyeAim || row.item == Item::recordingSmoothing ||
-                                 row.item == Item::venomButton; // MilesVR: always the button the web button is not
+                                 row.item == Item::venomButton ||
+                                 row.item == Item::flipReprojection || row.item == Item::steadyHud; // MilesVR: always the button the web button is not
             check(std::count_if(begin, end, [&](const ProfileSetting& s) { return s.item == row.item; }) ==
                       (leftOut ? 0 : 1),
                   row.title);
@@ -610,7 +710,7 @@ int main() {
             // The monitor's recording FOV and the wrist menu's graphics and hologram suit one PC.
             if (key == "recording_fov" || key == "recording_smoothing" || key == "height_cm" ||
                 key == "eye_aim" || key.starts_with("eye_") || key.starts_with("hud_") ||
-                key.starts_with("tune_"))
+                key.starts_with("tune_") || key == "flip_reprojection" || key == "steady_hud")
                 continue;
             ++lines;
             check(at(key) < std::size(profileSettings) &&
@@ -710,11 +810,40 @@ int main() {
         t.automaticReleaseFlip = t.automaticAirBrake = t.automaticCombat = false;
         t.handClimb = t.realisticFlips = t.seated = t.controlledFlips = true;
         t.wallRunCameraTilt = false;
+        t.joystickRunCamera = false;
+        t.halfPunchDamage = true;
+        t.airFists = false;
+        t.webTie = true;
+        t.webLines = true;
+        t.singleHandYankPercent = 200;
         t.uiStyle = 1;
         t.combatVisuals = false;
         t.halfPunchDamage = true;
         t.enemyTypes = false; // on by default
         t.blowSounds = 1;
+        t.pcMedia = true;
+        t.nativeRun = true;
+        t.airSlingshot = true;
+        t.webAngle = 30;
+        t.wristShooters = true;
+        t.dodgeTumble = 2;
+        t.runCurve = true;
+        t.nativeRunPercent = 90;
+        t.runLogs = true;
+        t.momentumLeap = true;
+        t.earlyJump = 2;
+        t.softLanding = true;
+        t.spidyRun = true;
+        t.spidyRunFromStanding = true;
+        t.webLandingSmooth = true;
+        t.webLandingImpact = 16;
+        t.steadyStates = true;
+        t.combatResponsive = true;
+        t.spidyRunJump = false;
+        t.forearmAimLimit = 90;
+        t.palmShooters = true;
+        t.webAimSource = 1;
+        t.forearmBlend = 50;
         t.webSlingshot = true;
         t.betterClimbing = true;
         t.smartAnchor = true;
@@ -726,6 +855,8 @@ int main() {
         t.twoHandZip = t.ropeSteering = true;
         t.webRange = 500;
         t.webSpeed = 2;
+        t.reelHaptics = true;
+        t.swingHaptics = true;
         t.nearClipMm = 10;
         t.automaticStrength = 75;
         t.automaticSpeed = 360;
@@ -737,21 +868,24 @@ int main() {
     }
     test("a profile's text: what it is, its name, its Spidy, then each setting in the tab's order", [&] {
         check(profileText(profileOf(PlaySettings{}, "Spidy's own"), "0.4.1") ==
-                  "# Spidy settings profile. To use it, in the Spidy launcher: Profile > Paste a profile, "
-                  "or Import a file.\nname=Spidy's own\nspidy=0.4.1\narcade_webs=0\ntrigger_webs=0\n"
-                  "aim_markers=1\nair_webs=1\nsmart_anchor=0\nweb_range_m=100\nweb_speed=0\nswing_speed=32\n"
-                  "weight=100\nvenom_left_hand=0\nelastic_web=0\n"
-                  "soft_release=0\nswing_assist=0\nweb_slingshot=0\nslingshot_speed=0\n"
-                  "better_climbing=0\ntwo_hand_zip=0\nrope_steering=0\nwall_run=1\nsnap_turn=30\n"
-                  "smooth_turn=0\nhaptics=100\nblow_sounds=0\n"
-                  "body_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\n"
-                  "body_haptics_combat=1\nbody_haptics_movement=1\nscreen_size=1\nscreen_depth=2\nhud=2\n"
-                  "ui_style=0\ncombat_visuals=1\nhalf_punch_damage=0\nenemy_types=1\nnear_clip_mm=20\nseated=0\nflips=0\ncontrolled_flips=0\nflip_speed=180\nhand_climb=0\n"
-                  "wall_run_camera_tilt=1\n"
-                  "wall_distance_cm=25\n"
-                  "realistic_flips=0\nrotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
-                  "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\nangular_drag_ms=3000\n"
-                  "hand_speed_min_cm=100\nair_rotation_brake=1\nflips_in_combat=1\n",
+                  "# Spidy settings profile. To use it, in the Spidy launcher: Profile > Paste a profile, or Import a file.\nname=Spidy's own\nspidy=0.4.1\narcade_webs=0\ntrigger_webs=0\n"
+                  "aim_markers=1\nair_webs=1\nsmart_anchor=0\nweb_range_m=100\nweb_speed=0\n"
+                  "swing_speed=32\nweight=100\nvenom_left_hand=0\nelastic_web=0\nsoft_release=0\n"
+                  "swing_assist=0\nweb_slingshot=0\nslingshot_speed=0\nbetter_climbing=0\nsingle_hand_yank_percent=100\n"
+                  "two_hand_zip=0\nrope_steering=0\nwall_run=1\nsnap_turn=30\nsmooth_turn=0\n"
+                  "haptics=100\nreel_haptics=0\nswing_haptics=0\nblow_sounds=0\npc_media=0\n"
+                  "body_haptics=100\nbody_haptics_webs=1\nbody_haptics_wind=1\nbody_haptics_combat=1\nbody_haptics_movement=1\n"
+                  "screen_size=1\nscreen_depth=2\nhud=2\nui_style=0\ncombat_visuals=1\n"
+                  "half_punch_damage=0\nenemy_types=1\nnear_clip_mm=20\nseated=0\nflips=0\n"
+                  "controlled_flips=0\nflip_speed=180\nhand_climb=0\njoystick_wall_run_camera=1\nwall_run_camera_tilt=1\n"
+                  "air_fists=1\nweb_tie=0\nnative_run=0\nair_slingshot=0\nweb_angle_degrees=0\n"
+                  "wrist_shooters=0\ndodge_tumble=0\nrun_curve=0\nnative_run_at_percent=70\nrun_logs=0\n"
+                  "running_leap=0\nearly_jump=0\nsoft_landing=0\nspidy_run=0\nspidy_run_from_standing=0\n"
+                  "web_aim_source=0\nforearm_blend=100\nweb_landing_smooth=0\nweb_landing_impact_speed=24\nsteady_states=0\n"
+                  "combat_responsive=0\nspidy_run_jump=1\nforearm_aim_limit=180\npalm_shooters=0\nweb_lines=0\n"
+                  "wall_distance_cm=25\nrealistic_flips=0\nrotation_strength=50\nrotation_speed=240\nflight_speed_min=3\n"
+                  "swing_momentum=1\nrotation_response_ms=500\nhand_momentum=100\nangular_drag_ms=3000\nhand_speed_min_cm=100\n"
+                  "air_rotation_brake=1\nflips_in_combat=1\n",
               "the defaults' text: a key shared once keeps its name");
         const std::string message = profileMessage(profileOf(mine), "0.4.1");
         check(message.rfind("```ini\n# Spidy settings profile.", 0) == 0 && message.ends_with("\n```") &&

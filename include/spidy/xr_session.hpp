@@ -93,10 +93,23 @@ class XrRuntime {
         screenAspect_ = std::isfinite(aspect) && aspect > .2f && aspect < 5 ? aspect : 16.f / 9;
         screenWidth_ = std::isfinite(width) && width > .5f && width < 10 ? width : 3.2f;
     }
+    // STEADY HUD (steady_hud.hpp): the HUD as a quad layer of its own over the
+    // eye views. During draw, fillHud hands `fill` the HUD's next image, made
+    // (again) at this size (RENDER_TARGET state, the eyes' format), to fill on
+    // the bound queue, and releases it; true while the newest image is a
+    // filled one. hudQuad shows the layer this frame (pose in the tracking
+    // space, size in metres) with that image; a frame without the call, or on
+    // the flat screen, shows none.
+    bool fillHud(unsigned width, unsigned height, const std::function<bool(ID3D12Resource*)>& fill);
+    void hudQuad(const Pose& pose, float width, float height) {
+        hud_.shown = true;
+        hud_.pose = pose;
+        hud_.size = {width, height};
+    }
 
-    // The next image is locked to the head (a first-person scene whose own camera aims): the projection layer is
-    // submitted in the headset's own space, as the eyes lie in the head, so it turns with the viewer exactly and
-    // is never placed in the room. Set with the image, as presentation().
+    // The next image is locked to the head (a first-person scene whose own camera aims): the projection layer
+    // is submitted in the headset's own space, as the eyes lie in the head, so it turns with the viewer
+    // exactly and is never placed in the room. Set with the image, as presentation().
     void headLocked(bool on) {
         headLocked_ = on;
     }
@@ -161,6 +174,16 @@ class XrRuntime {
         std::vector<XrSwapchainImageD3D12KHR> images;
     };
     std::array<Eye, 2> eyes_{};
+    struct Hud {
+        XrSwapchain swapchain{};
+        unsigned width{}, height{};
+        std::vector<XrSwapchainImageD3D12KHR> images;
+        // filled: the newest image released holds the HUD. failed: the
+        // runtime refused the swapchain at this size; not asked again.
+        bool filled{}, failed{}, shown{};
+        Pose pose{};
+        XrExtent2Df size{};
+    } hud_;
     DXGI_FORMAT format_{};
     XrTime previousTime_{};
     bool running_{}, exit_{};

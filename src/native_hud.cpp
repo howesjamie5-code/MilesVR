@@ -3,6 +3,7 @@
 // markers projected from the head onto it. The panel's placement is in
 // stereo_probe.cpp, with the eye views it must match.
 #include "spidy/native_hud.hpp"
+#include "spidy/hud_capture.hpp"
 #include "spidy/native_eye_gpu.hpp"
 #include <MinHook.h>
 #include <algorithm>
@@ -122,6 +123,43 @@ bool movieSize(uint32_t size[2]) {
     size[1] = static_cast<uint32_t>(viewport[1]);
     return true;
 }
+// The steadier-HUD probe (hud_capture.hpp): the panel's colour texture's
+// D3D12 resource, found as the eye views' is (stereo_probe.cpp: a texture
+// object of the class at 4e56c80, whose +38 leads to it), handed to the GPU
+// bridge when it changes; wanted while the headset shows the eye views. Only
+// with STEADY HUD on: off, the game's panel is left as it was.
+void probeTexture(uintptr_t texture, uintptr_t target) {
+    static uintptr_t seen{}, seenResource{};
+    const bool layer = native_gpu::hudLayerOn();
+    native_gpu::wantHud(layer && texture && eyesRecent());
+    if (!layer || !texture)
+        return;
+    const auto textureClass = base + 0x557f280;
+    uintptr_t object{};
+    uint32_t path = hud_capture::pathNone;
+    if (pointer(texture) == textureClass) {
+        object = texture;
+        path = hud_capture::pathTexture;
+    } else if (const auto wrapped = pointer(texture + 0x40); wrapped && pointer(wrapped) == textureClass) {
+        object = wrapped;
+        path = hud_capture::pathWrapped;
+    } else if (const auto through = pointer(target + 0x40); through && pointer(through) == textureClass) {
+        object = through;
+        path = hud_capture::pathTarget;
+    }
+    const auto resource = object ? pointer(pointer(object + 0x38)) : 0;
+    // The game remakes the panel's texture (a death, a checkpoint, a scene's end) and may leave the texture
+    // object where it was: the object alone does not say the resource is the one followed. A resource
+    // followed that the game no longer draws into shows the layer an empty panel for the rest of the session.
+    if (texture == seen && resource == seenResource)
+        return;
+    seen = texture;
+    seenResource = resource;
+    if (resource)
+        native_gpu::registerHud(reinterpret_cast<ID3D12Resource*>(resource), path);
+    else
+        native_gpu::refuseHud();
+}
 void stream(void* self) {
     const auto s = reinterpret_cast<uintptr_t>(self);
     uint8_t panel{};
@@ -170,15 +208,7 @@ void stream(void* self) {
         write(hudFollower + 0xd0, &bind, 1);
     }
     vrTexture = vr && target && made[0] == window[0] && made[1] == window[1] ? target : 0;
-    // The colour texture's D3D12 resource, as the eyes' are found (stereo_probe.cpp): its wrapper at +40
-    // (type 557f280), whose allocation at +38 starts with the resource.
-    uintptr_t resource{};
-    if (vrTexture) {
-        const auto wrapper = pointer(texture + 0x40);
-        if (wrapper && pointer(wrapper) == base + 0x557f280)
-            resource = pointer(pointer(wrapper + 0x38));
-    }
-    native_gpu::registerHud(reinterpret_cast<ID3D12Resource*>(resource));
+    probeTexture(vrTexture.load() ? texture : 0, target);
     const bool back = !vr && size[0] == gameBase[0] && size[1] == gameBase[1] && !resized;
     restored = back;
     native_hud::publish([&](native_hud::Data& d) {
@@ -372,6 +402,14 @@ bool native_hud::onScreen(uint64_t withinMs) {
     const auto tick = screenTick.load();
     return tick && GetTickCount64() - tick <= withinMs;
 }
+std::atomic<uint64_t> layeredTick{};
+void native_hud::layered() {
+    layeredTick = GetTickCount64();
+}
+bool native_hud::layered(uint64_t withinMs) {
+    const auto tick = layeredTick.load();
+    return tick && GetTickCount64() - tick <= withinMs;
+}
 void native_hud::setSize(int size) {
     hudSize = std::clamp(size, 0, 3);
 }
@@ -446,6 +484,7 @@ uint32_t native_hud::stop(uint32_t waitMs) {
         // again and bind it.
         stopping = true;
         vrTexture = 0;
+        native_gpu::wantHud(false);
         const auto limit = GetTickCount64() + waitMs;
         while (!restored && GetTickCount64() < limit)
             Sleep(10);
