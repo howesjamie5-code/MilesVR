@@ -110,14 +110,11 @@ constexpr Rule rules[] = {
     {".?AVBotStateStunned@@", trait(stunned)},
     // MilesVR 0.1.84 (SM2VR 0.0.230: X mashed went to the map in a struggle): the hero's struggles, as Miles Morales
     // names them. Local does not derive from the processor, so both names are here.
+    // Not the WebYankStruggle family (SM2VR 0.0.232; the user, November 11: the right stick "would cause the scan"):
+    // it is the hero's own pull at a prop for the throw, where the whole controller sent the stick's click as the
+    // game's R3, its scan.
     {".?AVHeroStateBotStruggleBase@Hero@@", trait(struggling)},
     {".?AVHeroStateBotStruggleBaseLocal@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStruggle@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStruggleLocal@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStrugglePerch@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStrugglePerchLocal@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStruggleWallPerch@Hero@@", trait(struggling)},
-    {".?AVHeroStateWebYankStruggleWallPerchLocal@Hero@@", trait(struggling)},
     {".?AVHeroStateHitReactStruggle@Hero@@", trait(struggling)},
     {".?AVHeroStateHitReactStruggleLocal@Hero@@", trait(struggling)},
     {".?AVBotStateElectricStun@@", trait(stunned)},
