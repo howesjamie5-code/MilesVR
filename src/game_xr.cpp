@@ -1963,8 +1963,9 @@ DWORD WINAPI run(void*) {
             scenePlayerAt = GetTickCount64();
             // A new player is a new game (the title screen, a load): nothing of the story is on the screen until the
             // game has been played in VR once (the title screen stays the flat theatre screen). A scene that goes on
-            // through the change keeps its view.
-            if (!wasFpScene)
+            // through the change keeps its view - but never a change to no hero at all (the main menu: the user,
+            // November 11, "change it so the main menu is always in flatscreen no matter the cutscene option").
+            if (!wasFpScene || !player.hero)
                 scenePlaySeen = false;
             native_appearance::setPlayerRecord(player.record);
             native_body::retarget(player.record);
@@ -2918,7 +2919,8 @@ DWORD WINAPI run(void*) {
                     // Cutscenes: Immersive puts such a scene around the viewer
                     // instead, needing no HUD panel. Not the ceiling crawl, and
                     // not the game played on its screen (VIEW: GAME SCREEN).
-                    scenePlaySeen = scenePlaySeen || (vrPlay && player.hero);
+                    // No hero (the main menu, quitting to it): play is not seen, whatever the Cutscenes choice.
+                    scenePlaySeen = player.hero && (scenePlaySeen || vrPlay);
                     // FIRST-PERSON CUTSCENES: the scene is shown from inside the head of the character it plays,
                     // round the viewer, instead of on the screen (game_fp.hpp). Wanted while a scene plays
                     // (the same conditions, but the screen's 3D depth and its HUD panel); it is shown once the
