@@ -108,6 +108,18 @@ constexpr Rule rules[] = {
     {".?AVBossHealth@@", trait(boss)},
     {".?AVRhinoBot@@", trait(boss) | trait(rhino)},
     {".?AVBotStateStunned@@", trait(stunned)},
+    // MilesVR 0.1.84 (SM2VR 0.0.230: X mashed went to the map in a struggle): the hero's struggles, as Miles Morales
+    // names them. Local does not derive from the processor, so both names are here.
+    {".?AVHeroStateBotStruggleBase@Hero@@", trait(struggling)},
+    {".?AVHeroStateBotStruggleBaseLocal@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStruggle@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStruggleLocal@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStrugglePerch@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStrugglePerchLocal@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStruggleWallPerch@Hero@@", trait(struggling)},
+    {".?AVHeroStateWebYankStruggleWallPerchLocal@Hero@@", trait(struggling)},
+    {".?AVHeroStateHitReactStruggle@Hero@@", trait(struggling)},
+    {".?AVHeroStateHitReactStruggleLocal@Hero@@", trait(struggling)},
     {".?AVBotStateElectricStun@@", trait(stunned)},
     {".?AVHelicopter@@", trait(neutral)},
     {".?AVSilverSableCraftBot@@", trait(neutral)},
@@ -215,6 +227,9 @@ std::mutex combatLock;
 std::unordered_map<uint64_t, std::string> combatNow;
 // v30: the latest scan's Behavior classes for each bot, joined (behaviorLock).
 std::mutex behaviorLock;
+// MilesVR 0.1.84: the records with a struggle's state component at the latest scan (qteLock).
+std::mutex qteLock;
+std::vector<uint64_t> qteNow;
 std::unordered_map<uint64_t, std::string> behaviorNow;
 // The names met for each actor record, joined with commas (a name once each, the bots' alone, at most about 700 characters).
 std::unordered_map<uint64_t, std::string> joinNames(const std::vector<std::pair<uint64_t, const std::string*>>& seen,
@@ -354,6 +369,14 @@ bool game_targets::scan(uintptr_t base, uint32_t kinds, std::vector<Candidate>& 
     {
         std::lock_guard behavior(behaviorLock);
         behaviorNow.swap(behaviorJoined);
+    }
+    {
+        std::vector<uint64_t> qte;
+        for (const auto& [record, t] : traits)
+            if (t & struggling)
+                qte.push_back(record);
+        std::lock_guard q(qteLock);
+        qteNow.swap(qte);
     }
     return true;
 }
@@ -657,6 +680,15 @@ void game_targets::setGuardRules(const guards::Rules& rules) {
     types.clear();
     combatNames.clear();
     behaviorNames.clear();
+}
+bool game_targets::heroQte(uint64_t record) {
+    std::lock_guard lock(qteLock);
+    return record && std::find(qteNow.begin(), qteNow.end(), record) != qteNow.end();
+}
+// The VR worker's question (game_xr, through the module that holds the watch): 1 while the actor record given is in
+// a struggle.
+extern "C" __declspec(dllexport) DWORD WINAPI SpidyHeroQte(void* record) {
+    return game_targets::heroQte(reinterpret_cast<uint64_t>(record)) ? 1u : 0u;
 }
 bool game_targets::combatClasses(uint64_t record, std::string& out) {
     std::lock_guard lock(combatLock);

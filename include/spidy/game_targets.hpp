@@ -77,7 +77,10 @@ enum Trait : uint32_t {
     guardWebbed = 65536,
     // v30: a component class on the actor that is a behavior of a fight (guards::fightBehavior: BehaviorMeleeGame,
     // BehaviorRangedCombat ...): a sign that he has detected the hero (game_guard::watch).
-    guardEngaged = 131072
+    guardEngaged = 131072,
+    // MilesVR 0.1.84 (SM2VR 0.0.230/0.0.231): a hero state component of a struggle - an enemy's grab, a web yank's
+    // tug of war, a hit react's - in which the game wants a button mashed (game_targets::heroQte).
+    struggling = 262144
 };
 // A bot's size: the capsule his mover collides with, above his actor's
 // transform, as the game builds it (1fbba90) from his mover manager's body
@@ -232,6 +235,8 @@ inline guards::Kind guardKind(uint32_t traits) {
 // The combat-related component classes (tellsCombat) of one actor at the latest scan, comma separated: for the
 // guard's census line, so a guard that is missing can be given by a class name. False for an actor with none.
 bool combatClasses(uint64_t record, std::string& out);
+// MilesVR 0.1.84: the actor carried a struggle's state component (Trait struggling) at the latest scan: the hero in a QTE.
+bool heroQte(uint64_t record);
 // v30: the Behavior classes of one actor at the latest scan, comma separated (the machinery every actor's behaviors run
 // on left out: guards::isBehavior): for the guard's census line, to tell the behaviors of an enemy who has not detected the
 // hero from those of one who has. False for an actor with none.

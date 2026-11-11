@@ -696,6 +696,8 @@ BridgeCall sampleSense{};
 // an older module throws the camera's way.
 BridgeCall aimGameThrow{};
 BridgeCall startShooter{}, sampleShooter{}, stopShooter{}, wheelShooter{};
+// MilesVR 0.1.84: whether an actor record is in a struggle (game_targets::heroQte, in the ray module). Optional.
+BridgeCall heroQteCall{};
 // WEB AIM: MODEL FOREARM: optional (an older ray module aims as before).
 BridgeCall swingWebTurns{};
 // The game's own crawl under the player (game_warp, in the same module):
@@ -1182,6 +1184,8 @@ DWORD WINAPI run(void*) {
         game_pad::State namedPad{};
         // Both grips held as the game's LB + RB (the bus QTE), and the presses so far.
         bool gripPairHeld{}, gripPairBefore[2]{};
+        // A struggle QTE has the controller (padLayer.force).
+        bool qteLayer{};
         uint32_t gripPairPresses{};
         bool namedFists{}, fistsBlows{};
         uint32_t namedPressesBefore{}, slamsBefore{};
@@ -2380,6 +2384,20 @@ DWORD WINAPI run(void*) {
                     const bool fnsmScene =
                         (!fnsmSceneDone || phoneAppAt) && player.hero && bridgeRunning && followsPlayer;
                     const bool gameplay = player.hero && bridgeRunning && (committed || fnsmScene) && followsPlayer;
+                    // MilesVR 0.1.84 (SM2VR 0.0.230/0.0.231; the user: "the quicktime event slash X repeatedly
+                    // being pressed fix from SM2VR needs to be implemented here"): while Miles is in a struggle - an
+                    // enemy's grab, a web yank's tug of war - the whole controller is the game's (the pad layer,
+                    // forced): X mashed is its X, not the map or the gadget wheel, and no grip or trigger shoots a web.
+                    {
+                        const bool qte = player.hero && heroQteCall &&
+                                         heroQteCall(reinterpret_cast<void*>(player.record)) != 0;
+                        padLayer.force(qte);
+                        if (qte != qteLayer) {
+                            qteLayer = qte;
+                            message(3, 0, qte ? "QTE (a struggle): the controller is the game's until it ends - mash its button"
+                                              : "QTE ended: the VR controls are back");
+                        }
+                    }
                     uint64_t moverTable{};
                     read(game.mover, &moverTable, sizeof(moverTable));
                     // The headset is worn, focused and tracked: an image can be shown.
@@ -8278,6 +8296,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI SpidyXrStart(void* input) {
     aimOffer = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyOffersAim"));
     stopShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterStop"));
     wheelShooter = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyShooterGadgets"));
+    heroQteCall = reinterpret_cast<BridgeCall>(GetProcAddress(rays, "SpidyHeroQte"));
     if (!submitInput || !sampleBridge || !stopBridge || !retargetBridge || !startRays || !submitRays ||
         !stopRays || !startSwing || !submitSwing || !sampleSwing || !stopSwing || !retargetSwing)
         return 1002;

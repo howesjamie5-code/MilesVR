@@ -1182,8 +1182,13 @@ class PadLayer {
         }
         return latched_;
     }
+    // MilesVR 0.1.84 (SM2VR 0.0.208): the whole controller is the game's while a QTE stands, whatever the layer
+    // was; back by itself.
+    void force(bool on) {
+        forced_ = on;
+    }
     bool latched() const {
-        return latched_;
+        return latched_ || forced_;
     }
     // Lets go of it at once: the phone drawn from a back pocket does, as the
     // phone is play's. On October 25 a click of both sticks with the game's
@@ -1200,6 +1205,7 @@ class PadLayer {
     }
 
   private:
+    bool forced_{};
     bool latched_{}, spent_{};
     float held_{}, idle_{};
     uint32_t entries_{};
